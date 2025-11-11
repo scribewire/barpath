@@ -1,0 +1,20 @@
+# Core Computer Vision and ML Libraries
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+ultralytics>=8.0.0
+
+# Data Processing and Analysis
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Utilities
+tqdm>=4.65.0
+
+# Optional: For better performance
+# opencv-contrib-python>=4.8.0  # Additional OpenCV modules
+# torch>=2.0.0  # PyTorch (required by ultralytics, usually auto-installed)
+# torchvision>=0.15.0  # PyTorch vision utilities

@@ -1,0 +1,23 @@
+# GUI Requirements for barpath
+# Install with: pip install -r gui/requirements.txt
+
+# GUI Framework
+PyQt6>=6.5.0
+PyQt6-Qt6>=6.5.0
+PyQt6-sip>=13.5.0
+
+# Video playback in GUI
+opencv-python>=4.8.0  # Already in main requirements, but needed for video preview
+
+# Optional: Enhanced GUI features
+pillow>=10.0.0        # For image processing in GUI
+pyqtgraph>=0.13.0     # For real-time graph plotting (optional)
+
+# Optional: System tray support
+pystray>=0.19.0       # For system tray icon (optional)
+
+# Optional: Better file dialogs
+send2trash>=1.8.0     # Safe file deletion (optional)
+
+# Note: Core dependencies (mediapipe, ultralytics, etc.) 
+# should already be installed from main requirements.txt
