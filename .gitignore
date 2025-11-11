@@ -44,3 +44,5 @@
    
    # Python virtual environment folder
    .venv/
+   .venv/**
+   venv/**
