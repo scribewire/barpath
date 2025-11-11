@@ -1,0 +1,4 @@
+barpath/models/pose_landmarker_heavy.task filter=lfs diff=lfs merge=lfs -text
+barpath/models/std_nano_openvino_model/std_nano.bin filter=lfs diff=lfs merge=lfs -text
+barpath/models/lift_detection/live_lift_model.pkl filter=lfs diff=lfs merge=lfs -text
+barpath/models/lift_detection/lift_detection_model.pkl filter=lfs diff=lfs merge=lfs -text
