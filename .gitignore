@@ -36,7 +36,7 @@ raw_data.pkl
 final_analysis.csv
 graphs/
 *.mp4
-!examples/*.mp4
+test_videos/**
 
 # OS
 .DS_Store
