@@ -3,6 +3,7 @@ import argparse
 import os
 import sys
 import shlex
+from pathlib import Path
 
 def run_step(step_name, cmd_list, stop_on_failure=True):
     """Helper function to run a command, print it, and check for errors."""
@@ -96,6 +97,12 @@ Usage Notes:
                 print(f"Error creating output directory: {e}", file=sys.stderr)
                 sys.exit(1)
 
+    # Resolve script directory (scripts live in ../barpath relative to this CLI file)
+    script_dir = Path(__file__).resolve().parent.parent / "barpath"
+    # Helper to get script path
+    def script_path(name: str) -> str:
+        return str(script_dir / name)
+
     # --- Define file paths ---
     raw_data_path = "raw_data.pkl"
     analysis_csv_path = "final_analysis.csv"
@@ -121,7 +128,7 @@ Usage Notes:
     # --- STEP 1: Collect Data ---
     print("\n>>> STEP 1: Collecting Raw Data...")
     cmd_step1 = [
-        python_exe, "1_collect_data.py",
+        python_exe, script_path("1_collect_data.py"),
         "--input", args.input_video,
         "--model", args.model,
         "--output", raw_data_path,
@@ -133,7 +140,7 @@ Usage Notes:
     # --- STEP 2: Analyze Data ---
     print("\n>>> STEP 2: Analyzing Data...")
     cmd_step2 = [
-        python_exe, "2_analyze_data.py",
+        python_exe, script_path("2_analyze_data.py"),
         "--input", raw_data_path,
         "--output", analysis_csv_path
     ]
@@ -143,7 +150,7 @@ Usage Notes:
     # --- STEP 3: Generate Graphs ---
     print("\n>>> STEP 3: Generating Graphs...")
     cmd_step3 = [
-        python_exe, "3_generate_graphs.py",
+        python_exe, script_path("3_generate_graphs.py"),
         "--input", analysis_csv_path,
         "--output_dir", graphs_dir
     ]
@@ -156,7 +163,7 @@ Usage Notes:
     else:
         print("\n>>> STEP 4: Rendering Final Video...")
         cmd_step4 = [
-            python_exe, "4_render_video.py",
+            python_exe, script_path("4_render_video.py"),
             "--input_csv", analysis_csv_path,
             "--input_video", args.input_video,
             "--output_video", args.output_video
@@ -170,7 +177,7 @@ Usage Notes:
     else:
         print("\n>>> STEP 5: Running Lift Critique...")
         cmd_step5 = [
-            python_exe, "5_critique_lift.py",
+            python_exe, script_path("5_critique_lift.py"),
             "--input", analysis_csv_path,
             "--lift_type", args.lift_type
         ]

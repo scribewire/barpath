@@ -1,16 +1,40 @@
-import cv2
+import sys
+try:
+    import cv2
+except ImportError:
+    print("Missing dependency: opencv-python (cv2). Install with: pip install opencv-python")
+    sys.exit(1)
 import os
 import argparse
-import numpy as np
-import pandas as pd
-from tqdm import tqdm
-import ast
+try:
+    import numpy as np
+except ImportError:
+    print("Missing dependency: numpy. Install with: pip install numpy")
+    sys.exit(1)
+try:
+    import pandas as pd
+except ImportError:
+    print("Missing dependency: pandas. Install with: pip install pandas")
+    sys.exit(1)
+try:
+    from tqdm import tqdm
+except ImportError:
+    print("Missing dependency: tqdm. Install with: pip install tqdm")
+    sys.exit(1)
+from utils import (
+    draw_legend, get_connection_color, parse_landmarks_from_string,
+    parse_barbell_box, COLOR_SCHEME
+)
 
 # --- Constants ---
-# NEW: Updated legend colors
+# NEW: Updated legend colors (using COLOR_SCHEME from utils)
 LEGEND_COLORS = {
-    "Torso": (255, 255, 0), "Left Arm": (0, 165, 255), "Right Arm": (0, 255, 255),
-    "Left Leg": (255, 0, 128), "Right Leg": (0, 255, 0), "Barbell Box": (255, 0, 255),
+    "Torso": COLOR_SCHEME["Torso"],
+    "Left Arm": COLOR_SCHEME["Left Arm"],
+    "Right Arm": COLOR_SCHEME["Right Arm"],
+    "Left Leg": COLOR_SCHEME["Left Leg"],
+    "Right Leg": COLOR_SCHEME["Right Leg"],
+    "Barbell Box": COLOR_SCHEME["Barbell Box"],
     "Path (Up)": (0, 0, 255),       # Red
     "Path (Down)": (0, 165, 255),  # Orange
     "Path (Up 2)": (0, 255, 0),    # Green
@@ -44,58 +68,6 @@ SKELETON_CONNECTIONS = [
     ('right_knee', 'right_ankle'),
 ]
 
-# --- Drawing Utilities ---
-def draw_legend(image, colors):
-    """Draws a color legend on the image."""
-    y_offset = 30
-    for i, (name, color) in enumerate(colors.items()):
-        cv2.rectangle(image, (15, 10 + i * y_offset), (35, 30 + i * y_offset), color, -1)
-        cv2.putText(image, name, (45, 25 + i * y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    return 15 + len(colors) * y_offset
-
-def get_connection_color(lm1_name, lm2_name):
-    """Determines the color for a skeleton connection based on body part."""
-    # Check for torso connections
-    if ('shoulder' in lm1_name or 'hip' in lm1_name) and ('shoulder' in lm2_name or 'hip' in lm2_name):
-        return LEGEND_COLORS["Torso"]
-    
-    # Check for left side
-    if 'left' in lm1_name and 'left' in lm2_name:
-        if any(part in lm1_name for part in ['shoulder', 'elbow', 'wrist']):
-            return LEGEND_COLORS["Left Arm"]
-        if any(part in lm1_name for part in ['hip', 'knee', 'ankle']):
-            return LEGEND_COLORS["Left Leg"]
-    
-    # Check for right side
-    if 'right' in lm1_name and 'right' in lm2_name:
-        if any(part in lm1_name for part in ['shoulder', 'elbow', 'wrist']):
-            return LEGEND_COLORS["Right Arm"]
-        if any(part in lm1_name for part in ['hip', 'knee', 'ankle']):
-            return LEGEND_COLORS["Right Leg"]
-    
-    return (255, 255, 255)
-
-def parse_landmarks_from_string(landmarks_str):
-    """Safely parses the landmark dictionary string from the CSV."""
-    try:
-        if pd.isna(landmarks_str) or landmarks_str == '{}':
-            return {}
-        return ast.literal_eval(landmarks_str)
-    except Exception as e:
-        return {}
-
-def parse_barbell_box(box_str):
-    """Parses the barbell box string from CSV."""
-    try:
-        if pd.isna(box_str) or box_str == '':
-            return None
-        values = [float(v.strip()) for v in str(box_str).split(',')]
-        if len(values) == 4:
-            return tuple(map(int, values))
-    except Exception as e:
-        pass
-    return None
-
 def step_4_render_video(df, video_path, output_video_path):
     """
     Takes the final analysis data and the original video, and renders
@@ -113,7 +85,7 @@ def step_4_render_video(df, video_path, output_video_path):
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # type: ignore
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
     
     # --- NEW: Get all stabilized path points WITH phase data ---
@@ -196,7 +168,7 @@ def step_4_render_video(df, video_path, output_video_path):
                 if lm1_name in landmark_pixels and lm2_name in landmark_pixels:
                     p1 = landmark_pixels[lm1_name]
                     p2 = landmark_pixels[lm2_name]
-                    color = get_connection_color(lm1_name, lm2_name)
+                    color = get_connection_color(lm1_name, lm2_name, LEGEND_COLORS)
                     cv2.line(frame, p1, p2, color, 3)
             
             for name, (px, py) in landmark_pixels.items():

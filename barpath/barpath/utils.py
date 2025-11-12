@@ -9,6 +9,15 @@ import numpy as np
 import os
 import sys
 from pathlib import Path
+import ast
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 
 # ============================================================================
@@ -58,20 +67,47 @@ def calculate_angle(p1, p2, p3):
     return np.degrees(angle)
 
 
-def calculate_lifter_angle(left_shoulder, right_shoulder):
+def calculate_lifter_angle(left_shoulder_or_landmarks, right_shoulder=None):
     """
     Calculate the lifter's orientation angle using shoulder positions.
     
     Uses the (x, z) coordinates to determine if the lifter is facing
     straight (90°) or at an angle to the camera.
     
+    Can be called two ways:
+    1. With two tuples: calculate_lifter_angle(left_shoulder, right_shoulder)
+    2. With landmarks dict: calculate_lifter_angle(landmarks)
+    
     Args:
-        left_shoulder (tuple): (x, y, z, visibility) for left shoulder
-        right_shoulder (tuple): (x, y, z, visibility) for right shoulder
+        left_shoulder_or_landmarks: Either a shoulder tuple (x, y, z, visibility)
+                                   or a landmarks dict
+        right_shoulder (tuple): (x, y, z, visibility) for right shoulder, or None if first arg is dict
     
     Returns:
         float: Orientation angle in degrees (90° = perpendicular to camera)
     """
+    # Handle dict input (from apply in DataFrame)
+    if isinstance(left_shoulder_or_landmarks, dict):
+        landmarks = left_shoulder_or_landmarks
+        try:
+            left_shoulder = landmarks.get('left_shoulder')
+            right_shoulder_val = landmarks.get('right_shoulder')
+            
+            if left_shoulder is None or right_shoulder_val is None:
+                return np.nan
+            
+            # Use (x, z) coordinates (indices 0 and 2)
+            delta_x = left_shoulder[0] - right_shoulder_val[0]
+            delta_z = left_shoulder[2] - right_shoulder_val[2]
+            
+            angle_rad = np.arctan2(delta_z, delta_x)
+            angle_deg = 90 - abs(np.degrees(angle_rad))
+            return angle_deg
+        except (IndexError, TypeError, AttributeError):
+            return np.nan
+    
+    # Handle tuple input (two separate arguments)
+    left_shoulder = left_shoulder_or_landmarks
     if left_shoulder is None or right_shoulder is None:
         return np.nan
     
@@ -327,6 +363,107 @@ def format_file_size(size_bytes):
             return f"{size_bytes:.2f} {unit}"
         size_bytes /= 1024.0
     return f"{size_bytes:.2f} TB"
+
+
+# ============================================================================
+# VIDEO DRAWING UTILITIES
+# ============================================================================
+
+def draw_legend(image, colors):
+    """
+    Draws a color legend on the image.
+    
+    Args:
+        image (np.ndarray): The frame/image to draw on
+        colors (dict): Dictionary of color names to BGR tuples
+    
+    Returns:
+        int: Y offset after legend (for text placement)
+    """
+    if cv2 is None:
+        return 0
+    
+    y_offset = 30
+    for i, (name, color) in enumerate(colors.items()):
+        cv2.rectangle(image, (15, 10 + i * y_offset), (35, 30 + i * y_offset), color, -1)
+        cv2.putText(image, name, (45, 25 + i * y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    return 15 + len(colors) * y_offset
+
+
+def get_connection_color(lm1_name, lm2_name, color_scheme):
+    """
+    Determines the color for a skeleton connection based on body part.
+    
+    Args:
+        lm1_name (str): First landmark name
+        lm2_name (str): Second landmark name
+        color_scheme (dict): Color scheme dictionary
+    
+    Returns:
+        tuple: BGR color tuple
+    """
+    # Check for torso connections
+    if ('shoulder' in lm1_name or 'hip' in lm1_name) and ('shoulder' in lm2_name or 'hip' in lm2_name):
+        return color_scheme.get("Torso", (255, 255, 0))
+    
+    # Check for left side
+    if 'left' in lm1_name and 'left' in lm2_name:
+        if any(part in lm1_name for part in ['shoulder', 'elbow', 'wrist']):
+            return color_scheme.get("Left Arm", (0, 165, 255))
+        if any(part in lm1_name for part in ['hip', 'knee', 'ankle']):
+            return color_scheme.get("Left Leg", (255, 0, 128))
+    
+    # Check for right side
+    if 'right' in lm1_name and 'right' in lm2_name:
+        if any(part in lm1_name for part in ['shoulder', 'elbow', 'wrist']):
+            return color_scheme.get("Right Arm", (0, 255, 255))
+        if any(part in lm1_name for part in ['hip', 'knee', 'ankle']):
+            return color_scheme.get("Right Leg", (0, 255, 0))
+    
+    return (255, 255, 255)
+
+
+def parse_landmarks_from_string(landmarks_str):
+    """
+    Safely parses the landmark dictionary string from the CSV.
+    
+    Args:
+        landmarks_str (str): String representation of landmarks dict
+    
+    Returns:
+        dict: Parsed landmarks dictionary, or empty dict if parsing fails
+    """
+    try:
+        if pd is not None and pd.isna(landmarks_str):
+            return {}
+        if landmarks_str == '{}' or landmarks_str == '':
+            return {}
+        return ast.literal_eval(landmarks_str)
+    except Exception:
+        return {}
+
+
+def parse_barbell_box(box_str):
+    """
+    Parses the barbell box string from CSV.
+    
+    Args:
+        box_str (str): String representation of box coordinates
+    
+    Returns:
+        tuple: (x1, y1, x2, y2) as integers, or None if parsing fails
+    """
+    try:
+        if pd is not None and pd.isna(box_str):
+            return None
+        if box_str == '' or box_str is None:
+            return None
+        values = [float(v.strip()) for v in str(box_str).split(',')]
+        if len(values) == 4:
+            return tuple(map(int, values))
+    except Exception:
+        pass
+    return None
 
 
 # ============================================================================

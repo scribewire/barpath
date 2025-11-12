@@ -1,21 +1,41 @@
-import cv2
+import sys
+try:
+    import cv2
+except ImportError:
+    print("Missing dependency: opencv-python (cv2). Install with: pip install opencv-python")
+    sys.exit(1)
 import os
 import argparse
-import numpy as np
-import mediapipe as mp
-from ultralytics import YOLO
-from tqdm import tqdm
+try:
+    import numpy as np
+except ImportError:
+    print("Missing dependency: numpy. Install with: pip install numpy")
+    sys.exit(1)
+try:
+    import mediapipe as mp
+except ImportError:
+    print("Missing dependency: mediapipe. Install with: pip install mediapipe")
+    sys.exit(1)
+try:
+    from ultralytics import YOLO  # type: ignore
+except Exception:
+    print("Missing dependency: ultralytics. Install with: pip install ultralytics")
+    sys.exit(1)
+try:
+    from tqdm import tqdm
+except ImportError:
+    print("Missing dependency: tqdm. Install with: pip install tqdm")
+    sys.exit(1)
 import pickle
+from utils import LANDMARK_NAMES
 
 # --- Constants ---
 
-LANDMARKS_TO_TRACK = {
-    'left_shoulder', 'right_shoulder', 'left_hip', 'right_hip', 'left_knee', 'right_knee',
-    'left_ankle', 'right_ankle', 'left_elbow', 'right_elbow', 'left_wrist', 'right_wrist',
-}
+# Use LANDMARK_NAMES from utils as base set
+LANDMARKS_TO_TRACK = LANDMARK_NAMES
 
 # Convert string names to MediaPipe PoseLandmark objects
-LANDMARK_ENUMS = {name: mp.solutions.pose.PoseLandmark[name.upper()] for name in LANDMARKS_TO_TRACK}
+LANDMARK_ENUMS = {name: mp.solutions.pose.PoseLandmark[name.upper()] for name in LANDMARKS_TO_TRACK} # type: ignore
 
 
 # --- Step 1: Data Collection Function ---
@@ -38,7 +58,7 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
         return
 
     # Initialize MediaPipe Pose
-    mp_pose_solution = mp.solutions.pose
+    mp_pose_solution = mp.solutions.pose # type: ignore
     pose = mp_pose_solution.Pose(
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
@@ -147,11 +167,11 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
                     l_pos = np.array([l_ankle.x * frame_width, l_ankle.y * frame_height]) if l_visible else None
                     r_pos = np.array([r_ankle.x * frame_width, r_ankle.y * frame_height]) if r_visible else None
 
-                    if l_visible and r_visible:
+                    if l_visible and r_visible and l_pos is not None and r_pos is not None:
                         feet_pos_px = (l_pos + r_pos) / 2
-                    elif l_visible:
+                    elif l_visible and l_pos is not None:
                         feet_pos_px = l_pos
-                    elif r_visible:
+                    elif r_visible and r_pos is not None:
                         feet_pos_px = r_pos
                 
                 if feet_pos_px is not None:

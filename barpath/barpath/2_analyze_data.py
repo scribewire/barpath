@@ -1,54 +1,23 @@
-import pandas as pd
-import numpy as np
+import sys
+try:
+    import pandas as pd
+except ImportError:
+    print("Missing dependency: pandas. Install with: pip install pandas")
+    sys.exit(1)
+try:
+    import numpy as np
+except ImportError:
+    print("Missing dependency: numpy. Install with: pip install numpy")
+    sys.exit(1)
 import argparse
 import os
 import pickle
-from scipy.signal import savgol_filter
-
-# --- Helper Functions ---
-
-def calculate_angle(p1, p2, p3):
-    """Calculates the angle (in degrees) between three 2D points (p1, p2, p3)."""
-    # p2 is the vertex of the angle
-    
-    # Check for NaN values, which can happen if landmarks were not visible
-    if np.isnan(p1).any() or np.isnan(p2).any() or np.isnan(p3).any():
-        return np.nan
-        
-    v1 = p1 - p2
-    v2 = p3 - p2
-    
-    dot = np.dot(v1, v2)
-    norm = np.linalg.norm(v1) * np.linalg.norm(v2)
-    
-    # Handle numerical instability or zero-length vectors
-    if norm == 0:
-        return np.nan
-        
-    # Clamp the cosine value to [-1, 1] to avoid domain errors
-    cosine_angle = np.clip(dot / norm, -1.0, 1.0)
-    
-    angle = np.arccos(cosine_angle)
-    return np.degrees(angle)
-
-def calculate_lifter_angle(landmarks):
-    """Calculates the lifter's orientation angle using (x, z) coordinates."""
-    try:
-        l_shoulder = landmarks.get('left_shoulder')
-        r_shoulder = landmarks.get('right_shoulder')
-        
-        if l_shoulder is None or r_shoulder is None:
-            return np.nan
-            
-        # Use (x, z) coordinates (indices 0 and 2)
-        delta_x = l_shoulder[0] - r_shoulder[0]
-        delta_z = l_shoulder[2] - r_shoulder[2]
-        
-        angle_rad = np.arctan2(delta_z, delta_x)
-        angle_deg = 90 - abs(np.degrees(angle_rad))
-        return angle_deg
-    except Exception:
-        return np.nan
+try:
+    from scipy.signal import savgol_filter
+except Exception:
+    print("Missing dependency: scipy (savgol_filter). Install with: pip install scipy")
+    sys.exit(1)
+from utils import calculate_angle, calculate_lifter_angle, LANDMARK_NAMES
 
 # --- Step 2: Data Analysis Function ---
 def step_2_analyze_data(input_data, output_path):
@@ -71,8 +40,9 @@ def step_2_analyze_data(input_data, output_path):
     df = df.set_index('frame').sort_index()
     
     frame_gaps = df.index.to_series().diff()
-    if (frame_gaps > 1).any():
-        print(f"Warning: Detected {(frame_gaps > 1).sum()} gaps in frame sequence.")
+    frame_gaps_numeric = pd.to_numeric(frame_gaps, errors='coerce')
+    if (frame_gaps_numeric > 1).any():
+        print(f"Warning: Detected {(frame_gaps_numeric > 1).sum()} gaps in frame sequence.")
         print("Time calculations will be adjusted for missing frames.")
     
     # --- Metadata ---
@@ -191,7 +161,7 @@ def step_2_analyze_data(input_data, output_path):
     df.loc[df['vel_y_smooth'] < -vel_threshold, 'direction_state'] = -1
     
     # 5. Fill gaps (0s) with the previous valid state
-    df['direction_state'] = df['direction_state'].replace(0, method='ffill').fillna(1) # Default to 1 (Up) at start
+    df['direction_state'] = df['direction_state'].replace(0, np.nan).ffill().fillna(1) # Default to 1 (Up) at start
     
     # 6. Find where the state *changes*
     df['phase_change'] = df['direction_state'].diff().ne(0)
