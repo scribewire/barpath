@@ -12,7 +12,7 @@ scipy>=1.10.0
 matplotlib>=3.7.0
 
 # Utilities
-tqdm>=4.65.0
+rich
 
 # Optional: For better performance
 # opencv-contrib-python>=4.8.0  # Additional OpenCV modules

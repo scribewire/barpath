@@ -1,6 +1,8 @@
-# 🏋️ barpath - AI-Powered Weightlifting Technique Analysis
+<img src="barpath/gui/assets/barpath.svg" alt="Logo" width = "300" />
 
-**barpath** is an advanced biomechanical analysis tool that acts as your virtual weightlifting coach. Using computer vision and pose estimation, it analyzes Olympic lifts (clean, snatch, jerk) to provide detailed kinematic feedback, visualizations, and technique critiques.
+# AI-Powered Weightlifting Technique Analysis
+
+**barpath** is an advanced biomechanical analysis tool that acts as a powerful training tool. Using computer vision and pose estimation, it analyzes Olympic lifts (clean, snatch, jerk) to provide detailed kinematic feedback, visualizations, and technique critiques.
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -25,11 +27,11 @@
 
 ```
 barpath/
-├── README.md                          # Main documentation
+├── README.md                         # Main documentation
 ├── LICENSE
 ├── .gitignore
-├── .gitattributes                     # For git-lfs (YOLO models)
-├── requirements.txt                   # Core dependencies
+├── .gitattributes                    # For git-lfs (YOLO models)
+├── requirements.txt                  # Core dependencies
 ├── setup.py                          # Package installation
 │
 ├── barpath/                          # Core package
@@ -53,10 +55,10 @@ barpath/
 │       ├── icon.png
 │       └── logo.png
 │
-├── models/                     # Pre-trained YOLO models
-│   ├── yolo11s50e.pt      # Small (fast)
-│   ├── yolo11m50e.pt      # Medium (recommended)
-│   └── yolo11l60e.pt      # Large (high accuracy)
+├── models/                           # Pre-trained YOLO models
+│   ├── yolo11s50e.pt                 # Small (fast)
+│   ├── yolo11m50e.pt                 # Medium (recommended)
+│   └── yolo11l60e.pt                 # Large (high accuracy)
 │
 ├── examples/                         # Example videos and outputs
 │   ├── sample_clean.mp4
@@ -163,7 +165,7 @@ pip install -r requirements.txt
 
 ```bash
 # Check barpath CLI
-python barpath.py --help
+python barpath_cli.py --help
 
 # Verify models downloaded (should be ~20-50 MB each, not tiny)
 ls -lh models/*.pt
@@ -231,12 +233,11 @@ Optional Arguments:
 
 | Model File | Size | Speed | Accuracy | Use Case |
 |------------|------|-------|----------|----------|
-| `yolo11n-barbell.pt` | ~7 MB | Very Fast | Good | Testing, quick analysis |
-| `yolo11s-barbell.pt` | ~22 MB | Fast | Better | **Recommended for general use** |
-| `yolo11m-barbell.pt` | ~52 MB | Medium | Best | High-accuracy requirements |
-| `best.pt` | Varies | - | - | Your custom-trained model |
+| `yolo11s50e.pt` | ~19 MB | Fast | Good | Testing, quick analysis |
+| `yolo11m50e.pt` | ~40 MB | Medium | Better | **Recommended for general use** |
+| `yolo11l60e.pt` | ~50 MB | Slow | Best | High-accuracy requirements |
 
-**Recommendation:** Start with `yolo11s-barbell.pt` for the best balance of speed and accuracy.
+**Recommendation:** Start with `yolo11m50e.pt` for the best balance of speed and accuracy.
 
 ### Running Individual Pipeline Steps
 
@@ -322,9 +323,9 @@ For optimal tracking results:
 - ✅ Consistent lighting (no shadows obscuring body)
 
 ### 4. Video Quality
-- **Resolution**: 1080p minimum, 4K ideal
-- **Frame Rate**: 30 fps minimum, 60 fps recommended
-- **Format**: MP4, MOV, or AVI
+- **Resolution**: 1080p recommended
+- **Frame Rate**: 30 fps recommended
+- **Format**: MP4, MOV, mkv, webm, or AVI
 - **Compression**: Avoid heavy compression (quality > file size)
 - **Lighting**: Bright, even lighting (avoid backlighting)
 
@@ -518,7 +519,6 @@ brew install ffmpeg          # macOS
 - Only "clean" lift fully supported for critique
 - Requires stable camera position
 - Barbell endcap must be visible
-- Single-person tracking only
 - No real-time processing (yet)
 
 ## 🤝 Contributing

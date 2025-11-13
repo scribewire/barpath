@@ -22,9 +22,11 @@ except Exception:
     print("Missing dependency: ultralytics. Install with: pip install ultralytics")
     sys.exit(1)
 try:
-    from tqdm import tqdm
+    # --- CHANGED: Import 'Progress' from 'rich.progress' ---
+    from rich.progress import Progress
 except ImportError:
-    print("Missing dependency: tqdm. Install with: pip install tqdm")
+    # --- CHANGED: Updated dependency message ---
+    print("Missing dependency: rich. Install with: pip install rich")
     sys.exit(1)
 import pickle
 from utils import LANDMARK_NAMES
@@ -95,134 +97,156 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
     # State variable for tracking-by-proximity
     last_known_barbell_center = None
     
-    for frame_count in tqdm(range(total_frames), desc="Pass 1: Collecting Data"):
-        success, frame = cap.read()
-        if not success:
-            break
-            
-        # Initialize all keys for this frame with None
-        frame_data = {
-            'frame': frame_count,
-            'landmarks': None,
-            'barbell_center': None,
-            'barbell_box': None,
-            'shake_dx': 0.0,
-            'shake_dy': 0.0
-        }
+    # --- CHANGED: Set up rich.progress context manager ---
+    with Progress(
+        "[progress.description]{task.description}",
+        "[progress.percentage]{task.percentage:>3.0f}%",
+        "[progress.bar]",
+        "Frames: {task.completed} of {task.total}",
+        "Elapsed: {task.elapsed:0.1f}s",
+        "ETA: {task.remaining:0.1f}s",
+    ) as progress:
         
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Run MediaPipe and YOLO
-        results_pose = pose.process(frame_rgb)
-        
-        # Explicitly set confidence threshold
-        results_yolo = yolo_model(frame, verbose=False, conf=0.25)
-        
-        # 1. Process MediaPipe Data
-        segmentation_mask = None
-        if results_pose.pose_landmarks:
-            landmarks_data = {}
-            for name, enum in LANDMARK_ENUMS.items():
-                lm = results_pose.pose_landmarks.landmark[enum]
-                landmarks_data[name] = (lm.x, lm.y, lm.z, lm.visibility)
-            frame_data['landmarks'] = landmarks_data
-            
-            if results_pose.segmentation_mask is not None:
-                # Create a binary mask (1 for person, 0 for background)
-                segmentation_mask = (results_pose.segmentation_mask > 0.5).astype(np.uint8)
-        
-        # 2. Process YOLO Data
-        best_endcap = None
-        detected_endcaps = []
+        # Add the task to the progress bar
+        data_collection_task = progress.add_task(
+            "Pass 1: Collecting Data", 
+            total=total_frames
+        )
 
-        if results_yolo:
-            for r in results_yolo:
-                for box in r.boxes:
-                    cls_id = int(box.cls[0])
-                    # NEW: Use the validated target_class_name
-                    if yolo_model.names[cls_id] == target_class_name:
-                        coords = box.xyxy[0].cpu().numpy()
-                        x1, y1, x2, y2 = coords
-                        
-                        x1 = float(max(0, min(x1, frame_width - 1)))
-                        x2 = float(max(0, min(x2, frame_width - 1)))
-                        y1 = float(max(0, min(y1, frame_height - 1)))
-                        y2 = float(max(0, min(y2, frame_height - 1)))
-                        
-                        center = (int((x1 + x2) / 2), int((y1 + y2) / 2))
-                        detected_endcaps.append({'center': center, 'box': (x1, y1, x2, y2)})
-        
-        if detected_endcaps:
-            if last_known_barbell_center is None:
-                # --- INITIAL DETECTION ---
-                feet_pos_px = None
-                if results_pose.pose_landmarks:
-                    l_ankle = results_pose.pose_landmarks.landmark[mp_pose_solution.PoseLandmark.LEFT_ANKLE]
-                    r_ankle = results_pose.pose_landmarks.landmark[mp_pose_solution.PoseLandmark.RIGHT_ANKLE]
-                    
-                    l_visible = l_ankle.visibility > 0.3
-                    r_visible = r_ankle.visibility > 0.3
-                    
-                    l_pos = np.array([l_ankle.x * frame_width, l_ankle.y * frame_height]) if l_visible else None
-                    r_pos = np.array([r_ankle.x * frame_width, r_ankle.y * frame_height]) if r_visible else None
-
-                    if l_visible and r_visible and l_pos is not None and r_pos is not None:
-                        feet_pos_px = (l_pos + r_pos) / 2
-                    elif l_visible and l_pos is not None:
-                        feet_pos_px = l_pos
-                    elif r_visible and r_pos is not None:
-                        feet_pos_px = r_pos
+        # --- CHANGED: Loop over range() instead of tqdm(range()) ---
+        for frame_count in range(total_frames):
+            success, frame = cap.read()
+            if not success:
+                break
                 
-                if feet_pos_px is not None:
-                    # Logic 1: Use feet position
-                    best_endcap = min(detected_endcaps, 
-                                      key=lambda e: np.linalg.norm(np.array(e['center']) - feet_pos_px))
-                    tqdm.write(f"\n[Info] Barbell initially detected at frame {frame_count} (near feet).")
+            # Initialize all keys for this frame with None
+            frame_data = {
+                'frame': frame_count,
+                'landmarks': None,
+                'barbell_center': None,
+                'barbell_box': None,
+                'shake_dx': 0.0,
+                'shake_dy': 0.0
+            }
+            
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Run MediaPipe and YOLO
+            results_pose = pose.process(frame_rgb)
+            
+            # Explicitly set confidence threshold
+            results_yolo = yolo_model(frame, verbose=False, conf=0.25)
+            
+            # 1. Process MediaPipe Data
+            segmentation_mask = None
+            if results_pose.pose_landmarks:
+                landmarks_data = {}
+                for name, enum in LANDMARK_ENUMS.items():
+                    lm = results_pose.pose_landmarks.landmark[enum]
+                    landmarks_data[name] = (lm.x, lm.y, lm.z, lm.visibility)
+                frame_data['landmarks'] = landmarks_data
+                
+                if results_pose.segmentation_mask is not None:
+                    # Create a binary mask (1 for person, 0 for background)
+                    segmentation_mask = (results_pose.segmentation_mask > 0.5).astype(np.uint8)
+            
+            # 2. Process YOLO Data
+            best_endcap = None
+            detected_endcaps = []
+
+            if results_yolo:
+                for r in results_yolo:
+                    for box in r.boxes:
+                        cls_id = int(box.cls[0])
+                        # NEW: Use the validated target_class_name
+                        if yolo_model.names[cls_id] == target_class_name:
+                            coords = box.xyxy[0].cpu().numpy()
+                            x1, y1, x2, y2 = coords
+                            
+                            x1 = float(max(0, min(x1, frame_width - 1)))
+                            x2 = float(max(0, min(x2, frame_width - 1)))
+                            y1 = float(max(0, min(y1, frame_height - 1)))
+                            y2 = float(max(0, min(y2, frame_height - 1)))
+                            
+                            center = (int((x1 + x2) / 2), int((y1 + y2) / 2))
+                            detected_endcaps.append({'center': center, 'box': (x1, y1, x2, y2)})
+            
+            if detected_endcaps:
+                if last_known_barbell_center is None:
+                    # --- INITIAL DETECTION ---
+                    feet_pos_px = None
+                    if results_pose.pose_landmarks:
+                        l_ankle = results_pose.pose_landmarks.landmark[mp_pose_solution.PoseLandmark.LEFT_ANKLE]
+                        r_ankle = results_pose.pose_landmarks.landmark[mp_pose_solution.PoseLandmark.RIGHT_ANKLE]
+                        
+                        l_visible = l_ankle.visibility > 0.3
+                        r_visible = r_ankle.visibility > 0.3
+                        
+                        l_pos = np.array([l_ankle.x * frame_width, l_ankle.y * frame_height]) if l_visible else None
+                        r_pos = np.array([r_ankle.x * frame_width, r_ankle.y * frame_height]) if r_visible else None
+
+                        if l_visible and r_visible and l_pos is not None and r_pos is not None:
+                            feet_pos_px = (l_pos + r_pos) / 2
+                        elif l_visible and l_pos is not None:
+                            feet_pos_px = l_pos
+                        elif r_visible and r_pos is not None:
+                            feet_pos_px = r_pos
+                    
+                    if feet_pos_px is not None:
+                        # Logic 1: Use feet position
+                        best_endcap = min(detected_endcaps, 
+                                          key=lambda e: np.linalg.norm(np.array(e['center']) - feet_pos_px))
+                        # --- CHANGED: 'tqdm.write' to 'print' ---
+                        print(f"[Info] Barbell initially detected at frame {frame_count} (near feet).")
+                    else:
+                        # Logic 2: Fallback to center of frame
+                        best_endcap = min(detected_endcaps, 
+                                          key=lambda e: abs(e['center'][0] - (frame_width / 2)))
+                        # --- CHANGED: 'tqdm.write' to 'print' ---
+                        print(f"[Info] Barbell initially detected at frame {frame_count} (near center). No feet visible.")
+
                 else:
-                    # Logic 2: Fallback to center of frame
+                    # --- TRACKING ---
                     best_endcap = min(detected_endcaps, 
-                                      key=lambda e: abs(e['center'][0] - (frame_width / 2)))
-                    tqdm.write(f"\n[Info] Barbell initially detected at frame {frame_count} (near center). No feet visible.")
-
-            else:
-                # --- TRACKING ---
-                best_endcap = min(detected_endcaps, 
-                                  key=lambda e: np.linalg.norm(np.array(e['center']) - last_known_barbell_center))
-            
-            last_known_barbell_center = np.array(best_endcap['center'])
-            frame_data['barbell_center'] = best_endcap['center']
-            frame_data['barbell_box'] = best_endcap['box']
-            
-        # 3. Process Stabilization Data
-        shake_dx, shake_dy = 0.0, 0.0
-        if prev_gray is not None:
-            if background_features is not None and len(background_features) > 0:
-                next_features, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, background_features, None, **lk_params)
-                good_new = next_features[status == 1]
-                good_old = background_features[status == 1]
+                                      key=lambda e: np.linalg.norm(np.array(e['center']) - last_known_barbell_center))
                 
-                if len(good_new) > 5:
-                    deltas_x = good_new[:, 0] - good_old[:, 0]
-                    deltas_y = good_new[:, 1] - good_old[:, 1]
-                    shake_dx = float(np.median(deltas_x))
-                    shake_dy = float(np.median(deltas_y))
+                last_known_barbell_center = np.array(best_endcap['center'])
+                frame_data['barbell_center'] = best_endcap['center']
+                frame_data['barbell_box'] = best_endcap['box']
                 
-                background_features = good_new.reshape(-1, 1, 2)
-            else:
-                background_features = None
-        
-        if (background_features is None and segmentation_mask is not None):
-            background_mask = 1 - segmentation_mask
-            new_features = cv2.goodFeaturesToTrack(gray, maxCorners=200, qualityLevel=0.01, minDistance=10, mask=background_mask)
-            if new_features is not None:
-                background_features = new_features
-        
-        frame_data['shake_dx'] = shake_dx
-        frame_data['shake_dy'] = shake_dy
-        
-        raw_data_list.append(frame_data)
-        prev_gray = gray
+            # 3. Process Stabilization Data
+            shake_dx, shake_dy = 0.0, 0.0
+            if prev_gray is not None:
+                if background_features is not None and len(background_features) > 0:
+                    next_features, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, background_features, None, **lk_params)
+                    good_new = next_features[status == 1]
+                    good_old = background_features[status == 1]
+                    
+                    if len(good_new) > 5:
+                        deltas_x = good_new[:, 0] - good_old[:, 0]
+                        deltas_y = good_new[:, 1] - good_old[:, 1]
+                        shake_dx = float(np.median(deltas_x))
+                        shake_dy = float(np.median(deltas_y))
+                    
+                    background_features = good_new.reshape(-1, 1, 2)
+                else:
+                    background_features = None
+            
+            if (background_features is None and segmentation_mask is not None):
+                background_mask = 1 - segmentation_mask
+                new_features = cv2.goodFeaturesToTrack(gray, maxCorners=200, qualityLevel=0.01, minDistance=10, mask=background_mask)
+                if new_features is not None:
+                    background_features = new_features
+            
+            frame_data['shake_dx'] = shake_dx
+            frame_data['shake_dy'] = shake_dy
+            
+            raw_data_list.append(frame_data)
+            prev_gray = gray
+            
+            # --- CHANGED: Update the progress bar task ---
+            progress.update(data_collection_task, advance=1)
 
     cap.release()
     pose.close()
@@ -252,7 +276,7 @@ def main():
     parser.add_argument("--output", default="raw_data.pkl", help="Path to save the raw data pickle file.")
     # NEW: Added class_name argument
     parser.add_argument("--class_name", default='endcap', 
-                       help="The exact class name for the barbell endcap.")
+                        help="The exact class name for the barbell endcap.")
     
     args = parser.parse_args()
     
