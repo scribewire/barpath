@@ -24,6 +24,7 @@ wheels/
 venv/
 env/
 ENV/
+.venv/
 
 # IDE
 .vscode/
@@ -41,8 +42,3 @@ test_videos/**
 # OS
 .DS_Store
 Thumbs.db
-
-# Python virtual environment folder
-.venv/
-.venv/**
-venv/**
