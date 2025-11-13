@@ -1,9 +1,6 @@
-<div style="display:inline-block; background:#cdd1c4; padding:12px; border-radius:8px;">
-    <img src="barpath/gui/assets/barpath.svg" alt="Logo" width = "300" />
-</div>
+<img src="barpath/gui/assets/barpath_logo.svg" alt="Logo" width = "300" />
 
-
-# AI-Powered Weightlifting Technique Analysis
+# BARPATH: AI-Powered Weightlifting Technique Analysis
 
 **barpath** is an advanced biomechanical analysis tool that acts as a powerful training tool. Using computer vision and pose estimation, it analyzes Olympic lifts (clean, snatch, jerk) to provide detailed kinematic feedback, visualizations, and technique critiques.
 
