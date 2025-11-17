@@ -1,17 +1,12 @@
-"""
-Graphical user interface for barpath.
+"""Graphical user interface for barpath.
 
-This module provides the GUI entry point for the barpath pipeline.
-Built with PyQt6 for a modern, cross-platform interface.
+This package exposes a Toga-based GUI as the primary entrypoint.
 
-Usage:
-    $ barpath-gui
-    
-Or from Python:
-    >>> from gui import main
-    >>> main()
+Usage (once `toga` is installed):
+
+    $ python -m barpath.gui.barpath_gui
 """
 
-from .barpath_gui import main, BarpathGUI
+from .barpath_gui import main, BarpathTogaApp
 
-__all__ = ['main', 'BarpathGUI']
+__all__ = ["main", "BarpathTogaApp"]

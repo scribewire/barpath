@@ -85,6 +85,9 @@ barpath/
 | **Python 3.8+** | Runtime environment | [python.org](https://www.python.org/downloads/) |
 | **FFmpeg** | Video processing | See below |
 | **Git LFS** | Large file support | See below |
+| **Cairo (libcairo)** | Low-level 2D drawing used by GUI/visualization (pycairo) | See below |
+
+Python packages required by barpath are listed in `requirements.txt`. Note that `pycairo` is included to support GUI backends (and is required if you plan to use the Toga GUI).
 
 ## 📦 Installation
 
@@ -93,7 +96,7 @@ barpath/
 ```bash
 # Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install ffmpeg python3-pip git-lfs
+sudo apt-get install ffmpeg python3-pip git-lfs libcairo2-dev pkg-config
 
 # macOS
 brew install ffmpeg git-lfs python3
@@ -116,7 +119,13 @@ cd barpath
 
 ```bash
 pip install -r requirements.txt
+
+Note: `pycairo` (required by certain GUI backends such as `toga-gtk`) may require the system package `libcairo2-dev` on Debian/Ubuntu; install it with apt as shown above before installing Python packages.
 ```
+
+This installs both the core pipeline libraries and the Toga GUI
+dependency. If you only want the command-line pipeline, you can
+optionally skip installing any platform-specific Toga backend wheels.
 
 ### 4. Verify Installation
 
@@ -126,6 +135,14 @@ python barpath/cli/barpath_cli.py --help
 
 # Verify models downloaded (should be ~20-50 MB each, not tiny)
 ls -lh barpath/models/*.pt
+```
+
+### 5. Launch the GUI (Optional)
+
+Once `toga` is installed, you can run the experimental desktop GUI:
+
+```bash
+python -m barpath.gui.barpath_gui
 ```
 
 ## 🚀 Quick Start
