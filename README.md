@@ -10,6 +10,8 @@
 
 ## ✨ Features
 
+- **🖥️ Dual Interface**: Command-line tool for batch processing and GUI for interactive analysis
+- **⚡ Real-time Progress Tracking**: Generator-based architecture with live progress updates
 - **🎯 Camera Shake Stabilization**: Uses Lucas-Kanade optical flow on background features to create perfectly stabilized bar path tracking
 - **📐 3D Orientation Detection**: Automatically detects lifter orientation using MediaPipe's pseudo-depth (z-coordinate)
 - **📊 Comprehensive Kinematic Analysis**:
@@ -24,7 +26,7 @@
   - Catching errors
   - and more!
 
-## 🏗️ Proposed Project Structure (not yet complete)
+## 🏗️ Project Structure
 
 ```
 barpath/
@@ -36,44 +38,32 @@ barpath/
 ├── setup.py                          # Package installation
 │
 ├── barpath/                          # Core package
-│   ├── __init__.py
-│   ├── collect_data.py               # Refactored from 1_collect_data.py
-│   ├── analyze_data.py               # Refactored from 2_analyze_data.py
-│   ├── generate_graphs.py            # Refactored from 3_generate_graphs.py
-│   ├── render_video.py               # Refactored from 4_render_video.py
-│   ├── critique_lift.py              # Refactored from 5_critique_lift.py
-│   └── utils.py                      # Shared utilities
+│   ├── barpath_core.py               # Pipeline orchestrator (generator-based)
+│   ├── barpath_cli.py                # Command-line interface
+│   ├── barpath_gui.py                # Toga GUI application
+│   │
+│   ├── pipeline/                     # Analysis pipeline steps
+│   │   ├── 1_collect_data.py         # Pose tracking and barbell detection
+│   │   ├── 2_analyze_data.py         # Kinematic analysis
+│   │   ├── 3_generate_graphs.py      # Visualization generation
+│   │   ├── 4_render_video.py         # Annotated video rendering
+│   │   ├── 5_critique_lift.py        # Technique analysis
+│   │   └── utils.py                  # Shared utilities
+│   │
+│   ├── models/                       # Pre-trained YOLO models
+│   │   ├── yolo11s50e.pt             # Small (fast)
+│   │   ├── yolo11m50e.pt             # Medium (recommended)
+│   │   └── yolo11l60e.pt             # Large (high accuracy)
+│   │
+│   └── assets/                       # Application assets
+│       └── assets/
+│           ├── barpath.png           # App icon/logo
+│           ├── barpath.svg
+│           └── barpath_logo.svg
 │
-├── cli/                              # Command-line interface
-│   ├── __init__.py
-│   └── barpath_cli.py                # CLI entry point (current barpath.py)
-│
-├── gui/                              # Graphical interface
-│   ├── __init__.py
-│   ├── barpath_gui.py                # Main GUI application
-│   ├── requirements.txt              # GUI-specific dependencies (PyQt6/tkinter)
-│   └── assets/                       # GUI assets (icons, images)
-│       ├── icon.png
-│       └── logo.png
-│
-├── models/                           # Pre-trained YOLO models
-│   ├── yolo11s50e.pt                 # Small (fast)
-│   ├── yolo11m50e.pt                 # Medium (recommended)
-│   └── yolo11l60e.pt                 # Large (high accuracy)
-│
-├── examples/                         # Example videos and outputs
-│   ├── sample_clean.mp4
-│   └── expected_output/
-│
-├── docs/                             # Documentation
-│   ├── QUICK_START.md
-│   ├── CLI_GUIDE.md
-│   └── GUI_GUIDE.md
-│
+├── graphs/                           # Generated kinematic plots (output)
+├── example_videos/                      # Example videos for reference
 └── tests/                            # Unit tests
-    ├── test_collect_data.py
-    ├── test_analyze_data.py
-    └── test_critique_lift.py
 ```
 
 ## 🔧 Requirements
@@ -131,31 +121,43 @@ optionally skip installing any platform-specific Toga backend wheels.
 
 ```bash
 # Check barpath CLI
-python barpath/cli/barpath_cli.py --help
+python barpath/barpath_cli.py --help
 
 # Verify models downloaded (should be ~20-50 MB each, not tiny)
 ls -lh barpath/models/*.pt
 ```
 
-### 5. Launch the GUI (Optional)
+### 5. Launch the GUI
 
-Once `toga` is installed, you can run the experimental desktop GUI:
+Once dependencies are installed, you can run the desktop GUI:
 
 ```bash
-python -m barpath.gui.barpath_gui
+python barpath/barpath_gui.py
 ```
 
 ## 🚀 Quick Start
 
-### Analysis
+### Command Line Interface
 
 ```bash
-python barpath/cli/barpath_cli.py \
+python barpath/barpath_cli.py \
   --input_video "path/to/your/clean.mp4" \
   --model "barpath/models/yolo11m50e.pt" \
   --output_video "output.mp4" \
   --lift_type clean
 ```
+
+### Graphical User Interface
+
+```bash
+python barpath/barpath_gui.py
+```
+
+The GUI provides an intuitive interface for:
+- Selecting input videos and models
+- Configuring analysis parameters
+- Real-time progress tracking
+- Viewing results directly in the application
 
 For quick feedback without rendering the annotated video, use the --no-video option  
 This generates graphs and critique in seconds, perfect for rapid iteration.
@@ -208,29 +210,29 @@ For debugging or custom workflows, run steps independently:
 
 ```bash
 # Step 1: Collect raw tracking data
-python barpath/1_collect_data.py \
+python barpath/pipeline/1_collect_data.py \
   --input video.mp4 \
   --model barpath/models/yolo11m50e.pt \
   --output raw_data.pkl
 
 # Step 2: Analyze kinematics and angles
-python barpath/2_analyze_data.py \
+python barpath/pipeline/2_analyze_data.py \
   --input raw_data.pkl \
   --output final_analysis.csv
 
 # Step 3: Generate kinematic graphs
-python 3_generate_graphs.py \
+python barpath/pipeline/3_generate_graphs.py \
   --input final_analysis.csv \
   --output_dir graphs
 
 # Step 4: Render annotated video
-python 4_render_video.py \
+python barpath/pipeline/4_render_video.py \
   --input_csv final_analysis.csv \
   --input_video video.mp4 \
   --output_video final.mp4
 
 # Step 5: Generate technique critique
-python 5_critique_lift.py \
+python barpath/pipeline/5_critique_lift.py \
   --input final_analysis.csv \
   --lift_type clean
 ```
@@ -325,8 +327,12 @@ For optimal tracking results:
 
 **Current Status: Alpha (v0.9)**
 
+### ✅ Recently Completed
+- **Graphical user interface (GUI)** - Toga-based desktop application
+- **Refactored architecture** - Generator-based pipeline with real-time progress
+- **Dual interface support** - Both CLI and GUI fully functional
+
 ### 🚧 In Development
-- Graphical user interface (GUI)
 - Additional lift types (snatch, jerk)
 - Advanced critique rules
 - Option to select video segment for analysis
