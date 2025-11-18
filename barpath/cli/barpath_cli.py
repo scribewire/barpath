@@ -3,6 +3,7 @@ import argparse
 import os
 import sys
 import shlex
+import time
 from pathlib import Path
 
 def run_step(step_name, cmd_list, stop_on_failure=True):
@@ -40,10 +41,10 @@ def main():
         epilog="""
 Sample Commands:
   1. Quick analysis (graphs + critique, no video):
-     python %(prog)s --input_video "my_lift.mp4" --model "best.pt" --lift_type clean --no-video --class_name barbell-endcap
+     python %(prog)s --input_video "my_lift.mp4" --model "best.pt" --lift_type clean --no-video --class_name barbell-endcap --graphs_dir "my_graphs"
 
   2. Full analysis (all steps):
-     python %(prog)s --input_video "my_lift.mp4" --model "yolo11.pt" --lift_type clean --output_video "final.mp4" --class_name endcap
+     python %(prog)s --input_video "my_lift.mp4" --model "yolo11.pt" --lift_type clean --output_video "final.mp4" --class_name endcap --graphs_dir "graphs"
 
 Usage Notes:
   - 'barpath' is an alpha-stage tool.
@@ -70,6 +71,8 @@ Usage Notes:
     # NEW: Added class_name argument
     parser.add_argument("--class_name", default='endcap',
                        help="The exact class name of the barbell endcap in your YOLO model (e.g., 'endcap').")
+    parser.add_argument("--graphs_dir", default='graphs',
+                       help="Directory to save generated graphs (e.g., 'graphs').")
 
     args = parser.parse_args()
 
@@ -106,7 +109,7 @@ Usage Notes:
     # --- Define file paths ---
     raw_data_path = "raw_data.pkl"
     analysis_csv_path = "final_analysis.csv"
-    graphs_dir = "graphs"
+    graphs_dir = args.graphs_dir
 
     # FIXED: Use sys.executable to ensure we use the same Python interpreter
     python_exe = sys.executable
@@ -134,8 +137,10 @@ Usage Notes:
         "--output", raw_data_path,
         "--class_name", args.class_name  # NEW: Pass class_name
     ]
+    step1_start = time.perf_counter()
     run_step("Step 1", cmd_step1)
-    print(">>> Step 1 Complete.")
+    step1_elapsed = time.perf_counter() - step1_start
+    print(f">>> Step 1 Complete. Elapsed: {step1_elapsed:.1f}s")
 
     # --- STEP 2: Analyze Data ---
     print("\n>>> STEP 2: Analyzing Data...")
@@ -168,8 +173,10 @@ Usage Notes:
             "--input_video", args.input_video,
             "--output_video", args.output_video
         ]
+        step4_start = time.perf_counter()
         run_step("Step 4", cmd_step4)
-        print(">>> Step 4 Complete.")
+        step4_elapsed = time.perf_counter() - step4_start
+        print(f">>> Step 4 Complete. Elapsed: {step4_elapsed:.1f}s")
 
     # --- STEP 5: Critique Lift ---
     if args.lift_type == 'none':

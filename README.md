@@ -184,6 +184,12 @@ Optional Arguments:
   --no-video                Skip Step 4 (video rendering)
                             Saves 60-80% processing time
                             Graphs and critique still generated
+  
+  --graphs_dir PATH         Directory to save generated graphs
+                            Default: graphs
+  
+  --class_name STR          Class name of barbell endcap in model
+                            Default: endcap
 ```
 
 ### Available Models
