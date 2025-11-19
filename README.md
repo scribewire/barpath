@@ -85,10 +85,10 @@ Python packages required by barpath are listed in `requirements.txt`.
 
 ### 1. Install System Dependencies
 
-Ubuntu/Debian
+Ubuntu
 ```bash
-sudo apt-get update
-sudo apt-get install ffmpeg python3-pip git git-lfs libcairo2-dev pkg-config libgirepository-2.0-dev gir1.2-gtk-3.0 libgirepository-2.0-0
+sudo apt update
+sudo apt install ffmpeg python3-pip git git-lfs libcairo2-dev pkg-config libgirepository-2.0-dev gir1.2-gtk-3.0 libgirepository-2.0-0
 ```
 macOS
 ```
