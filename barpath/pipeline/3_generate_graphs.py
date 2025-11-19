@@ -35,13 +35,19 @@ def step_3_generate_graphs(df, output_dir):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
+    # --- NEW: Truncate data at maximum height ---
+    # Ensure graphs only show the lift up to the peak height
+    if 'barbell_y_stable' in df.columns and df['barbell_y_stable'].notna().any():
+        # Find the index where the bar reaches its highest point (min Y)
+        peak_height_idx = df['barbell_y_stable'].idxmin()
+        print(f"Truncating graphs data at peak height (index {peak_height_idx}).")
+        df = df.loc[:peak_height_idx]
+        
     # Define the kinematics to plot
     kinematics = {
-        'Vertical Velocity (px/s)': 'vel_y_px_s',
-        'Vertical Acceleration (px/s^2)': 'accel_y_px_s2',
-        'Vertical Jerk (px/s^3)': 'jerk_y_px_s3',
-        'Vertical Specific Power': 'specific_power_y',
-        'Smoothed Vertical Velocity (px/s)': 'vel_y_smooth' # Added for debugging
+        'Smoothed Vertical Velocity (px/s)': 'vel_y_smooth',
+        'Smoothed Vertical Acceleration (px/s^2)': 'accel_y_smooth',
+        'Smoothed Vertical Specific Power': 'specific_power_y_smooth'
     }
     
     graph_files = []
@@ -148,6 +154,9 @@ def step_3_generate_graphs(df, output_dir):
         print(f"  Skipped: {len(skipped)} graphs due to missing/insufficient data")
         for title in skipped:
             print(f"    - {title}")
+            
+    # Ensure all figures are closed to free memory
+    plt.close('all')
 
 def main():
     parser = argparse.ArgumentParser(description="Step 3: Generate kinematic graphs from analysis CSV.")

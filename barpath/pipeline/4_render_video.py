@@ -1,4 +1,5 @@
 import sys
+import gc
 try:
     import cv2
 except ImportError:
@@ -96,93 +97,129 @@ def step_4_render_video(df, video_path, output_video_path):
     # Array of phase numbers
     path_phases = path_df['bar_phase'].values
     
-    # --- CHANGED: Store frame count in a variable ---
-    frames_to_render = min(len(df), total_frames)
-    print(f"Rendering {frames_to_render} frames...")
+        # --- CHANGED: Store frame count in a variable ---
+    # Render frames up to the end of analysis + 1 second of raw footage
+    # This gives a buffer after the lift/analysis finishes before cutting the video
+    last_analyzed_frame = int(df.index.max()) if not df.empty else 0
+    extra_frames = int(fps)
+    frames_to_render = min(last_analyzed_frame + extra_frames, total_frames)
+    print(f"Rendering {frames_to_render} frames (Analysis end: {last_analyzed_frame})...")
     
+    # Initialize persistent state for "extra frames" rendering
+    last_shake_x = 0.0
+    last_shake_y = 0.0
+    last_lifter_angle = np.nan
+
     # Loop through frames and yield progress
     for frame_count in range(frames_to_render):
+        points_to_draw = None
         success, frame = cap.read()
         if not success:
             print(f"Warning: Could not read frame {frame_count}")
             break
         
-        if frame_count not in df.index:
-            out.write(frame)
-            # Yield progress and continue
-            progress_fraction = (frame_count + 1) / frames_to_render
-            yield ('step4', progress_fraction, f'Rendering video: frame {frame_count + 1}/{frames_to_render}')
-            continue
+        # Determine drawing parameters
+        if frame_count in df.index:
+            row = df.loc[frame_count]
             
-        row = df.loc[frame_count]
-        
-        # --- NEW: Draw Stabilized Bar Path with Colors ---
-        if not pd.isna(row['total_shake_x']):
-            current_shake_x = row['total_shake_x']
-            current_shake_y = row['total_shake_y']
+            # Update persistent state
+            if not pd.isna(row.get('total_shake_x')):
+                last_shake_x = row['total_shake_x']
+                last_shake_y = row['total_shake_y']
+            if not pd.isna(row.get('lifter_angle_deg')):
+                last_lifter_angle = row['lifter_angle_deg']
             
-            # Find all path points that have occurred up to this frame
-            # np.searchsorted finds the insertion point to keep the array sorted
+            current_shake_x = last_shake_x
+            current_shake_y = last_shake_y
+            
             max_path_index = np.searchsorted(path_indices, frame_count, side='right')
             
-            if max_path_index >= 2:
-                # Get all points and phases up to this moment
-                points_to_draw = path_points[:max_path_index].copy()
-                phases_to_draw = path_phases[:max_path_index]
+            draw_skeleton = True
+            draw_box = True
+            
+            lifter_angle = row.get('lifter_angle_deg', np.nan)
+            time_s = row.get('time_s', frame_count / fps)
+            
+            # Strings for parsing
+            landmarks_str = row.get('landmarks_str', '{}')
+            barbell_box_str = row.get('barbell_box_str', '')
+            
+        else:
+            # Extra frames: use last known state
+            current_shake_x = last_shake_x
+            current_shake_y = last_shake_y
+            
+            max_path_index = len(path_points) # Show full path
+            
+            draw_skeleton = False
+            draw_box = False
+            
+            lifter_angle = last_lifter_angle
+            time_s = frame_count / fps
+            
+            landmarks_str = '{}'
+            barbell_box_str = ''
+
+        # --- Draw Stabilized Bar Path with Colors ---
+        # Always draw path if we have points (using current_shake)
+        if max_path_index >= 2:
+            # Get all points and phases up to this moment
+            points_to_draw = path_points[:max_path_index].copy()
+            phases_to_draw = path_phases[:max_path_index]
+            
+            # Apply current shake to all historical points
+            points_to_draw[:, 0] += current_shake_x
+            points_to_draw[:, 1] += current_shake_y
+            points_to_draw = points_to_draw.astype(np.int32)
+            
+            # Draw segment by segment to apply colors
+            for i in range(len(points_to_draw) - 1):
+                p1 = (points_to_draw[i, 0], points_to_draw[i, 1])
+                p2 = (points_to_draw[i+1, 0], points_to_draw[i+1, 1])
                 
-                # Apply current shake to all historical points
-                points_to_draw[:, 0] += current_shake_x
-                points_to_draw[:, 1] += current_shake_y
-                points_to_draw = points_to_draw.astype(np.int32)
+                # Get phase, cycle through colors using modulo
+                phase_index = int(phases_to_draw[i]) % len(PHASE_COLORS_BGR)
+                color = PHASE_COLORS_BGR.get(phase_index, (255, 255, 255)) # Default white
                 
-                # Draw segment by segment to apply colors
-                for i in range(len(points_to_draw) - 1):
-                    p1 = (points_to_draw[i, 0], points_to_draw[i, 1])
-                    p2 = (points_to_draw[i+1, 0], points_to_draw[i+1, 1])
-                    
-                    # Get phase, cycle through colors using modulo
-                    phase_index = int(phases_to_draw[i]) % len(PHASE_COLORS_BGR)
-                    color = PHASE_COLORS_BGR.get(phase_index, (255, 255, 255)) # Default white
-                    
-                    cv2.line(frame, p1, p2, color, 3)
+                cv2.line(frame, p1, p2, color, 3)
 
         # --- Draw Barbell Box ---
-        barbell_box = parse_barbell_box(row.get('barbell_box_str', ''))
-        if barbell_box:
-            x1, y1, x2, y2 = barbell_box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), LEGEND_COLORS["Barbell Box"], 2)
+        if draw_box:
+            barbell_box = parse_barbell_box(barbell_box_str)
+            if barbell_box:
+                x1, y1, x2, y2 = barbell_box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), LEGEND_COLORS["Barbell Box"], 2)
             
         # --- Draw Skeleton ---
-        landmarks = parse_landmarks_from_string(row.get('landmarks_str', '{}'))
-        
-        if landmarks:
-            landmark_pixels = {}
-            for name, (x, y, z, vis) in landmarks.items():
-                if vis > 0.1:  # Only use visible landmarks
-                    px = int(x * frame_width)
-                    py = int(y * frame_height)
-                    landmark_pixels[name] = (px, py)
+        if draw_skeleton:
+            landmarks = parse_landmarks_from_string(landmarks_str)
             
-            for lm1_name, lm2_name in SKELETON_CONNECTIONS:
-                if lm1_name in landmark_pixels and lm2_name in landmark_pixels:
-                    p1 = landmark_pixels[lm1_name]
-                    p2 = landmark_pixels[lm2_name]
-                    color = get_connection_color(lm1_name, lm2_name, LEGEND_COLORS)
-                    cv2.line(frame, p1, p2, color, 3)
-            
-            for name, (px, py) in landmark_pixels.items():
-                cv2.circle(frame, (px, py), 5, (255, 255, 255), -1)
+            if landmarks:
+                landmark_pixels = {}
+                for name, (x, y, z, vis) in landmarks.items():
+                    if vis > 0.1:  # Only use visible landmarks
+                        px = int(x * frame_width)
+                        py = int(y * frame_height)
+                        landmark_pixels[name] = (px, py)
+                
+                for lm1_name, lm2_name in SKELETON_CONNECTIONS:
+                    if lm1_name in landmark_pixels and lm2_name in landmark_pixels:
+                        p1 = landmark_pixels[lm1_name]
+                        p2 = landmark_pixels[lm2_name]
+                        color = get_connection_color(lm1_name, lm2_name, LEGEND_COLORS)
+                        cv2.line(frame, p1, p2, color, 3)
+                
+                for name, (px, py) in landmark_pixels.items():
+                    cv2.circle(frame, (px, py), 5, (255, 255, 255), -1)
 
         # --- Draw Legend and Info Text ---
         last_y = draw_legend(frame, LEGEND_COLORS)
         
-        lifter_angle = row.get('lifter_angle_deg', np.nan)
         if not pd.isna(lifter_angle):
             angle_text = f"Lifter Angle: {lifter_angle:.1f} deg"
             cv2.putText(frame, angle_text, (15, last_y + 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        time_s = row.get('time_s', frame_count / fps)
         time_text = f"Time: {time_s:.2f}s"
         cv2.putText(frame, time_text, (15, last_y + 60), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -196,6 +233,13 @@ def step_4_render_video(df, video_path, output_video_path):
         # Yield progress update
         progress_fraction = (frame_count + 1) / frames_to_render
         yield ('step4', progress_fraction, f'Rendering video: frame {frame_count + 1}/{frames_to_render}')
+
+        # --- Memory Management ---
+        del frame
+        if points_to_draw is not None: del points_to_draw
+        
+        if frame_count % 50 == 0:
+            gc.collect()
             
     cap.release()
     out.release()

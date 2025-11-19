@@ -237,7 +237,7 @@ class BarpathTogaApp(toga.App):
             path = await self.main_window.dialog(  # type: ignore
                 toga.OpenFileDialog(
                     title="Select Video File",
-                    file_types=["mp4", "avi", "mov", "mkv"]
+                    file_types=["mp4", "MP4", "avi", "mov", "MOV", "mkv", "MKV", "webm", "WEBM"]
                 )
             )
             if path:
@@ -319,7 +319,9 @@ class BarpathTogaApp(toga.App):
                 technique_analysis=(self.lift_type != "none")
             ):
                 # Update UI
-                self.append_log(f"[{step_name}] {message}")
+                # Only log if it's not a frame update to avoid freezing/OOM
+                if "frame" not in message.lower() or progress_value is None:
+                    self.append_log(f"[{step_name}] {message}")
                 
                 if progress_value is not None:
                     self.progress_bar.value = int(progress_value * 100)

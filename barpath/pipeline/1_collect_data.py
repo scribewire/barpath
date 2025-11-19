@@ -1,4 +1,5 @@
 import sys
+import gc
 try:
     import cv2
 except ImportError:
@@ -193,7 +194,7 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
         shake_dx, shake_dy = 0.0, 0.0
         if prev_gray is not None:
             if background_features is not None and len(background_features) > 0:
-                next_features, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, background_features, None, **lk_params)
+                next_features, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, background_features, None, **lk_params) # type: ignore
                 good_new = next_features[status == 1]
                 good_old = background_features[status == 1]
                 
@@ -207,6 +208,7 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
             else:
                 background_features = None
         
+        background_mask = None
         if (background_features is None and segmentation_mask is not None):
             background_mask = 1 - segmentation_mask
             new_features = cv2.goodFeaturesToTrack(gray, maxCorners=200, qualityLevel=0.01, minDistance=10, mask=background_mask)
@@ -222,6 +224,16 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
         # Yield progress update
         progress_fraction = (frame_count + 1) / total_frames
         yield ('step1', progress_fraction, f'Collecting data: frame {frame_count + 1}/{total_frames}')
+
+        # --- Memory Management ---
+        # Explicitly delete large objects to help GC
+        del frame, frame_rgb, results_pose, results_yolo
+        if segmentation_mask is not None: del segmentation_mask
+        if background_mask is not None: del background_mask
+        
+        # Periodically force garbage collection to prevent memory ballooning
+        if frame_count % 50 == 0:
+            gc.collect()
 
     cap.release()
     pose.close()

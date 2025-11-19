@@ -122,6 +122,9 @@ def run_pipeline(
     # Run analysis (no progress reporting)
     step_2_analyze_data(input_data, analysis_csv_path)
     
+    # Free memory
+    del input_data
+    
     yield ('step2', None, f'Analysis complete. Saved to {analysis_csv_path}')
     
     # --- STEP 3: Generate Graphs ---
@@ -132,6 +135,9 @@ def run_pipeline(
     
     # Generate graphs (no progress reporting)
     step_3_generate_graphs(df, graphs_dir)
+    
+    # Free memory
+    del df
     
     yield ('step3', None, f'Graphs generated in {graphs_dir}/')
     
@@ -144,6 +150,9 @@ def run_pipeline(
         
         # step_4_render_video yields progress internally
         yield from step_4_render_video(df, input_video, output_video)
+        
+        # Free memory
+        del df
     else:
         yield ('step4', None, 'Video rendering skipped')
     

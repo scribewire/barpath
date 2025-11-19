@@ -15,10 +15,14 @@
 - **🎯 Camera Shake Stabilization**: Uses Lucas-Kanade optical flow on background features to create perfectly stabilized bar path tracking
 - **📐 3D Orientation Detection**: Automatically detects lifter orientation using MediaPipe's pseudo-depth (z-coordinate)
 - **📊 Comprehensive Kinematic Analysis**:
-  - Vertical velocity, acceleration, and bar path graphs
+  - Smoothed vertical velocity, acceleration, and specific power graphs
+  - Data automatically truncated at peak height (concentric phase focus)
   - Frame-by-frame joint angle measurements (knees, elbows, hips)
   - Temporal analysis of movement phases
-- **🎥 Annotated Video Output**: Skeleton overlay with stabilized bar path visualization
+- **🎥 Annotated Video Output**: 
+  - Skeleton overlay with stabilized bar path visualization
+  - Color-coded bar path phases (concentric/eccentric)
+  - Persistent overlay at the end of the lift for easy review
 - **🔍 Rule-Based Technique Critique**: Identifies common faults in Olympic lifts:
   - Early arm bend
   - Incomplete extension
@@ -86,7 +90,7 @@ Python packages required by barpath are listed in `requirements.txt`. Note that 
 ```bash
 # Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install ffmpeg python3-pip git-lfs libcairo2-dev pkg-config
+sudo apt-get install ffmpeg python3-pip git git-lfs libcairo2-dev pkg-config libgirepository-2.0-dev gir1.2-gtk-3.0 gir1.2-gtk-3.0 libgirepository-2.0-0
 
 # macOS
 brew install ffmpeg git-lfs python3
@@ -94,7 +98,7 @@ brew install ffmpeg git-lfs python3
 # For Windows, install:
 # git-lfs https://git-lfs.github.com/
 # ffmpeg https://ffmpeg.org/download.html
-# python https://ffmpeg.org/download.html
+# python3+ https://ffmpeg.org/download.html
 ```
 
 ### 2. Clone the Repository
@@ -252,9 +256,9 @@ After running the pipeline, you'll find:
 
 ### Graph Files (in `graphs/` directory)
 
-- `barbell_xy_stable_path.png` - 2D barbell path graph
-- `vel_y_px_s_graph.png` - Vertical velocity over time (raw output)
-- `vel_y_smooth_graph.png` - Smoothed velocity graph
+- `velocity_smooth.png` - Smoothed vertical velocity
+- `acceleration_smooth.png` - Smoothed vertical acceleration
+- `specific_power_smooth.png` - Smoothed specific power (Power-to-Mass ratio proxy)
 
 ### Console Output
 

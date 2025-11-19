@@ -1,4 +1,5 @@
 import sys
+import gc
 try:
     import pandas as pd
 except ImportError:
@@ -32,6 +33,14 @@ def step_2_analyze_data(input_data, output_path):
         return
         
     df = pd.DataFrame(df_list)
+    
+    # --- Memory Management ---
+    # The raw list of dicts can be huge. Now that we have a DataFrame,
+    # we can free the raw list to save memory during analysis.
+    del df_list
+    if 'data' in input_data:
+        del input_data['data']
+    gc.collect()
     
     if 'frame' not in df.columns:
         print("Error: No 'frame' column in data.")
@@ -126,6 +135,19 @@ def step_2_analyze_data(input_data, output_path):
     df['barbell_x_stable'] = df['barbell_x_raw'] - df['total_shake_x']
     df['barbell_y_stable'] = df['barbell_y_raw'] - df['total_shake_y']
     
+    # --- NEW: Truncate data at maximum height ---
+    # Note: Y=0 is top, so max height is min Y value
+    if df['barbell_y_stable'].notna().any():
+        # Find the index (frame) where the bar reaches its highest point (min Y)
+        peak_height_idx = df['barbell_y_stable'].idxmin()
+        print(f"Peak height detected at frame {peak_height_idx}. Truncating data after this point.")
+        
+        # Slice the DataFrame to keep only data up to the peak
+        # We use .loc which includes the endpoint
+        df = df.loc[:peak_height_idx].copy()
+    else:
+        print("Warning: No barbell Y data found. Cannot truncate at peak height.")
+    
     # --- Calculate Kinematics ---
     if df.index.is_monotonic_increasing:
         df['time_s'] = (df.index - df.index[0]) / fps
@@ -171,13 +193,19 @@ def step_2_analyze_data(input_data, output_path):
     # --- End new block ---
 
     # Y-Acceleration (px/s^2)
-    df['accel_y_px_s2'] = df['vel_y_px_s'].diff() / df['dt']
+    # df['accel_y_px_s2'] = df['vel_y_px_s'].diff() / df['dt'] # OLD
     
-    # Y-Jerk (px/s^3)
-    df['jerk_y_px_s3'] = df['accel_y_px_s2'].diff() / df['dt']
+    # NEW: Smoothed Acceleration
+    df['accel_y_smooth'] = df['vel_y_smooth'].diff() / df['dt']
+    
+    # Y-Jerk (px/s^3) - REMOVED
+    # df['jerk_y_px_s3'] = df['accel_y_px_s2'].diff() / df['dt']
     
     # "Specific Power" (Power-to-Mass ratio, proxy)
-    df['specific_power_y'] = df['accel_y_px_s2'] * df['vel_y_px_s']
+    # df['specific_power_y'] = df['accel_y_px_s2'] * df['vel_y_px_s'] # OLD
+    
+    # NEW: Smoothed Specific Power
+    df['specific_power_y_smooth'] = df['accel_y_smooth'] * df['vel_y_smooth']
     
     # --- Preserve landmarks as string for video rendering ---
     df['landmarks_str'] = df['landmarks'].apply(lambda x: str(x) if isinstance(x, dict) else '{}')
