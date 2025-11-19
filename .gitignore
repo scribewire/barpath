@@ -38,6 +38,7 @@ final_analysis.csv
 graphs/
 *.mp4
 test_videos/**
+analysis.md
 
 # OS
 .DS_Store

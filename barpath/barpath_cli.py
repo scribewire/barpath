@@ -27,6 +27,8 @@ from rich.progress import (
 )
 from rich.panel import Panel
 from rich.text import Text
+from rich.markdown import Markdown
+from rich.table import Table
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -34,30 +36,74 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import the core pipeline runner
 from barpath_core import run_pipeline
 
+def print_rich_help(console, parser):
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]barpath: Weightlifting Technique Analysis Pipeline[/bold cyan]",
+        border_style="cyan"
+    ))
+    console.print(f"  {parser.description}\n")
+
+    # Arguments Table
+    table = Table(show_header=True, header_style="bold magenta", box=None, padding=(0, 2), expand=True)
+    table.add_column("Option", style="cyan", ratio=1)
+    table.add_column("Type", style="dim", ratio=1)
+    table.add_column("Description", ratio=3)
+
+    # Add Help manually since we disabled it
+    table.add_row("-h, --help", "Flag", "Show this help message and exit.")
+
+    for action in parser._actions:
+        if action.dest == "help": continue
+        
+        opts = ", ".join(action.option_strings)
+        
+        # Determine type/requirement
+        if action.required:
+            type_info = "[bold red]REQUIRED[/bold red]"
+        elif action.const is not None: # boolean flag usually
+            type_info = "Flag"
+        else:
+            default_val = action.default
+            if default_val == argparse.SUPPRESS: default_val = None
+            type_info = f"[yellow]Default: {default_val}[/yellow]"
+
+        # Help text
+        help_text = action.help or ""
+        if action.choices:
+            help_text += f"\n[dim]Choices: {', '.join(map(str, action.choices))}[/dim]"
+
+        table.add_row(opts, type_info, help_text)
+
+    console.print("[bold]Arguments:[/bold]")
+    console.print(table)
+    console.print()
+
+    # Examples
+    console.print("[bold]Examples:[/bold]")
+    example_text = """
+[dim]# 1. Quick analysis (Clean)[/dim]
+python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type clean --no-video
+
+[dim]# 2. Full analysis (Snatch)[/dim]
+python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type snatch --output_video out.mp4
+"""
+    console.print(Panel(example_text.strip(), title="Sample Commands", border_style="green"))
+    console.print()
 
 def main():
     """Main CLI entry point."""
     
+    # Set up rich console
+    console = Console()
+
     # Set up argument parser
     class CustomFormatter(argparse.RawTextHelpFormatter, argparse.ArgumentDefaultsHelpFormatter):
         pass
 
     parser = argparse.ArgumentParser(
         description="barpath: Offline Weightlifting Technique Analysis Pipeline",
-        epilog="""
-Sample Commands:
-  1. Quick analysis (graphs + critique, no video):
-     python %(prog)s --input_video "my_lift.mp4" --model "best.pt" --lift_type clean --no-video --class_name barbell-endcap --graphs_dir "my_graphs"
-
-  2. Full analysis (all steps):
-     python %(prog)s --input_video "my_lift.mp4" --model "yolo11.pt" --lift_type clean --output_video "final.mp4" --class_name endcap --graphs_dir "graphs"
-
-Usage Notes:
-  - 'barpath' is an alpha-stage tool.
-  - For best results, record video on a stable tripod/surface.
-  - The lifter's full body and the nearest barbell endcap must be visible.
-  - Optimal camera angle is from a side view (90-deg) to a 20-degree offset.
-""",
+        add_help=False,
         formatter_class=CustomFormatter
     )
     
@@ -70,7 +116,7 @@ Usage Notes:
                        help="Path to save the final visualized video (e.g., 'renders/final.mp4')")
 
     # Pipeline Control Arguments
-    parser.add_argument("--lift_type", choices=['clean', 'none'], default='none',
+    parser.add_argument("--lift_type", choices=['clean', 'snatch', 'none'], default='none',
                         help="The type of lift to critique. Select 'none' to skip critique.")
     parser.add_argument("--no-video", action='store_true',
                         help="If set, skips Step 4 (video rendering), which is computationally expensive.")
@@ -79,7 +125,27 @@ Usage Notes:
     parser.add_argument("--graphs_dir", default='graphs',
                        help="Directory to save generated graphs (e.g., 'graphs').")
 
-    args = parser.parse_args()
+    # Check for help flag manually
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print_rich_help(console, parser)
+        sys.exit(0)
+
+    try:
+        args = parser.parse_args()
+    except argparse.ArgumentError as e:
+        console.print(f"[bold red]Error:[/bold red] {str(e)}")
+        print_rich_help(console, parser)
+        sys.exit(1)
+    except SystemExit:
+        # Argparse exits on error, we want to show help if possible or just let it exit
+        # But since we disabled help, it only exits on error
+        # We can catch it to show our help?
+        # Actually, argparse prints usage to stderr on error.
+        # Let's just let it be for errors, but we handled -h above.
+        # However, required args missing will trigger SystemExit.
+        # We can try to catch it but argparse prints to stderr directly.
+        # Let's just proceed.
+        raise
 
     # Validate inputs
     if not os.path.exists(args.input_video):
@@ -95,7 +161,7 @@ Usage Notes:
         sys.exit(1)
     
     # Set up rich console
-    console = Console()
+    # console = Console() # Already initialized in main
     
     # Print startup banner
     console.print(Panel.fit(
@@ -177,6 +243,25 @@ Usage Notes:
             if not args.no_video:
                 console.print(f"  • Output video:    [cyan]{args.output_video}[/cyan]")
             
+            # Display Analysis Report if available
+            if os.path.exists("analysis.md") and args.lift_type != 'none':
+                console.print()
+                try:
+                    with open("analysis.md", "r") as f:
+                        md_content = f.read()
+                    
+                    # Render markdown inside a styled panel
+                    console.print(Panel(
+                        Markdown(md_content),
+                        title="[bold cyan]Detailed Analysis Report[/bold cyan]",
+                        subtitle="[dim]Generated from analysis.md[/dim]",
+                        border_style="cyan",
+                        padding=(1, 2)
+                    ))
+                    console.print()
+                except Exception as e:
+                    console.print(f"[yellow]Could not read analysis.md: {e}[/yellow]")
+
         except KeyboardInterrupt:
             console.print("\n[yellow]Pipeline interrupted by user.[/yellow]")
             sys.exit(130)
