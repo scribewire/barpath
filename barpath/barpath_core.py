@@ -48,8 +48,8 @@ step_3_generate_graphs = _import_step_function(
 step_4_render_video = _import_step_function(
     pipeline_dir / "4_render_video.py", "step_4_render_video"
 )
-critique_clean = _import_step_function(
-    pipeline_dir / "5_critique_lift.py", "critique_clean"
+critique_lift = _import_step_function(
+    pipeline_dir / "5_critique_lift.py", "critique_lift"
 )
 
 import pandas as pd
@@ -166,15 +166,14 @@ def run_pipeline(
             df = df.set_index('frame')
         
         # Run critique
-        critiques = []
-        if lift_type == 'clean':
-            critiques = critique_clean(df)
+        critiques = critique_lift(df, lift_type)
         
         # Format results
         if not critiques:
-            message = "✓ No major technical issues detected"
+            message = "✓ Analysis complete (No phases detected?)"
         else:
-            message = f"Found {len(critiques)} technical concerns:\n" + "\n".join(f"  {i+1}. {c}" for i, c in enumerate(critiques))
+            # Short message for progress bar/log, since full report is in analysis.md
+            message = f"Analysis complete. Report saved to analysis.md"
         
         yield ('step5', None, message)
     else:

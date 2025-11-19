@@ -93,7 +93,7 @@ class BarpathTogaApp(toga.App):
         # Row: Lift type dropdown
         lift_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
         lift_row.add(toga.Label("Lift Type:", style=Pack(width=170)))
-        self.lift_select = toga.Selection(items=["none", "clean"], style=Pack(width=160))
+        self.lift_select = toga.Selection(items=["none", "clean", "snatch"], style=Pack(width=160))
         self.lift_select.value = "none"
         lift_row.add(self.lift_select)
         config_box.add(lift_row)
@@ -162,6 +162,9 @@ class BarpathTogaApp(toga.App):
         button_box = toga.Box(style=Pack(direction="row", margin=6))
         self.run_button = toga.Button("Run Analysis", on_press=self.on_run_analysis, style=Pack(margin_right=6))
         button_box.add(self.run_button)
+        
+        self.view_analysis_button = toga.Button("View Analysis", on_press=self.on_view_analysis, enabled=False, style=Pack(margin_right=6))
+        button_box.add(self.view_analysis_button)
         
         self.cancel_button = toga.Button("Cancel", on_press=self.on_cancel_analysis, enabled=False)
         button_box.add(self.cancel_button)
@@ -337,6 +340,9 @@ class BarpathTogaApp(toga.App):
             self.progress_bar.value = 100
             self.progress_label.text = "Analysis complete!"
             
+            if os.path.exists("analysis.md"):
+                self.view_analysis_button.enabled = True
+            
         except Exception as e:
             self.append_log(f"\n[ERROR] Pipeline failed: {e}")
             import traceback
@@ -355,6 +361,64 @@ class BarpathTogaApp(toga.App):
         # in the core pipeline with threading/multiprocessing support
         self.append_log("\n[WARNING] Cancel not yet implemented for generator-based pipeline")
         self.append_log("Please close the application to stop the analysis.")
+
+    def on_view_analysis(self, widget: toga.Widget) -> None:
+        """Open a dialog to view the analysis report."""
+        if not os.path.exists("analysis.md"):
+            self.main_window.info_dialog("Info", "No analysis report found.")  # type: ignore
+            return
+            
+        try:
+            with open("analysis.md", "r") as f:
+                content = f.read()
+        except Exception as e:
+            self.main_window.error_dialog("Error", f"Could not read analysis file: {e}")  # type: ignore
+            return
+            
+        # Create a new window to show results
+        self.analysis_window = toga.Window(title="Analysis Report", size=(600, 500))
+        
+        # Scroll container for content
+        scroll = toga.ScrollContainer(horizontal=False)
+        content_box = toga.Box(style=Pack(direction="column", padding=15))
+        
+        # Simple Markdown Parser for Toga
+        # This converts the specific structure of analysis.md into Toga widgets
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+                
+            if line.startswith("# "):
+                # H1
+                label = toga.Label(
+                    line[2:], 
+                    style=Pack(font_weight="bold", font_size=18, margin_bottom=10, margin_top=5, color="#2c3e50")
+                )
+                content_box.add(label)
+            elif line.startswith("## "):
+                # H2
+                label = toga.Label(
+                    line[3:], 
+                    style=Pack(font_weight="bold", font_size=14, margin_bottom=5, margin_top=10, color="#34495e")
+                )
+                content_box.add(label)
+            elif line.startswith("- "):
+                # List item
+                text = line[2:].replace("**", "") # Remove bold markers
+                label = toga.Label(
+                    f"• {text}", 
+                    style=Pack(margin_bottom=3, margin_left=15, font_size=10)
+                )
+                content_box.add(label)
+            else:
+                # Normal text
+                label = toga.Label(line, style=Pack(margin_bottom=2))
+                content_box.add(label)
+                
+        scroll.content = content_box
+        self.analysis_window.content = scroll
+        self.analysis_window.show()
 
 
 def main() -> None:
