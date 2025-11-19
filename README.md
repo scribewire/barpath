@@ -60,10 +60,9 @@ barpath/
 │   │   └── yolo11l60e.pt             # Large (high accuracy)
 │   │
 │   └── assets/                       # Application assets
-│       └── assets/
-│           ├── barpath.png           # App icon/logo
-│           ├── barpath.svg
-│           └── barpath_logo.svg
+│       ├── barpath.png           # App icon/logo
+│       ├── barpath.svg
+│       └── barpath_logo.svg
 │
 ├── outputs/                          # Generated kinematic plots and output video/data/analysis
 ├── example_videos/                   # Example videos for reference
