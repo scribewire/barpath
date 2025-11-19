@@ -44,6 +44,7 @@ class BarpathTogaApp(toga.App):
         self.encode_video: bool = True
         self.technique_analysis: bool = True
         self._is_running: bool = False
+        self._pipeline_task: Optional[asyncio.Task[Any]] = None
         
         # --- Main window ---
         self.main_window = toga.MainWindow(title="Barpath - Weightlifting Analysis Tool")
@@ -305,10 +306,10 @@ class BarpathTogaApp(toga.App):
         self.progress_bar.value = 0
         self.progress_label.text = "Starting pipeline..."
         
-        # Run pipeline in background
-        self.add_background_task(self._run_pipeline_async)
+        # Run pipeline in background using asyncio directly (add_background_task is deprecated)
+        self._pipeline_task = asyncio.create_task(self._run_pipeline_async())
     
-    async def _run_pipeline_async(self, app: toga.App, **kwargs: Any) -> None:
+    async def _run_pipeline_async(self) -> None:
         """Background task that runs the pipeline and updates progress."""
         try:
             selected_model = self._resolve_selected_model()
@@ -357,6 +358,7 @@ class BarpathTogaApp(toga.App):
             self._is_running = False
             self.run_button.enabled = True
             self.cancel_button.enabled = False
+            self._pipeline_task = None
     
     def on_cancel_analysis(self, widget: toga.Widget) -> None:
         """Cancel the running analysis."""
@@ -384,7 +386,7 @@ class BarpathTogaApp(toga.App):
         
         # Scroll container for content
         scroll = toga.ScrollContainer(horizontal=False)
-        content_box = toga.Box(style=Pack(direction="column", padding=15))
+        content_box = toga.Box(style=Pack(direction="column", margin=15))
         
         # Simple Markdown Parser for Toga
         # This converts the specific structure of analysis.md into Toga widgets
