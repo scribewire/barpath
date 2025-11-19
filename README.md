@@ -93,19 +93,20 @@ sudo apt-get update
 sudo apt-get install ffmpeg python3-pip git git-lfs libcairo2-dev pkg-config libgirepository-2.0-dev gir1.2-gtk-3.0 gir1.2-gtk-3.0 libgirepository-2.0-0
 
 # macOS
-brew install ffmpeg git-lfs python3
+brew install ffmpeg git git-lfs python
 
-# For Windows, install:
+# Windows
+winget install Microsoft.Git
 # git-lfs https://git-lfs.github.com/
 # ffmpeg https://ffmpeg.org/download.html
-# python3+ https://ffmpeg.org/download.html
+# python https://www.python.org/downloads/windows/
 ```
 
 ### 2. Clone the Repository
 
 ```bash
 # Clone with Git LFS (downloads models automatically)
-git clone https://github.com/yourusername/barpath.git
+git clone https://github.com/scribewire/barpath
 cd barpath
 ```
 
@@ -113,8 +114,6 @@ cd barpath
 
 ```bash
 pip install -r requirements.txt
-
-Note: `pycairo` (required by certain GUI backends such as `toga-gtk`) may require the system package `libcairo2-dev` on Debian/Ubuntu; install it with apt as shown above before installing Python packages.
 ```
 
 This installs both the core pipeline libraries and the Toga GUI
@@ -177,11 +176,10 @@ Required Arguments:
   
   --model PATH              Path to trained YOLO model file
                             (e.g., 'models/yolo11s-barbell.pt')
-  
-  --output_video PATH       Path to save annotated video
-                            (e.g., 'output/final.mp4')
 
 Optional Arguments:
+  --output_video PATH       Path to save annotated video
+                            (Default: outputs/output.mp4)
   --lift_type {clean,none}  Type of lift to analyze
                             'clean' - Power clean analysis
                             'none'  - Skip technique critique
@@ -191,8 +189,8 @@ Optional Arguments:
                             Saves 60-80% processing time
                             Graphs and critique still generated
   
-  --graphs_dir PATH         Directory to save generated graphs
-                            Default: graphs
+  --output_dir PATH         Directory to save generated graphs
+                            Default: outputs
   
   --class_name STR          Class name of barbell endcap in model
                             Default: endcap
@@ -251,11 +249,12 @@ After running the pipeline, you'll find:
 |------|-------------|
 | `raw_data.pkl` | Serialized tracking data (pose landmarks, barbell detections, optical flow) |
 | `final_analysis.csv` | Processed data with kinematics, angles, and stabilized coordinates |
-| `graphs/` | Directory containing kinematic plots |
+| `outputs/` | Directory containing plots, analysis document, output video |
 | `output.mp4` | Annotated video with skeleton and bar path overlay (if `--no-video` not used) |
 
 ### Graph Files (in `graphs/` directory)
 
+- `barbell_xy_stable_path.png` - Smoothed barbell 2D path
 - `velocity_smooth.png` - Smoothed vertical velocity
 - `acceleration_smooth.png` - Smoothed vertical acceleration
 - `specific_power_smooth.png` - Smoothed specific power (Power-to-Mass ratio proxy)
@@ -263,9 +262,8 @@ After running the pipeline, you'll find:
 ### Console Output
 
 The technique critique is printed to the console with:
-- Identified technical issues
-- Severity levels (Major, Moderate, Minor)
-- Specific recommendations for improvement
+- Phases timing
+- Critique content
 
 ## 🎥 Recording Best Practices
 
@@ -350,8 +348,8 @@ For optimal tracking results:
 ### Known Limitations
 - Only "clean" lift fully supported for critique
 - Requires stable camera position
-- Barbell endcap must be visible
-- No real-time processing (yet)
+- Barbell endcap must be visible for whole lift
+- No real-time processing
 
 ## 🤝 Contributing
 
