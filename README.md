@@ -78,28 +78,26 @@ barpath/
 | **Python 3.8+** | Runtime environment | [python.org](https://www.python.org/downloads/) |
 | **FFmpeg** | Video processing | See below |
 | **Git LFS** | Large file support | See below |
-| **Cairo (libcairo)** | Low-level 2D drawing used by GUI/visualization (pycairo) | See below |
 
-Python packages required by barpath are listed in `requirements.txt`. Note that `pycairo` is included to support GUI backends (and is required if you plan to use the Toga GUI).
+Python packages required by barpath are listed in `requirements.txt`.
 
 ## 📦 Installation
 
 ### 1. Install System Dependencies
 
+Ubuntu/Debian
 ```bash
-# Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install ffmpeg python3-pip git git-lfs libcairo2-dev pkg-config libgirepository-2.0-dev gir1.2-gtk-3.0 gir1.2-gtk-3.0 libgirepository-2.0-0
-
-# macOS
-brew install ffmpeg git git-lfs python
-
-# Windows
-winget install Microsoft.Git
-# git-lfs https://git-lfs.github.com/
-# ffmpeg https://ffmpeg.org/download.html
-# python https://www.python.org/downloads/windows/
+sudo apt-get install ffmpeg python3-pip git git-lfs libcairo2-dev pkg-config libgirepository-2.0-dev gir1.2-gtk-3.0 libgirepository-2.0-0
 ```
+macOS
+```
+brew install ffmpeg git git-lfs python
+```
+On Windows, install:  
+[git](https://github.com/git-guides/install-git%20#install-git-on-windows) 
+[ffmpeg](https://ffmpeg.org/download.html) 
+[python](https://www.python.org/downloads/windows)
 
 ### 2. Clone the Repository
 
