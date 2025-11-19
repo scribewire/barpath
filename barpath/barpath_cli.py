@@ -112,8 +112,8 @@ def main():
                        help="Path to the source video file (e.g., 'videos/my_clean.mp4')")
     parser.add_argument("--model", required=True, 
                        help="Path to the trained YOLO model file (e.g., 'models/best.pt')")
-    parser.add_argument("--output_video", required=False, default="output.mp4",
-                       help="Path to save the final visualized video (e.g., 'renders/final.mp4')")
+    parser.add_argument("--output_video", required=False, default='outputs/output.mp4',
+                       help="Path to save the final visualized video")
 
     # Pipeline Control Arguments
     parser.add_argument("--lift_type", choices=['clean', 'snatch', 'none'], default='none',
@@ -122,8 +122,8 @@ def main():
                         help="If set, skips Step 4 (video rendering), which is computationally expensive.")
     parser.add_argument("--class_name", default='endcap',
                        help="The exact class name of the barbell endcap in your YOLO model (e.g., 'endcap').")
-    parser.add_argument("--graphs_dir", default='graphs',
-                       help="Directory to save generated graphs (e.g., 'graphs').")
+    parser.add_argument("--output_dir", default='outputs',
+                       help="Directory to save outputs (graphs, analysis, video).")
 
     # Check for help flag manually
     if "-h" in sys.argv or "--help" in sys.argv:
@@ -156,6 +156,10 @@ def main():
         print(f"Error: Model file not found: {args.model}", file=sys.stderr)
         sys.exit(1)
     
+    # Set default output video path if not provided
+    if not args.output_video and not args.no_video:
+        args.output_video = os.path.join(args.output_dir, "output.mp4")
+    
     if not args.no_video and not args.output_video:
         print("Error: --output_video required when rendering video (not using --no-video)", file=sys.stderr)
         sys.exit(1)
@@ -178,7 +182,7 @@ def main():
     else:
         console.print(f"  Output Video: [yellow][SKIPPED - using --no-video][/yellow]")
     console.print(f"  Lift Type:    [cyan]{args.lift_type}[/cyan]")
-    console.print(f"  Graphs Dir:   [cyan]{args.graphs_dir}[/cyan]\n")
+    console.print(f"  Output Dir:   [cyan]{args.output_dir}[/cyan]\n")
     
     # Set up progress bar with rich
     with Progress(
@@ -202,7 +206,7 @@ def main():
                 output_video=args.output_video if not args.no_video else None,
                 lift_type=args.lift_type,
                 class_name=args.class_name,
-                graphs_dir=args.graphs_dir,
+                output_dir=args.output_dir,
                 encode_video=not args.no_video,
                 technique_analysis=(args.lift_type != 'none')
             ):
@@ -237,24 +241,25 @@ def main():
             # Final summary
             console.print("\n[bold green]✓ Pipeline Complete![/bold green]")
             console.print("\n[bold]Generated files:[/bold]")
-            console.print(f"  • Raw data:        [cyan]raw_data.pkl[/cyan]")
-            console.print(f"  • Analysis CSV:    [cyan]final_analysis.csv[/cyan]")
-            console.print(f"  • Graphs:          [cyan]{args.graphs_dir}/[/cyan]")
+            console.print(f"  • Output Dir:      [cyan]{args.output_dir}/[/cyan]")
+            console.print(f"  • Raw data:        [cyan]{os.path.join(args.output_dir, 'raw_data.pkl')}[/cyan]")
+            console.print(f"  • Analysis CSV:    [cyan]{os.path.join(args.output_dir, 'final_analysis.csv')}[/cyan]")
             if not args.no_video:
                 console.print(f"  • Output video:    [cyan]{args.output_video}[/cyan]")
             
             # Display Analysis Report if available
-            if os.path.exists("analysis.md") and args.lift_type != 'none':
+            analysis_path = os.path.join(args.output_dir, "analysis.md")
+            if os.path.exists(analysis_path) and args.lift_type != 'none':
                 console.print()
                 try:
-                    with open("analysis.md", "r") as f:
+                    with open(analysis_path, "r") as f:
                         md_content = f.read()
                     
                     # Render markdown inside a styled panel
                     console.print(Panel(
                         Markdown(md_content),
                         title="[bold cyan]Detailed Analysis Report[/bold cyan]",
-                        subtitle="[dim]Generated from analysis.md[/dim]",
+                        subtitle=f"[dim]Generated from {analysis_path}[/dim]",
                         border_style="cyan",
                         padding=(1, 2)
                     ))

@@ -62,7 +62,7 @@ def run_pipeline(
     output_video=None,
     lift_type="none",
     class_name="endcap",
-    graphs_dir="graphs",
+    output_dir="outputs",
     encode_video=True,
     technique_analysis=True,
     raw_data_path="raw_data.pkl",
@@ -79,7 +79,7 @@ def run_pipeline(
         output_video (str, optional): Path for output video (if encode_video=True)
         lift_type (str): Type of lift for critique ('clean', 'none')
         class_name (str): YOLO class name for barbell endcap
-        graphs_dir (str): Directory to save graphs
+        output_dir (str): Directory to save outputs (graphs, analysis, etc.)
         encode_video (bool): Whether to render output video
         technique_analysis (bool): Whether to run technique critique
         raw_data_path (str): Path to save/load raw data pickle
@@ -103,10 +103,20 @@ def run_pipeline(
         raise ValueError("output_video required when encode_video=True")
     
     # Create output directory if needed
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+        
+    # Update paths to be inside output_dir if they are defaults
+    if raw_data_path == "raw_data.pkl":
+        raw_data_path = os.path.join(output_dir, "raw_data.pkl")
+    if analysis_csv_path == "final_analysis.csv":
+        analysis_csv_path = os.path.join(output_dir, "final_analysis.csv")
+    
+    # Create output directory for video if needed (if absolute path provided)
     if encode_video and output_video:
-        output_dir = os.path.dirname(output_video)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=True)
+        video_dir = os.path.dirname(output_video)
+        if video_dir and not os.path.exists(video_dir):
+            os.makedirs(video_dir, exist_ok=True)
     
     # --- STEP 1: Collect Data ---
     # step_1_collect_data yields progress internally
@@ -134,12 +144,12 @@ def run_pipeline(
     df = pd.read_csv(analysis_csv_path)
     
     # Generate graphs (no progress reporting)
-    step_3_generate_graphs(df, graphs_dir)
+    step_3_generate_graphs(df, output_dir)
     
     # Free memory
     del df
     
-    yield ('step3', None, f'Graphs generated in {graphs_dir}/')
+    yield ('step3', None, f'Graphs generated in {output_dir}/')
     
     # --- STEP 4: Render Video ---
     if encode_video:
@@ -166,14 +176,14 @@ def run_pipeline(
             df = df.set_index('frame')
         
         # Run critique
-        critiques = critique_lift(df, lift_type)
+        critiques = critique_lift(df, lift_type, output_dir)
         
         # Format results
         if not critiques:
             message = "✓ Analysis complete (No phases detected?)"
         else:
             # Short message for progress bar/log, since full report is in analysis.md
-            message = f"Analysis complete. Report saved to analysis.md"
+            message = f"Analysis complete. Report saved to {os.path.join(output_dir, 'analysis.md')}"
         
         yield ('step5', None, message)
     else:
@@ -189,7 +199,7 @@ def run_pipeline_simple(
     output_video=None,
     lift_type="none",
     class_name="endcap",
-    graphs_dir="graphs",
+    output_dir="outputs",
     encode_video=True,
     technique_analysis=True
 ):
@@ -216,7 +226,7 @@ def run_pipeline_simple(
             output_video=output_video,
             lift_type=lift_type,
             class_name=class_name,
-            graphs_dir=graphs_dir,
+            output_dir=output_dir,
             encode_video=encode_video,
             technique_analysis=technique_analysis
         ):
