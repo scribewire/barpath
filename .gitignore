@@ -34,7 +34,7 @@ ENV/
 
 # Project specific
 *.mp4
-test_videos/**
+test_videos/
 outputs/
 
 # OS

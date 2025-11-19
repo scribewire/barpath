@@ -65,8 +65,8 @@ barpath/
 │           ├── barpath.svg
 │           └── barpath_logo.svg
 │
-├── graphs/                           # Generated kinematic plots (output)
-├── example_videos/                      # Example videos for reference
+├── outputs/                          # Generated kinematic plots and output video/data/analysis
+├── example_videos/                   # Example videos for reference
 └── tests/                            # Unit tests
 ```
 
