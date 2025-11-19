@@ -37,8 +37,8 @@ class BarpathTogaApp(toga.App):
         self.model_files: List[Path] = []
         self.selected_model: Optional[Path] = None
         self.input_video: Optional[Path] = None
-        self.output_video: Optional[Path] = Path("output.mp4")
-        self.graphs_dir: Path = Path("graphs")
+        self.output_video: Optional[Path] = None
+        self.output_dir: Path = Path("outputs")
         self.lift_type: str = "none"
         self.class_name: str = "endcap"
         self.encode_video: bool = True
@@ -108,23 +108,23 @@ class BarpathTogaApp(toga.App):
         self.output_video_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
         self.output_video_row.add(toga.Label("Output Video:", style=Pack(width=170)))
         self.output_video_input = toga.TextInput(
-            value="output.mp4",
-            placeholder="output.mp4",
+            value="",
+            placeholder="Leave empty for default (outputs/output.mp4)",
             style=Pack(flex=1),
         )
         self.output_video_row.add(self.output_video_input)
         config_box.add(self.output_video_row)
         
-        # Row: Graphs directory
-        graphs_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
-        graphs_row.add(toga.Label("Graphs Directory:", style=Pack(width=170)))
-        self.graphs_dir_input = toga.TextInput(
-            value="graphs",
-            placeholder="graphs",
+        # Row: Output directory
+        output_dir_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
+        output_dir_row.add(toga.Label("Output Directory:", style=Pack(width=170)))
+        self.output_dir_input = toga.TextInput(
+            value="outputs",
+            placeholder="outputs",
             style=Pack(flex=1),
         )
-        graphs_row.add(self.graphs_dir_input)
-        config_box.add(graphs_row)
+        output_dir_row.add(self.output_dir_input)
+        config_box.add(output_dir_row)
         
         # Row: Class name
         class_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
@@ -275,12 +275,15 @@ class BarpathTogaApp(toga.App):
         # Get parameters
         self.lift_type = str(self.lift_select.value) if self.lift_select.value else "none"
         self.class_name = str(self.class_name_input.value) if self.class_name_input.value else "endcap"
-        self.graphs_dir = Path(str(self.graphs_dir_input.value) if self.graphs_dir_input.value else "graphs")
+        self.output_dir = Path(str(self.output_dir_input.value) if self.output_dir_input.value else "outputs")
         self.encode_video = bool(self.encode_switch.value)
         
         if self.encode_video:
-            output_value = str(self.output_video_input.value) if self.output_video_input.value else "output.mp4"
-            self.output_video = Path(output_value)
+            output_value = str(self.output_video_input.value) if self.output_video_input.value else ""
+            if output_value:
+                self.output_video = Path(output_value)
+            else:
+                self.output_video = self.output_dir / "output.mp4"
         else:
             self.output_video = None
         
@@ -292,7 +295,7 @@ class BarpathTogaApp(toga.App):
         self.append_log(f"Class Name: {self.class_name}")
         self.append_log(f"Lift Type: {self.lift_type}")
         self.append_log(f"Encode Video: {self.encode_video}")
-        self.append_log(f"Graphs Dir: {self.graphs_dir}")
+        self.append_log(f"Output Dir: {self.output_dir}")
         self.append_log("")
         
         # Update UI state
@@ -317,7 +320,7 @@ class BarpathTogaApp(toga.App):
                 output_video=str(self.output_video) if self.output_video else None,
                 lift_type=self.lift_type,
                 class_name=self.class_name,
-                graphs_dir=str(self.graphs_dir),
+                output_dir=str(self.output_dir),
                 encode_video=self.encode_video,
                 technique_analysis=(self.lift_type != "none")
             ):
@@ -340,7 +343,7 @@ class BarpathTogaApp(toga.App):
             self.progress_bar.value = 100
             self.progress_label.text = "Analysis complete!"
             
-            if os.path.exists("analysis.md"):
+            if (self.output_dir / "analysis.md").exists():
                 self.view_analysis_button.enabled = True
             
         except Exception as e:
@@ -364,12 +367,13 @@ class BarpathTogaApp(toga.App):
 
     def on_view_analysis(self, widget: toga.Widget) -> None:
         """Open a dialog to view the analysis report."""
-        if not os.path.exists("analysis.md"):
-            self.main_window.info_dialog("Info", "No analysis report found.")  # type: ignore
+        analysis_path = self.output_dir / "analysis.md"
+        if not analysis_path.exists():
+            self.main_window.info_dialog("Info", f"No analysis report found at {analysis_path}")  # type: ignore
             return
             
         try:
-            with open("analysis.md", "r") as f:
+            with open(analysis_path, "r") as f:
                 content = f.read()
         except Exception as e:
             self.main_window.error_dialog("Error", f"Could not read analysis file: {e}")  # type: ignore

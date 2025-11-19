@@ -153,9 +153,9 @@ def check_clean_faults(df, phases):
 
     return critiques
 
-def write_analysis_md(critiques, phases, df, lift_type):
+def write_analysis_md(critiques, phases, df, lift_type, output_path="analysis.md"):
     try:
-        with open("analysis.md", "w") as f:
+        with open(output_path, "w") as f:
             f.write(f"# Analysis Report: {lift_type.capitalize()}\n\n")
             
             f.write("## Phase Timing\n")
@@ -177,11 +177,11 @@ def write_analysis_md(critiques, phases, df, lift_type):
             else:
                 for c in critiques:
                     f.write(f"- {c}\n")
-        print("Analysis report saved to 'analysis.md'")
+        print(f"Analysis report saved to '{output_path}'")
     except Exception as e:
         print(f"Error writing analysis.md: {e}")
 
-def critique_lift(df, lift_type='clean'):
+def critique_lift(df, lift_type='clean', output_dir='.'):
     phases = analyze_phases(df, lift_type)
     
     critiques = []
@@ -190,11 +190,12 @@ def critique_lift(df, lift_type='clean'):
             critiques = check_clean_faults(df, phases)
         # Add snatch checks here if needed
         
-        write_analysis_md(critiques, phases, df, lift_type)
+        output_path = os.path.join(output_dir, "analysis.md")
+        write_analysis_md(critiques, phases, df, lift_type, output_path)
         
         # Return formatted strings for CLI output
         results = []
-        results.append(f"Phases identified. See analysis.md for details.")
+        results.append(f"Phases identified. See {output_path} for details.")
         if critiques:
             results.extend(critiques)
         else:
