@@ -11,6 +11,7 @@ setup(
         'mediapipe>=0.10.0',
         'ultralytics>=8.0.0',
         'torchvision>=0.15.0',
+        'onnxruntime>=1.15.0',
         'pandas>=2.0.0',
         'numpy>=1.24.0',
         'scipy>=1.10.0',

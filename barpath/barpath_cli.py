@@ -111,7 +111,7 @@ def main():
     parser.add_argument("--input_video", required=True, 
                        help="Path to the source video file (e.g., 'videos/my_clean.mp4')")
     parser.add_argument("--model", required=True, 
-                       help="Path to the trained YOLO model file (e.g., 'models/best.pt')")
+                       help="Path to the trained YOLO model file (e.g., 'models/best.pt' or 'models/best.onnx')")
     parser.add_argument("--output_video", required=False, default='outputs/output.mp4',
                        help="Path to save the final visualized video")
 

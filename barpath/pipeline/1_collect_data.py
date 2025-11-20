@@ -61,7 +61,14 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
     
     # Initialize YOLO Model
     try:
-        yolo_model = YOLO(model_path)
+        # Check if model is ONNX
+        is_onnx = model_path.lower().endswith('.onnx')
+        if is_onnx:
+            print(f"Loading ONNX model: {model_path}")
+            # For ONNX, we need to specify the task explicitly if not auto-detected
+            yolo_model = YOLO(model_path, task='detect')
+        else:
+            yolo_model = YOLO(model_path)
     except Exception as e:
         cap.release()
         pose.close()
@@ -69,13 +76,27 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
     
     # --- NEW: Validate class name ---
     target_class_name = class_name
-    if target_class_name not in yolo_model.names.values():
-        print(f"\n[Warning] Class name '{target_class_name}' not found in model.")
-        print(f"  Available classes: {list(yolo_model.names.values())}")
-        target_class_name = yolo_model.names[0] # Get name of class ID 0
-        print(f"  Falling back to class ID 0: '{target_class_name}'\n")
+    
+    # ONNX models loaded via Ultralytics might not have 'names' populated correctly immediately
+    # or might have default names. We'll try to access it, but be robust.
+    if hasattr(yolo_model, 'names') and yolo_model.names:
+        if target_class_name not in yolo_model.names.values():
+            print(f"\n[Warning] Class name '{target_class_name}' not found in model.")
+            print(f"  Available classes: {list(yolo_model.names.values())}")
+            # Fallback logic
+            if len(yolo_model.names) > 0:
+                target_class_name = yolo_model.names[0] # Get name of class ID 0
+                print(f"  Falling back to class ID 0: '{target_class_name}'\n")
+        else:
+            print(f"  Target class name '{target_class_name}' found in model.")
     else:
-        print(f"  Target class name '{target_class_name}' found in model.")
+        print(f"\n[Warning] Could not validate class names for model (likely ONNX). Assuming class ID 0.")
+        # For ONNX without metadata, we might just have to assume class 0 is what we want
+        # or rely on the user providing the correct class name if the model outputs it.
+        # However, raw ONNX output from YOLO usually includes class indices.
+        # If we can't map name->id, we might need to rely on the user knowing the ID or just take ID 0.
+        # Let's assume the user wants the first class if we can't verify.
+        pass 
     # --- End new block ---
     
     # Stabilization parameters
@@ -134,8 +155,17 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
             for r in results_yolo:
                 for box in r.boxes:
                     cls_id = int(box.cls[0])
-                    # NEW: Use the validated target_class_name
-                    if yolo_model.names[cls_id] == target_class_name:
+                    
+                    # Check if we can map ID to name
+                    if hasattr(yolo_model, 'names') and cls_id in yolo_model.names:
+                        detected_name = yolo_model.names[cls_id]
+                        is_match = (detected_name == target_class_name)
+                    else:
+                        # If no names metadata (common in bare ONNX), assume class 0 is the target
+                        # or match strictly on class ID 0 if that's the convention
+                        is_match = (cls_id == 0) 
+
+                    if is_match:
                         coords = box.xyxy[0].cpu().numpy()
                         x1, y1, x2, y2 = coords
                         
