@@ -66,7 +66,8 @@ def run_pipeline(
     encode_video=True,
     technique_analysis=True,
     raw_data_path="raw_data.pkl",
-    analysis_csv_path="final_analysis.csv"
+    analysis_csv_path="final_analysis.csv",
+    cancel_event=None
 ):
     """
     Run the complete barpath analysis pipeline.
@@ -84,6 +85,7 @@ def run_pipeline(
         technique_analysis (bool): Whether to run technique critique
         raw_data_path (str): Path to save/load raw data pickle
         analysis_csv_path (str): Path to save/load analysis CSV
+        cancel_event (threading.Event, optional): Event to signal cancellation
     
     Yields:
         tuple: (step_name, progress, message) where:
@@ -92,7 +94,13 @@ def run_pipeline(
             - message: str describing current status
     """
     
+    # Helper to check cancellation
+    def check_cancel():
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("Pipeline cancelled by user")
+
     # Validate inputs
+    check_cancel()
     if not os.path.exists(input_video):
         raise FileNotFoundError(f"Input video not found: {input_video}")
     
@@ -119,16 +127,21 @@ def run_pipeline(
             os.makedirs(video_dir, exist_ok=True)
     
     # --- STEP 1: Collect Data ---
+    check_cancel()
     # step_1_collect_data yields progress internally
-    yield from step_1_collect_data(input_video, model_path, raw_data_path, class_name)
+    for update in step_1_collect_data(input_video, model_path, raw_data_path, class_name):
+        check_cancel()
+        yield update
     
     # --- STEP 2: Analyze Data ---
+    check_cancel()
     yield ('step2', None, 'Starting data analysis...')
     
     # Load the raw data
     with open(raw_data_path, 'rb') as f:
         input_data = pickle.load(f)
     
+    check_cancel()
     # Run analysis (no progress reporting)
     step_2_analyze_data(input_data, analysis_csv_path)
     
@@ -138,11 +151,13 @@ def run_pipeline(
     yield ('step2', None, f'Analysis complete. Saved to {analysis_csv_path}')
     
     # --- STEP 3: Generate Graphs ---
+    check_cancel()
     yield ('step3', None, 'Generating kinematic graphs...')
     
     # Load analysis data
     df = pd.read_csv(analysis_csv_path)
     
+    check_cancel()
     # Generate graphs (no progress reporting)
     step_3_generate_graphs(df, output_dir)
     
@@ -152,6 +167,7 @@ def run_pipeline(
     yield ('step3', None, f'Graphs generated in {output_dir}/')
     
     # --- STEP 4: Render Video ---
+    check_cancel()
     if encode_video:
         # Load analysis data with frame index
         df = pd.read_csv(analysis_csv_path)
@@ -159,7 +175,9 @@ def run_pipeline(
             df = df.set_index('frame')
         
         # step_4_render_video yields progress internally
-        yield from step_4_render_video(df, input_video, output_video)
+        for update in step_4_render_video(df, input_video, output_video):
+            check_cancel()
+            yield update
         
         # Free memory
         del df
@@ -167,6 +185,7 @@ def run_pipeline(
         yield ('step4', None, 'Video rendering skipped')
     
     # --- STEP 5: Critique Lift ---
+    check_cancel()
     if technique_analysis and lift_type != 'none':
         yield ('step5', None, f'Analyzing {lift_type} technique...')
         
@@ -175,6 +194,7 @@ def run_pipeline(
         if 'frame' in df.columns:
             df = df.set_index('frame')
         
+        check_cancel()
         # Run critique
         critiques = critique_lift(df, lift_type, output_dir)
         

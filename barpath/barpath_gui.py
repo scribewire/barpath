@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import threading
 import warnings
 from pathlib import Path
 from typing import Optional, List, Any
@@ -45,6 +46,7 @@ class BarpathTogaApp(toga.App):
         self.technique_analysis: bool = True
         self._is_running: bool = False
         self._pipeline_task: Optional[asyncio.Task[Any]] = None
+        self._cancel_event = threading.Event()
         
         # --- Main window ---
         self.main_window = toga.MainWindow(title="Barpath - Weightlifting Analysis Tool")
@@ -197,12 +199,14 @@ class BarpathTogaApp(toga.App):
             self._populate_model_files(models_dir)
     
     def _populate_model_files(self, directory: Path) -> None:
-        """Populate the model selection dropdown with .pt files from the directory."""
+        """Populate the model selection dropdown with .pt and .onnx files from the directory."""
         self.model_dir = directory
         self.model_dir_input.value = str(directory)
         
-        # Find all .pt files
-        self.model_files = sorted(directory.glob("*.pt"))
+        # Find all .pt and .onnx files
+        pt_files = list(directory.glob("*.pt"))
+        onnx_files = list(directory.glob("*.onnx"))
+        self.model_files = sorted(pt_files + onnx_files)
         
         if self.model_files:
             model_names = [f.name for f in self.model_files]
@@ -305,6 +309,7 @@ class BarpathTogaApp(toga.App):
         self.cancel_button.enabled = True
         self.progress_bar.value = 0
         self.progress_label.text = "Starting pipeline..."
+        self._cancel_event.clear()
         
         # Run pipeline in background using asyncio directly (add_background_task is deprecated)
         self._pipeline_task = asyncio.create_task(self._run_pipeline_async())
@@ -323,7 +328,8 @@ class BarpathTogaApp(toga.App):
                 class_name=self.class_name,
                 output_dir=str(self.output_dir),
                 encode_video=self.encode_video,
-                technique_analysis=(self.lift_type != "none")
+                technique_analysis=(self.lift_type != "none"),
+                cancel_event=self._cancel_event
             ):
                 # Update UI
                 # Only log if it's not a frame update to avoid freezing/OOM
@@ -346,6 +352,11 @@ class BarpathTogaApp(toga.App):
             
             if (self.output_dir / "analysis.md").exists():
                 self.view_analysis_button.enabled = True
+        
+        except InterruptedError:
+            self.append_log("\n[CANCELLED] Pipeline stopped by user.")
+            self.progress_label.text = "Cancelled"
+            self.progress_bar.value = 0
             
         except Exception as e:
             self.append_log(f"\n[ERROR] Pipeline failed: {e}")
@@ -362,10 +373,10 @@ class BarpathTogaApp(toga.App):
     
     def on_cancel_analysis(self, widget: toga.Widget) -> None:
         """Cancel the running analysis."""
-        # Note: Cancellation is tricky with generators - would need to be implemented
-        # in the core pipeline with threading/multiprocessing support
-        self.append_log("\n[WARNING] Cancel not yet implemented for generator-based pipeline")
-        self.append_log("Please close the application to stop the analysis.")
+        if self._is_running:
+            self.append_log("\n[INFO] Cancellation requested...")
+            self._cancel_event.set()
+            self.cancel_button.enabled = False  # Prevent double clicks
 
     def on_view_analysis(self, widget: toga.Widget) -> None:
         """Open a dialog to view the analysis report."""
