@@ -1,4 +1,4 @@
-<img src="barpath/assets/barpath_logo.svg" alt="Logo" width = "300" />
+<img src="barpath/assets/barpath.svg" alt="Logo" width = "300" />
 
 # BARPATH: AI-Powered Weightlifting Technique Analysis
 
