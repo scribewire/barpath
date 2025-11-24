@@ -129,7 +129,7 @@ def run_pipeline(
     # --- STEP 1: Collect Data ---
     check_cancel()
     # step_1_collect_data yields progress internally
-    for update in step_1_collect_data(input_video, model_path, raw_data_path, class_name):
+    for update in step_1_collect_data(input_video, model_path, raw_data_path, class_name, lift_type):
         check_cancel()
         yield update
     
@@ -174,8 +174,9 @@ def run_pipeline(
         if 'frame' in df.columns:
             df = df.set_index('frame')
         
+        pose_overlay_enabled = (lift_type != 'none')
         # step_4_render_video yields progress internally
-        for update in step_4_render_video(df, input_video, output_video):
+        for update in step_4_render_video(df, input_video, output_video, draw_pose=pose_overlay_enabled):
             check_cancel()
             yield update
         

@@ -1,5 +1,6 @@
 import sys
 import gc
+import time
 try:
     import cv2
 except ImportError:
@@ -35,8 +36,7 @@ LANDMARK_ENUMS = {name: mp.solutions.pose.PoseLandmark[name.upper()] for name in
 
 
 # --- Step 1: Data Collection Function ---
-# NEW: Added class_name parameter
-def step_1_collect_data(video_path, model_path, output_path, class_name):
+def step_1_collect_data(video_path, model_path, output_path, class_name, lift_type='none'):
     print("--- Step 1: Collecting Raw Data ---")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -53,11 +53,13 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
 
     # Initialize MediaPipe Pose
     mp_pose_solution = mp.solutions.pose # type: ignore
-    pose = mp_pose_solution.Pose(
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-        enable_segmentation=True  # Enable segmentation for stabilization
-    )
+    pose = None
+    if lift_type != 'none':
+        pose = mp_pose_solution.Pose(
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            enable_segmentation=True  # Enable segmentation for stabilization
+        )
     
     # Initialize YOLO Model
     try:
@@ -71,7 +73,8 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
             yolo_model = YOLO(model_path)
     except Exception as e:
         cap.release()
-        pose.close()
+        if pose:
+            pose.close()
         raise RuntimeError(f"Error loading YOLO model from {model_path}: {e}")
     
     # --- NEW: Validate class name ---
@@ -108,6 +111,10 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
     
     # State variable for tracking-by-proximity
     last_known_barbell_center = None
+    # Performance tracking for FPS display
+    last_iter_timestamp = time.perf_counter()
+    smoothed_fps = None
+    fps_smoothing = 0.2
     
     # Loop through frames and yield progress
     for frame_count in range(total_frames):
@@ -129,14 +136,16 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Run MediaPipe and YOLO
-        results_pose = pose.process(frame_rgb)
+        results_pose = None
+        if pose:
+            results_pose = pose.process(frame_rgb)
         
         # Explicitly set confidence threshold
         results_yolo = yolo_model(frame, verbose=False, conf=0.25)
         
         # 1. Process MediaPipe Data
         segmentation_mask = None
-        if results_pose.pose_landmarks:
+        if results_pose and results_pose.pose_landmarks:
             landmarks_data = {}
             for name, enum in LANDMARK_ENUMS.items():
                 lm = results_pose.pose_landmarks.landmark[enum]
@@ -181,7 +190,7 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
             if last_known_barbell_center is None:
                 # --- INITIAL DETECTION ---
                 feet_pos_px = None
-                if results_pose.pose_landmarks:
+                if results_pose and results_pose.pose_landmarks:
                     l_ankle = results_pose.pose_landmarks.landmark[mp_pose_solution.PoseLandmark.LEFT_ANKLE]
                     r_ankle = results_pose.pose_landmarks.landmark[mp_pose_solution.PoseLandmark.RIGHT_ANKLE]
                     
@@ -251,9 +260,22 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
         raw_data_list.append(frame_data)
         prev_gray = gray
         
-        # Yield progress update
+        # Yield progress update with FPS measurement
+        now_ts = time.perf_counter()
+        frame_duration = max(now_ts - last_iter_timestamp, 1e-6)
+        inst_fps = 1.0 / frame_duration
+        if smoothed_fps is None:
+            smoothed_fps = inst_fps
+        else:
+            smoothed_fps = (fps_smoothing * inst_fps) + ((1 - fps_smoothing) * smoothed_fps)
+        last_iter_timestamp = now_ts
+
         progress_fraction = (frame_count + 1) / total_frames
-        yield ('step1', progress_fraction, f'Collecting data: frame {frame_count + 1}/{total_frames}')
+        yield (
+            'step1',
+            progress_fraction,
+            f'Collecting data: frame {frame_count + 1}/{total_frames} ({smoothed_fps:.1f} FPS)'
+        )
 
         # --- Memory Management ---
         # Explicitly delete large objects to help GC
@@ -266,7 +288,8 @@ def step_1_collect_data(video_path, model_path, output_path, class_name):
             gc.collect()
 
     cap.release()
-    pose.close()
+    if pose:
+        pose.close()
     
     # --- Save data to pickle file ---
     output_data = {
@@ -294,6 +317,8 @@ def main():
     # NEW: Added class_name argument
     parser.add_argument("--class_name", default='endcap', 
                         help="The exact class name for the barbell endcap.")
+    parser.add_argument("--lift_type", default='none',
+                        help="Type of lift (e.g., 'clean', 'snatch', 'none'). If 'none', pose estimation is skipped.")
     
     args = parser.parse_args()
     
@@ -306,7 +331,7 @@ def main():
 
     # NEW: Pass class_name to the main function
     # Consume the generator to run the function
-    for _ in step_1_collect_data(args.input, args.model, args.output, args.class_name):
+    for _ in step_1_collect_data(args.input, args.model, args.output, args.class_name, args.lift_type):
         pass  # Progress updates ignored when run standalone
 
 if __name__ == '__main__':

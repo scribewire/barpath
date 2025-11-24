@@ -64,7 +64,7 @@ SKELETON_CONNECTIONS = [
     ('right_knee', 'right_ankle'),
 ]
 
-def step_4_render_video(df, video_path, output_video_path):
+def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
     """
     Takes the final analysis data and the original video, and renders
     the full visualization video.
@@ -83,6 +83,8 @@ def step_4_render_video(df, video_path, output_video_path):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v') # type: ignore
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
     
+    pose_enabled = draw_pose
+
     # --- NEW: Get all stabilized path points WITH phase data ---
     path_cols = ['barbell_x_stable', 'barbell_y_stable', 'bar_phase']
     if not all(col in df.columns for col in path_cols):
@@ -134,14 +136,14 @@ def step_4_render_video(df, video_path, output_video_path):
             
             max_path_index = np.searchsorted(path_indices, frame_count, side='right')
             
-            draw_skeleton = True
+            draw_skeleton = pose_enabled
             draw_box = True
             
             lifter_angle = row.get('lifter_angle_deg', np.nan)
             time_s = row.get('time_s', frame_count / fps)
             
             # Strings for parsing
-            landmarks_str = row.get('landmarks_str', '{}')
+            landmarks_str = row.get('landmarks_str', '{}') if pose_enabled else '{}'
             barbell_box_str = row.get('barbell_box_str', '')
             
         else:
