@@ -86,16 +86,32 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
     pose_enabled = draw_pose
 
     # --- NEW: Get all stabilized path points WITH phase data ---
-    path_cols = ['barbell_x_stable', 'barbell_y_stable', 'bar_phase']
-    if not all(col in df.columns for col in path_cols):
+    # Prefer the smoothed coordinates when available for a cleaner path overlay.
+    position_sources = [
+        ('barbell_x_smooth', 'barbell_y_smooth', 'smoothed'),
+        ('barbell_x_stable', 'barbell_y_stable', 'stabilized')
+    ]
+    selected_source = None
+    for x_col, y_col, label in position_sources:
+        if x_col in df.columns and y_col in df.columns:
+            selected_source = (x_col, y_col, label)
+            break
+    if selected_source is None:
         cap.release()
-        raise ValueError("Missing required path or phase columns in CSV. Please re-run Step 2.")
-        
-    path_df = df[path_cols].dropna()
+        raise ValueError("Missing barbell position columns in CSV. Please re-run Step 2.")
+
+    position_x_col, position_y_col, source_label = selected_source
+    if 'bar_phase' not in df.columns:
+        cap.release()
+        raise ValueError("Missing bar_phase column in CSV. Please re-run Step 2.")
+
+    print(f"Rendering bar path using {source_label} coordinates ({position_x_col}, {position_y_col}).")
+
+    path_df = df[[position_x_col, position_y_col, 'bar_phase']].dropna()
     # This maps frame numbers to indices in the path_points array
     path_indices = path_df.index.values 
     # Array of (x, y) coordinates
-    path_points = path_df[['barbell_x_stable', 'barbell_y_stable']].values
+    path_points = path_df[[position_x_col, position_y_col]].values
     # Array of phase numbers
     path_phases = path_df['bar_phase'].values
     
