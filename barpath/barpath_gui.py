@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
 import threading
 import warnings
@@ -22,9 +23,18 @@ warnings.filterwarnings("ignore", message=".*google._upb._message.*", category=D
 import toga
 from toga.style import Pack
 
-# Import the core pipeline runner
+# Prepare for lazy import of the pipeline runner
 sys.path.insert(0, str(Path(__file__).parent))
-from barpath_core import run_pipeline
+_RUN_PIPELINE = None
+
+
+def _get_run_pipeline():
+    """Lazy-load barpath_core.run_pipeline so the GUI starts faster."""
+    global _RUN_PIPELINE
+    if _RUN_PIPELINE is None:
+        from barpath_core import run_pipeline  # Local import keeps startup lightweight
+        _RUN_PIPELINE = run_pipeline
+    return _RUN_PIPELINE
 
 
 class BarpathTogaApp(toga.App):
@@ -127,6 +137,7 @@ class BarpathTogaApp(toga.App):
             style=Pack(flex=1),
         )
         output_dir_row.add(self.output_dir_input)
+        output_dir_row.add(toga.Button("Open", on_press=self.on_open_output_dir, style=Pack(width=90, margin_left=6)))
         config_box.add(output_dir_row)
         
         # Row: Class name
@@ -224,6 +235,30 @@ class BarpathTogaApp(toga.App):
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
+
+    def on_open_output_dir(self, widget: toga.Widget) -> None:
+        """Open the currently configured output directory using the OS file browser."""
+        target_value = self.output_dir_input.value or "outputs"
+        target_path = Path(target_value).expanduser()
+        if not target_path.is_absolute():
+            target_path = Path.cwd() / target_path
+        try:
+            target_path.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self.append_log(f"[ERROR] Could not create output directory: {e}")
+            return
+
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(target_path))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(target_path)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(target_path)], check=False)
+        except Exception as e:
+            self.append_log(f"[ERROR] Could not open output directory: {e}")
+        else:
+            self.append_log(f"[INFO] Opened output directory: {target_path}")
     
     def on_encode_toggle(self, widget: toga.Widget) -> None:
         """Handle encode video toggle."""
@@ -319,6 +354,7 @@ class BarpathTogaApp(toga.App):
     async def _run_pipeline_async(self) -> None:
         """Background task that runs the pipeline and updates progress."""
         try:
+            run_pipeline = _get_run_pipeline()
             selected_model = self._resolve_selected_model()
             
             # Run the pipeline generator
