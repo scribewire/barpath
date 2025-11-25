@@ -199,25 +199,27 @@ class BarpathTogaApp(toga.App):
             self._populate_model_files(models_dir)
     
     def _populate_model_files(self, directory: Path) -> None:
-        """Populate the model selection dropdown with .pt and .onnx files from the directory."""
+        """Populate the model selection dropdown with supported model files and OpenVINO exports."""
         self.model_dir = directory
         self.model_dir_input.value = str(directory)
         
         # Find all .pt and .onnx files
         pt_files = list(directory.glob("*.pt"))
         onnx_files = list(directory.glob("*.onnx"))
-        self.model_files = sorted(pt_files + onnx_files)
+        openvino_dirs = [p for p in directory.iterdir() if p.is_dir() and "openvino" in p.name.lower()]
+        candidates = pt_files + onnx_files + openvino_dirs
+        self.model_files = sorted(candidates, key=lambda p: p.name.lower())
         
         if self.model_files:
             model_names = [f.name for f in self.model_files]
             self.model_select.items = model_names
             self.model_select.value = model_names[0]
             self.model_select.enabled = True
-            self.append_log(f"Found {len(model_names)} model(s) in {directory}")
+            self.append_log(f"Found {len(model_names)} model source(s) in {directory}")
         else:
-            self.model_select.items = ["(No .pt files found)"]
+            self.model_select.items = ["(No supported models found)"]
             self.model_select.enabled = False
-            self.append_log(f"No .pt model files found in {directory}")
+            self.append_log(f"No supported model sources found in {directory}")
     
     # ------------------------------------------------------------------
     # Event handlers

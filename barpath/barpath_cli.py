@@ -36,6 +36,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import the core pipeline runner
 from barpath_core import run_pipeline
 
+
+def _is_openvino_model_dir(path_str: str) -> bool:
+    """Return True when the provided path looks like an OpenVINO export directory."""
+    path = Path(path_str)
+    if not path.is_dir():
+        return False
+    return any("openvino" in part.lower() for part in path.parts)
+
 def print_rich_help(console, parser):
     console.print()
     console.print(Panel.fit(
@@ -87,6 +95,9 @@ python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type
 
 [dim]# 2. Full analysis (Snatch)[/dim]
 python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type snatch --output_video out.mp4
+
+[dim]# 3. OpenVINO export[/dim]
+python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo_openvino_export --lift_type none --no-video
 """
     console.print(Panel(example_text.strip(), title="Sample Commands", border_style="green"))
     console.print()
@@ -111,7 +122,7 @@ def main():
     parser.add_argument("--input_video", required=True, 
                        help="Path to the source video file (e.g., 'videos/my_clean.mp4')")
     parser.add_argument("--model", required=True, 
-                       help="Path to the trained YOLO model file (e.g., 'models/best.pt' or 'models/best.onnx')")
+                       help="Path to the trained YOLO model (e.g., 'models/best.pt', 'models/best.onnx', or an OpenVINO export directory)")
     parser.add_argument("--output_video", required=False, default='outputs/output.mp4',
                        help="Path to save the final visualized video")
 
@@ -148,12 +159,31 @@ def main():
         raise
 
     # Validate inputs
-    if not os.path.exists(args.input_video):
+    input_video_path = Path(args.input_video)
+    model_path = Path(args.model)
+
+    if not input_video_path.exists():
         print(f"Error: Input video file not found: {args.input_video}", file=sys.stderr)
         sys.exit(1)
-    
-    if not os.path.exists(args.model):
-        print(f"Error: Model file not found: {args.model}", file=sys.stderr)
+
+    is_openvino_dir = _is_openvino_model_dir(args.model)
+
+    if not model_path.exists():
+        print(f"Error: Model path not found: {args.model}", file=sys.stderr)
+        sys.exit(1)
+
+    if model_path.is_dir() and not is_openvino_dir:
+        print(
+            "Error: Model directory paths must include 'openvino' in the name to be treated as OpenVINO exports.",
+            file=sys.stderr
+        )
+        sys.exit(1)
+
+    if is_openvino_dir and not any(model_path.glob("*.xml")):
+        print(
+            f"Error: OpenVINO directory '{args.model}' does not contain a .xml model definition.",
+            file=sys.stderr
+        )
         sys.exit(1)
     
     # Set default output video path if not provided
@@ -175,7 +205,8 @@ def main():
     
     console.print(f"\n[bold]Configuration:[/bold]")
     console.print(f"  Input Video:  [cyan]{args.input_video}[/cyan]")
-    console.print(f"  Model File:   [cyan]{args.model}[/cyan]")
+    model_display = f"{args.model} [OpenVINO]" if is_openvino_dir else args.model
+    console.print(f"  Model Source: [cyan]{model_display}[/cyan]")
     console.print(f"  Class Name:   [cyan]{args.class_name}[/cyan]")
     if not args.no_video:
         console.print(f"  Output Video: [cyan]{args.output_video}[/cyan]")

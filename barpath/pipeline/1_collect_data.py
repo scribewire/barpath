@@ -1,12 +1,12 @@
 import sys
 import gc
 import time
+from pathlib import Path
 try:
     import cv2
 except ImportError:
     print("Missing dependency: opencv-python (cv2). Install with: pip install opencv-python")
     sys.exit(1)
-import os
 import argparse
 try:
     import numpy as np
@@ -33,6 +33,11 @@ LANDMARKS_TO_TRACK = LANDMARK_NAMES
 
 # Convert string names to MediaPipe PoseLandmark objects
 LANDMARK_ENUMS = {name: mp.solutions.pose.PoseLandmark[name.upper()] for name in LANDMARKS_TO_TRACK} # type: ignore
+
+
+def _looks_like_openvino_dir(path: Path) -> bool:
+    """Return True when the provided path appears to be an OpenVINO export directory."""
+    return path.is_dir() and any('openvino' in part.lower() for part in path.parts)
 
 
 # --- Step 1: Data Collection Function ---
@@ -62,15 +67,20 @@ def step_1_collect_data(video_path, model_path, output_path, class_name, lift_ty
         )
     
     # Initialize YOLO Model
+    model_path_obj = Path(model_path)
+    model_path_str = str(model_path_obj)
+    is_openvino_dir = _looks_like_openvino_dir(model_path_obj)
+    is_onnx = model_path_obj.suffix.lower() == '.onnx'
+
     try:
-        # Check if model is ONNX
-        is_onnx = model_path.lower().endswith('.onnx')
-        if is_onnx:
-            print(f"Loading ONNX model: {model_path}")
-            # For ONNX, we need to specify the task explicitly if not auto-detected
-            yolo_model = YOLO(model_path, task='detect')
+        if is_openvino_dir:
+            print(f"Loading OpenVINO model directory: {model_path_str}")
+            yolo_model = YOLO(model_path_str, task='detect')
+        elif is_onnx:
+            print(f"Loading ONNX model: {model_path_str}")
+            yolo_model = YOLO(model_path_str, task='detect')
         else:
-            yolo_model = YOLO(model_path)
+            yolo_model = YOLO(model_path_str)
     except Exception as e:
         cap.release()
         if pose:
@@ -312,7 +322,7 @@ def step_1_collect_data(video_path, model_path, output_path, class_name, lift_ty
 def main():
     parser = argparse.ArgumentParser(description="Step 1: Collect raw motion data from video.")
     parser.add_argument("--input", required=True, help="Path to the source video file (e.g., video.mp4)")
-    parser.add_argument("--model", required=True, help="Path to the trained YOLO model file (e.g., best.pt)")
+    parser.add_argument("--model", required=True, help="Path to the trained YOLO model (e.g., best.pt, best.onnx, or an OpenVINO export directory)")
     parser.add_argument("--output", default="raw_data.pkl", help="Path to save the raw data pickle file.")
     # NEW: Added class_name argument
     parser.add_argument("--class_name", default='endcap', 
@@ -322,11 +332,25 @@ def main():
     
     args = parser.parse_args()
     
-    if not os.path.exists(args.input):
+    input_path = Path(args.input)
+    model_path = Path(args.model)
+
+    if not input_path.exists():
         print(f"Error: Input file not found at {args.input}")
         return
-    if not os.path.exists(args.model):
-        print(f"Error: Model file not found at {args.model}")
+
+    is_openvino_dir = _looks_like_openvino_dir(model_path)
+
+    if not model_path.exists():
+        print(f"Error: Model path not found at {args.model}")
+        return
+
+    if model_path.is_dir() and not is_openvino_dir:
+        print("Error: Model directory must include 'openvino' in its name to be treated as an OpenVINO export.")
+        return
+
+    if is_openvino_dir and not any(model_path.glob("*.xml")):
+        print(f"Error: OpenVINO directory '{args.model}' does not contain a .xml model definition.")
         return
 
     # NEW: Pass class_name to the main function

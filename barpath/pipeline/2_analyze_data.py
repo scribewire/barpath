@@ -135,11 +135,26 @@ def step_2_analyze_data(input_data, output_path):
     df['barbell_x_stable'] = df['barbell_x_raw'] - df['total_shake_x']
     df['barbell_y_stable'] = df['barbell_y_raw'] - df['total_shake_y']
     
+    # --- Smooth Position Data ---
+    # Apply Savitzky-Golay filter to stabilized position to remove jitter
+    x_filled = df['barbell_x_stable'].interpolate(method='linear').bfill().ffill()
+    y_filled = df['barbell_y_stable'].interpolate(method='linear').bfill().ffill()
+    
+    pos_window = min(11, len(x_filled) // 2 * 2 + 1)  # Must be odd
+    if pos_window >= 5 and len(x_filled) >= pos_window:
+        print(f"Applying position smoothing with window {pos_window}...")
+        df['barbell_x_smooth'] = savgol_filter(x_filled, pos_window, 3)
+        df['barbell_y_smooth'] = savgol_filter(y_filled, pos_window, 3)
+    else:
+        print("Warning: Not enough data to smooth position. Using unsmoothed values.")
+        df['barbell_x_smooth'] = df['barbell_x_stable']
+        df['barbell_y_smooth'] = df['barbell_y_stable']
+    
     # --- NEW: Truncate data at maximum height ---
     # Note: Y=0 is top, so max height is min Y value
-    if df['barbell_y_stable'].notna().any():
+    if df['barbell_y_smooth'].notna().any():
         # Find the index (frame) where the bar reaches its highest point (min Y)
-        peak_height_idx = df['barbell_y_stable'].idxmin()
+        peak_height_idx = df['barbell_y_smooth'].idxmin()
         print(f"Peak height detected at frame {peak_height_idx}. Truncating data after this point.")
         
         # Slice the DataFrame to keep only data up to the peak
@@ -158,7 +173,8 @@ def step_2_analyze_data(input_data, output_path):
     df['dt'] = df['time_s'].diff()
     df['dt'] = df['dt'].fillna(1/fps)
     
-    df['vel_y_px_s'] = (df['barbell_y_stable'].diff() / df['dt']) * -1
+    # Calculate velocity from smoothed position
+    df['vel_y_px_s'] = (df['barbell_y_smooth'].diff() / df['dt']) * -1
     
     # --- NEW: Calculate Bar Path Phases ---
     # 1. Interpolate and fill NaNs to create a continuous velocity signal for smoothing

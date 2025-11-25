@@ -36,6 +36,7 @@ ENV/
 *.mp4
 test_videos/
 outputs/
+datasets/
 
 # OS
 .DS_Store

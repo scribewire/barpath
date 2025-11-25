@@ -37,9 +37,9 @@ def step_3_generate_graphs(df, output_dir):
         
     # --- NEW: Truncate data at maximum height ---
     # Ensure graphs only show the lift up to the peak height
-    if 'barbell_y_stable' in df.columns and df['barbell_y_stable'].notna().any():
+    if 'barbell_y_smooth' in df.columns and df['barbell_y_smooth'].notna().any():
         # Find the index where the bar reaches its highest point (min Y)
-        peak_height_idx = df['barbell_y_stable'].idxmin()
+        peak_height_idx = df['barbell_y_smooth'].idxmin()
         print(f"Truncating graphs data at peak height (index {peak_height_idx}).")
         df = df.loc[:peak_height_idx]
         
@@ -84,7 +84,7 @@ def step_3_generate_graphs(df, output_dir):
         print(f"  ✓ Generated: {graph_path}")
     
     # --- NEW: Add special Bar Path X-Y Graph with Phases ---
-    path_cols = ['barbell_x_stable', 'barbell_y_stable', 'bar_phase']
+    path_cols = ['barbell_x_smooth', 'barbell_y_smooth', 'bar_phase']
     if all(col in df.columns for col in path_cols):
         path_data_df = df[path_cols].dropna()
         
@@ -126,7 +126,7 @@ def step_3_generate_graphs(df, output_dir):
             plt.plot(path_data[0, 0], path_data[0, 1], 'go', markersize=10, label='Start') # Start point
             plt.plot(path_data[-1, 0], path_data[-1, 1], 'rx', markersize=10, mew=3, label='End') # End point
             
-            plt.title("Stabilized Bar Path by Phase", fontsize=16, fontweight='bold')
+            plt.title("Smoothed Bar Path by Phase", fontsize=16, fontweight='bold')
             plt.xlabel("Horizontal Position (px)", fontsize=12)
             plt.ylabel("Vertical Position (px)", fontsize=12)
             plt.grid(True, alpha=0.3)
