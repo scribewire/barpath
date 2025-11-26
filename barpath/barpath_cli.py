@@ -33,8 +33,9 @@ from rich.table import Table
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Import the core pipeline runner
+# Import the core pipeline runner and hardware detection
 from barpath_core import run_pipeline
+from hardware_detection import detect_installed_runtimes, get_available_runtimes_for_model
 
 
 def _is_openvino_model_dir(path_str: str) -> bool:
@@ -90,14 +91,20 @@ def print_rich_help(console, parser):
     # Examples
     console.print("[bold]Examples:[/bold]")
     example_text = """
-[dim]# 1. Quick analysis (Clean)[/dim]
+[dim]# 1. Quick analysis with clean lift (CPU, no video)[/dim]
 python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type clean --no-video
 
-[dim]# 2. Full analysis (Snatch)[/dim]
+[dim]# 2. Full analysis with snatch (CPU, output video)[/dim]
 python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type snatch --output_video out.mp4
 
-[dim]# 3. OpenVINO export[/dim]
-python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo_openvino_export --lift_type none --no-video
+[dim]# 3. GPU acceleration (if available, fallback to CPU)[/dim]
+python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type clean --gpu
+
+[dim]# 4. OpenVINO model with GPU option[/dim]
+python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo_openvino_export --lift_type none --no-video --gpu
+
+[dim]# 5. Custom output directory[/dim]
+python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --output_dir my_results/
 """
     console.print(Panel(example_text.strip(), title="Sample Commands", border_style="green"))
     console.print()
@@ -131,8 +138,8 @@ def main():
                         help="The type of lift to critique. Select 'none' to skip critique.")
     parser.add_argument("--no-video", action='store_true',
                         help="If set, skips Step 4 (video rendering), which is computationally expensive.")
-    parser.add_argument("--class_name", default='endcap',
-                       help="The exact class name of the barbell endcap in your YOLO model (e.g., 'endcap').")
+    parser.add_argument("--gpu", action='store_true',
+                        help="If set, attempts to use GPU acceleration if available. Falls back to CPU if no GPU runtime is installed.")
     parser.add_argument("--output_dir", default='outputs',
                        help="Directory to save outputs (graphs, analysis, video).")
 
@@ -194,6 +201,37 @@ def main():
         print("Error: --output_video required when rendering video (not using --no-video)", file=sys.stderr)
         sys.exit(1)
     
+    # Determine runtime to use
+    selected_runtime = 'onnxruntime'  # Default to CPU
+    
+    if args.gpu:
+        # User requested GPU - try to find available GPU runtime
+        available_runtimes = get_available_runtimes_for_model(args.model)
+        
+        # Prefer GPU runtimes in order
+        gpu_runtimes = {
+            'onnxruntime_gpu': 'onnxruntime_gpu',
+            'onnxruntime_rocm': 'onnxruntime_rocm',
+            'onnxruntime_directml': 'onnxruntime_directml',
+            'onnxruntime_metal': 'onnxruntime_metal',
+        }
+        
+        found_gpu = False
+        for gpu_label, gpu_id in gpu_runtimes.items():
+            # Check if this GPU runtime is available
+            if any(gpu_id in str(v) for v in available_runtimes.values()):
+                selected_runtime = gpu_id
+                found_gpu = True
+                break
+        
+        if not found_gpu:
+            # No GPU runtime found, fall back to CPU
+            print(
+                "[yellow]⚠ --gpu flag used but no GPU acceleration runtime found. "
+                "Falling back to CPU.[/yellow]"
+            )
+            selected_runtime = 'onnxruntime'
+    
     # Set up rich console
     # console = Console() # Already initialized in main
     
@@ -207,7 +245,7 @@ def main():
     console.print(f"  Input Video:  [cyan]{args.input_video}[/cyan]")
     model_display = f"{args.model} [OpenVINO]" if is_openvino_dir else args.model
     console.print(f"  Model Source: [cyan]{model_display}[/cyan]")
-    console.print(f"  Class Name:   [cyan]{args.class_name}[/cyan]")
+    console.print(f"  Runtime:      [cyan]{selected_runtime}[/cyan]")
     if not args.no_video:
         console.print(f"  Output Video: [cyan]{args.output_video}[/cyan]")
     else:
@@ -236,10 +274,10 @@ def main():
                 model_path=args.model,
                 output_video=args.output_video if not args.no_video else None,
                 lift_type=args.lift_type,
-                class_name=args.class_name,
                 output_dir=args.output_dir,
                 encode_video=not args.no_video,
-                technique_analysis=(args.lift_type != 'none')
+                technique_analysis=(args.lift_type != 'none'),
+                selected_runtime=selected_runtime
             ):
                 # Create task on first encounter of each step
                 if step_name not in task_map and step_name != 'complete':

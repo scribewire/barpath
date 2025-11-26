@@ -14,6 +14,10 @@
 - **⚡ Real-time Progress Tracking**: Generator-based architecture with live progress updates
 - **🎯 Camera Shake Stabilization**: Uses Lucas-Kanade optical flow on background features to create perfectly stabilized bar path tracking
 - **📐 3D Orientation Detection**: Automatically detects lifter orientation using MediaPipe's pseudo-depth (z-coordinate)
+- **⚙️ Hardware-Accelerated Inference**: Automatic detection and use of GPU/specialized hardware acceleration:
+  - NVIDIA CUDA, AMD ROCm, Intel DirectML, Apple Metal, and OpenVINO support
+  - Interactive installer detects your hardware and installs appropriate packages
+  - Falls back to CPU if no acceleration available
 - **📊 Comprehensive Kinematic Analysis**:
   - Smoothed vertical velocity, acceleration, and specific power graphs
   - Data automatically truncated at peak height (concentric phase focus)
@@ -39,12 +43,15 @@ barpath/
 ├── .gitignore
 ├── .gitattributes                    # For git-lfs (YOLO models)
 ├── requirements.txt                  # Core dependencies
+├── requirements-hardware.txt         # Optional hardware acceleration packages
 ├── setup.py                          # Package installation
 │
 ├── barpath/                          # Core package
 │   ├── barpath_core.py               # Pipeline orchestrator (generator-based)
 │   ├── barpath_cli.py                # Command-line interface
 │   ├── barpath_gui.py                # Toga GUI application
+│   ├── hardware_detection.py         # Hardware detection utility
+│   ├── briefcase_hardware_installer.py # Interactive hardware setup for Briefcase
 │   │
 │   ├── pipeline/                     # Analysis pipeline steps
 │   │   ├── 1_collect_data.py         # Pose tracking and barbell detection
@@ -113,9 +120,55 @@ cd barpath
 pip install -r requirements.txt
 ```
 
-This installs both the core pipeline libraries and the Toga GUI
-dependency. If you only want the command-line pipeline, you can
-optionally skip installing any platform-specific Toga backend wheels.
+This installs the core pipeline libraries and the Toga GUI dependency. 
+
+### 3.5. Optional: Install Hardware Acceleration (Recommended)
+
+barpath can use hardware-accelerated inference for faster model processing. The specific packages depend on your OS and hardware.
+
+#### Automatic Setup (Interactive)
+
+Run the interactive hardware detector:
+
+```bash
+python barpath/briefcase_hardware_installer.py
+```
+
+This will:
+1. Detect your OS, CPU brand, and GPU availability
+2. Show available acceleration options for your hardware
+3. Prompt you to select which packages to install
+4. Provide the exact pip command to run
+
+#### Manual Setup
+
+See `requirements-hardware.txt` for all available options, or install based on your hardware:
+
+**Windows**
+- GPU available (NVIDIA/AMD/Intel): `pip install onnxruntime-directml`
+- CPU only: `pip install onnxruntime`
+- Intel CPU: `pip install onnxruntime openvino` (optional, adds Intel optimization)
+
+**macOS**
+- All Macs with Metal support: `pip install onnxruntime-metal`
+
+**Linux**
+- NVIDIA GPU: `pip install onnxruntime-gpu` (requires CUDA installed)
+- AMD GPU: `pip install onnxruntime-rocm` (requires ROCm installed)
+- CPU only: `pip install onnxruntime`
+- Intel CPU: `pip install onnxruntime openvino` (optional, adds Intel optimization)
+
+#### Using setup.py extras
+
+If you installed barpath via `setup.py`, you can install hardware acceleration with:
+
+```bash
+pip install .[hardware]      # Install all recommended for your hardware
+pip install .[onnx]          # Install ONNX acceleration only
+pip install .[openvino]      # Install OpenVINO only
+```
+
+**Note:** Hardware acceleration is optional. barpath will work fine with CPU-only inference, just slower.
 
 ### 4. Verify Installation
 
@@ -125,6 +178,9 @@ python barpath/barpath_cli.py --help
 
 # Verify models downloaded (should be ~20-50 MB each, not tiny)
 ls -lh barpath/models/*.pt
+
+# (Optional) Verify hardware acceleration is available
+python -c "from barpath.hardware_detection import get_hardware_profile, get_optional_packages; p=get_hardware_profile(); print('Hardware Profile:', p); o,v=get_optional_packages(p); print('Recommended packages:', o+v)"
 ```
 
 ### 5. Launch the GUI
@@ -137,32 +193,22 @@ python barpath/barpath_gui.py
 
 ## 🚀 Quick Start
 
-### Command Line Interface
-
-```bash
-python barpath/barpath_cli.py \
-  --input_video "path/to/your/clean.mp4" \
-  --model "barpath/models/yolo11m50e.pt" \
-  --output_video "output.mp4" \
-  --lift_type clean
-```
-
-### Graphical User Interface
+### Graphical User Interface (Recommended)
 
 ```bash
 python barpath/barpath_gui.py
 ```
 
 The GUI provides an intuitive interface for:
-- Selecting input videos and models
-- Configuring analysis parameters
-- Real-time progress tracking
-- Viewing results directly in the application
+- 📂 Interactive file/directory selection
+- 🎯 Model auto-detection from directory
+- ⚡ Runtime selection dropdown (shows available GPU/CPU options)
+- 📊 Real-time progress tracking and live log output
+- 👁️ View analysis reports directly in the application
 
-For quick feedback without rendering the annotated video, use the --no-video option  
-This generates graphs and critique in seconds, perfect for rapid iteration.
+### Command Line Interface
 
-## 📖 Usage
+For scripting and batch processing, use the CLI with these options:
 
 ### Command Line Options
 
@@ -172,35 +218,75 @@ Required Arguments:
                             (e.g., 'videos/clean.mp4')
   
   --model PATH              Path to trained YOLO model file
-                            (e.g., 'models/yolo11s-barbell.pt')
+                            (e.g., 'models/yolo11s.pt', 'models/yolo11s.onnx')
 
 Optional Arguments:
   --output_video PATH       Path to save annotated video
                             (Default: outputs/output.mp4)
-  --lift_type {clean,none}  Type of lift to analyze
-                            'clean' - Power clean analysis
-                            'none'  - Skip technique critique
-                            Default: none
   
-  --no-video                Skip Step 4 (video rendering)
-                            Graphs and critique still generated
+  --lift_type {clean,snatch,none}
+                            Type of lift to analyze and critique
+                            'clean'  - Power clean technique critique
+                            'snatch' - Snatch technique critique
+                            'none'   - Skip technique critique (default)
   
-  --output_dir PATH         Directory to save generated graphs
-                            Default: outputs
+  --no-video                Skip video rendering (Step 4)
+                            Graphs and analysis still generated (faster)
   
-  --class_name STR          Class name of barbell endcap in model
-                            Default: endcap
+  --gpu                     Attempt GPU acceleration if available
+                            Falls back to CPU automatically if no GPU runtime
+                            Supports: CUDA, ROCm, DirectML, Metal
+                            (Default: CPU-only)
+  
+  --output_dir PATH         Directory to save generated outputs
+                            (Default: outputs)
 ```
 
-### Available Models
+### GUI Features
 
-| Model File | Size | Speed | Accuracy | Use Case |
-|------------|------|-------|----------|----------|
-| `yolo11s50e.pt` | ~19 MB | Fast | Good | Testing, quick analysis |
-| `yolo11m50e.pt` | ~40 MB | Medium | Better | **Recommended for general use** |
-| `yolo11l60e.pt` | ~50 MB | Slow | Best | High-accuracy requirements |
+The graphical interface provides:
+- 📂 Interactive file/directory selection
+- 🎯 Model auto-detection from directory
+- ⚡ Runtime selection dropdown:
+  - Shows installed hardware acceleration options
+  - Dynamically updates based on selected model
+  - Defaults to CPU (fastest compatibility)
+- 📊 Real-time progress tracking
+- 📝 Live log output during analysis
+- 👁️ View analysis reports directly in the application
 
-**Recommendation:** Start with `yolo11m50e.pt` for the best balance of speed and accuracy.
+### Quick Start Examples
+
+**CPU-only (fast startup, works everywhere):**
+```bash
+python barpath/barpath_cli.py \
+  --input_video "lift.mp4" \
+  --model "barpath/models/yolo11s.pt" \
+  --lift_type clean
+```
+
+**With GPU acceleration (if available):**
+```bash
+python barpath/barpath_cli.py \
+  --input_video "lift.mp4" \
+  --model "barpath/models/yolo11s.pt" \
+  --lift_type clean \
+  --gpu
+```
+
+**Skip video rendering (analyze only):**
+```bash
+python barpath/barpath_cli.py \
+  --input_video "lift.mp4" \
+  --model "barpath/models/yolo11s.pt" \
+  --lift_type snatch \
+  --no-video
+```
+
+**GUI (recommended for interactive analysis):**
+```bash
+python barpath/barpath_gui.py
+```
 
 ### Running Individual Pipeline Steps
 
@@ -314,12 +400,226 @@ For optimal tracking results:
 
 ### Performance Issues
 
+**Slow inference or video processing**
+- ✅ Install hardware acceleration packages (see Installation section 3.5)
+- ✅ Use a faster YOLO model: `yolo11s50e.pt` instead of `yolo11l60e.pt`
+- ✅ Reduce video resolution before processing
+- ✅ Use `--no-video` flag to skip video rendering
+
+**To check if hardware acceleration is active:**
+```bash
+python -c "from barpath.pipeline import _get_yolo_device; print(_get_yolo_device())"
+```
+- Should show: `cuda`, `openvino`, `directml`, `0`, or `cpu`
+
+### Verifying Hardware Acceleration Installation
+
+After installing acceleration packages, verify they're working:
+
+```bash
+# Check ONNX Runtime providers
+python -c "import onnxruntime; print(onnxruntime.get_available_providers())"
+
+# Check OpenVINO installation (if installed)
+python -c "import openvino; print('OpenVINO version:', openvino.__version__)"
+```
+
+Expected output for your hardware:
+- **Windows with GPU**: `['DmlExecutionProvider', 'CPUExecutionProvider']`
+- **macOS**: `['CoreMLExecutionProvider', 'CPUExecutionProvider']`
+- **Linux with NVIDIA**: `['CUDAExecutionProvider', 'CPUExecutionProvider']`
+- **Linux with AMD**: `['ROCMExecutionProvider', 'CPUExecutionProvider']`
+- **Intel CPU**: `['CPUExecutionProvider']` + OpenVINO available
+
 ### FFmpeg Errors
 
 **"Could not initialize video writer"**
 - Check output directory exists and is writable
 - Verify sufficient disk space
 - Try a different output format (change file extension)
+
+## 📦 Building Installers with Briefcase
+
+barpath can be packaged as standalone installers for Windows, macOS, and Linux using [Briefcase](https://briefcase.readthedocs.io/).
+
+### Prerequisites
+
+1. **Install Briefcase:**
+   ```bash
+   pip install briefcase
+   ```
+
+2. **Platform-specific requirements:**
+   - **Windows**: No additional setup needed
+   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
+   - **Linux**: Build tools and dependencies
+
+### Building Installers
+
+#### 1. Create the app (first time only)
+
+```bash
+# Create the Briefcase app structure for your target platform
+briefcase create windows      # or macos, linux
+```
+
+This sets up the app directory structure needed for building.
+
+#### 2. Build the application
+
+```bash
+# Build the executable/app bundle
+briefcase build windows       # or macos, linux
+```
+
+The built app will be in `build/barpath/windows/app/` (or your platform).
+
+#### 3. Package as an installer
+
+```bash
+# Create the installer package
+briefcase package windows     # or macos, linux
+```
+
+This creates platform-specific installers:
+- **Windows**: `.msi` file in `build/barpath/windows/msi/`
+- **macOS**: `.dmg` file in `build/barpath/macos/dmg/`
+- **Linux**: `.deb` file in `build/barpath/linux/deb/`
+
+#### 4. Run the installer
+
+```bash
+# After packaging, users can install with:
+# Windows: Double-click the .msi file
+# macOS: Double-click the .dmg file and drag to Applications
+# Linux: sudo dpkg -i build/barpath/linux/deb/barpath*.deb
+```
+
+### Full Build Workflow Example
+
+```bash
+# All-in-one build (for Windows)
+briefcase create windows
+briefcase build windows
+briefcase package windows
+
+# Find your installer in:
+# build/barpath/windows/msi/barpath-1.0.0.msi
+```
+
+### Hardware Acceleration in Briefcase Installers
+
+The Briefcase installer will automatically include the hardware acceleration detection:
+
+1. **During installation**: Users can run the hardware setup wizard:
+   ```bash
+   python -m barpath.briefcase_hardware_installer
+   ```
+
+2. **Or use setup.py extras**: After installation, users can add acceleration:
+   ```bash
+   pip install barpath[hardware]
+   ```
+
+3. **Or manual selection**: Users choose their hardware packages from `requirements-hardware.txt`
+
+### Build Output Locations
+
+```
+build/
+├── barpath/
+│   ├── windows/
+│   │   ├── app/              # Built application files
+│   │   └── msi/              # Windows installer (.msi)
+│   ├── macos/
+│   │   ├── app/              # Built application bundle
+│   │   └── dmg/              # macOS installer (.dmg)
+│   └── linux/
+│       ├── app/              # Built application files
+│       └── deb/              # Linux installer (.deb)
+```
+
+**Note**: The `build/` directory is already in `.gitignore`, so installers won't be committed to the repository.
+
+### Configuration
+
+Briefcase uses `pyproject.toml` or `setup.cfg` for configuration. For barpath, key settings are:
+
+- Application name: barpath
+- Version: Matches `setup.py`
+- Main module: barpath.barpath_gui
+- Icon: `barpath/assets/barpath.png`
+
+To customize the installer, edit your `pyproject.toml`:
+
+```toml
+[tool.briefcase.app.barpath]
+formal_name = "Barpath - Weightlifting Analysis"
+bundle = "com.scribewire"
+version = "1.0.0"
+description = "AI-powered biomechanical analysis for Olympic lifts"
+sources = ['barpath']
+icon = "barpath/assets/barpath"
+
+# Windows-specific
+[tool.briefcase.app.barpath.windows]
+installer_icon = "barpath/assets/barpath.ico"
+
+# macOS-specific  
+[tool.briefcase.app.barpath.macos]
+universal_build = false
+requires = [
+    "PyYAML>=5.3.1",
+]
+```
+
+### Troubleshooting Briefcase Builds
+
+**"Could not find Python installation"**
+- Ensure Python is in PATH
+- Use `python -m briefcase` instead of `briefcase` command
+
+**"Missing dependencies"**
+- All dependencies in `requirements.txt` are automatically included
+- Hardware packages must be added manually or via the hardware installer script
+
+**"Icon not found"**
+- Ensure `barpath/assets/barpath.png` exists
+- For Windows .msi, also create or convert to `.ico` format
+
+**Large installer size**
+- Normal for Python GUI apps (~500 MB-1 GB)
+- Includes Python runtime, all dependencies, and PyTorch/MediaPipe
+- Consider using compression in Briefcase settings
+
+### Cross-Platform Building
+
+To build for multiple platforms, you'll need to run Briefcase on each OS:
+
+```bash
+# On Windows machine
+briefcase create windows && briefcase build windows && briefcase package windows
+
+# On macOS machine
+briefcase create macos && briefcase build macos && briefcase package macos
+
+# On Linux machine
+briefcase create linux && briefcase build linux && briefcase package linux
+```
+
+Or use CI/CD (GitHub Actions, etc.) to automate cross-platform builds.
+
+### Updating Installers
+
+When you update barpath code:
+
+```bash
+# Just rebuild and repackage (no need to create again)
+briefcase build windows
+briefcase package windows
+```
+
+Briefcase will detect changes and rebuild only what's necessary.
 
 ## 📊 Project Status
 

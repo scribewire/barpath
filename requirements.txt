@@ -3,7 +3,6 @@ opencv-python>=4.8.0
 mediapipe>=0.10.0
 ultralytics>=8.0.0
 torchvision>=0.15.0  # PyTorch vision utilities
-onnxruntime>=1.15.0  # Required for ONNX model inference
 
 # Data Processing and Analysis
 pandas>=2.0.0
@@ -21,3 +20,6 @@ pycairo>=1.17.0
 
 # GUI (Toga-based desktop interface)
 toga>=0.4.7
+
+# See requirements-hardware.txt for optional hardware-accelerated backends
+# (onnxruntime variants, openvino, etc.)

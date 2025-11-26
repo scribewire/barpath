@@ -27,6 +27,9 @@ from toga.style import Pack
 sys.path.insert(0, str(Path(__file__).parent))
 _RUN_PIPELINE = None
 
+# Import hardware detection utilities (local import)
+from hardware_detection import detect_installed_runtimes, get_available_runtimes_for_model
+
 
 def _get_run_pipeline():
     """Lazy-load barpath_core.run_pipeline so the GUI starts faster."""
@@ -51,9 +54,9 @@ class BarpathTogaApp(toga.App):
         self.output_video: Optional[Path] = None
         self.output_dir: Path = Path("outputs")
         self.lift_type: str = "none"
-        self.class_name: str = "endcap"
         self.encode_video: bool = True
         self.technique_analysis: bool = True
+        self.selected_runtime: str = "onnxruntime"  # Default runtime
         self._is_running: bool = False
         self._pipeline_task: Optional[asyncio.Task[Any]] = None
         self._cancel_event = threading.Event()
@@ -98,12 +101,29 @@ class BarpathTogaApp(toga.App):
         # Row: Select model dropdown
         model_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
         model_row.add(toga.Label("Select Model:", style=Pack(width=170)))
-        self.model_select = toga.Selection(items=["(Select directory first)"], style=Pack(flex=1))
+        self.model_select = toga.Selection(
+            items=["(Select directory first)"],
+            style=Pack(flex=1),
+            on_change=self.on_model_changed
+        )
         self.model_select.enabled = False
         model_row.add(self.model_select)
         config_box.add(model_row)
         
-        # Row: Lift type dropdown
+        # Row: Runtime selection dropdown
+        runtime_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
+        runtime_row.add(toga.Label("Runtime:", style=Pack(width=170)))
+        self.runtime_select = toga.Selection(
+            items=["ONNX Runtime (CPU)"],
+            style=Pack(flex=1),
+            on_change=self.on_runtime_changed
+        )
+        self.runtime_select.value = "ONNX Runtime (CPU)"
+        self.runtime_select.enabled = False
+        runtime_row.add(self.runtime_select)
+        config_box.add(runtime_row)
+        
+        # Lift type dropdown
         lift_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
         lift_row.add(toga.Label("Lift Type:", style=Pack(width=170)))
         self.lift_select = toga.Selection(items=["none", "clean", "snatch"], style=Pack(width=160))
@@ -139,17 +159,6 @@ class BarpathTogaApp(toga.App):
         output_dir_row.add(self.output_dir_input)
         output_dir_row.add(toga.Button("Open", on_press=self.on_open_output_dir, style=Pack(width=90, margin_left=6)))
         config_box.add(output_dir_row)
-        
-        # Row: Class name
-        class_row = toga.Box(style=Pack(direction="row", margin_bottom=6, align_items="center"))
-        class_row.add(toga.Label("YOLO Class Name:", style=Pack(width=170)))
-        self.class_name_input = toga.TextInput(
-            value="endcap",
-            placeholder="endcap",
-            style=Pack(flex=1),
-        )
-        class_row.add(self.class_name_input)
-        config_box.add(class_row)
         
         # --- Progress section ---
         progress_label = toga.Label("Progress", style=Pack(font_weight="bold", margin=(10, 0, 6, 0)))
@@ -227,10 +236,54 @@ class BarpathTogaApp(toga.App):
             self.model_select.value = model_names[0]
             self.model_select.enabled = True
             self.append_log(f"Found {len(model_names)} model source(s) in {directory}")
+            # Update runtime options for the first selected model
+            self._update_runtime_options()
         else:
             self.model_select.items = ["(No supported models found)"]
             self.model_select.enabled = False
             self.append_log(f"No supported model sources found in {directory}")
+            self._update_runtime_options()
+    
+    def _update_runtime_options(self) -> None:
+        """Update available runtime options based on selected model and installed runtimes."""
+        selected_model = self._resolve_selected_model()
+        
+        if not selected_model:
+            # No model selected, disable runtime selection
+            self.runtime_select.items = ["No runtime available"]
+            self.runtime_select.value = "No runtime available"
+            self.runtime_select.enabled = False
+            return
+        
+        # Get available runtimes for this model
+        available_runtimes = get_available_runtimes_for_model(str(selected_model))
+        
+        if not available_runtimes:
+            # No hardware runtimes installed
+            self.runtime_select.items = ["No hardware acceleration installed"]
+            self.runtime_select.value = "No hardware acceleration installed"
+            self.runtime_select.enabled = False
+            self.append_log("[INFO] No hardware acceleration packages installed. Model will use CPU (slower).")
+            return
+        
+        # Update dropdown with available runtimes
+        runtime_labels = list(available_runtimes.keys())
+        self.runtime_select.items = runtime_labels
+        
+        # Try to preserve current selection, otherwise use first available
+        if self.selected_runtime in available_runtimes.values():
+            # Find the label for the currently selected runtime
+            for label, identifier in available_runtimes.items():
+                if identifier == self.selected_runtime:
+                    self.runtime_select.value = label
+                    break
+        else:
+            # Default to first available (usually CPU fallback)
+            self.runtime_select.value = runtime_labels[0]
+            self.selected_runtime = available_runtimes[runtime_labels[0]]
+        
+        self.runtime_select.enabled = True
+        self.append_log(f"[INFO] Available runtimes: {', '.join(runtime_labels)}")
     
     # ------------------------------------------------------------------
     # Event handlers
@@ -264,6 +317,22 @@ class BarpathTogaApp(toga.App):
         """Handle encode video toggle."""
         self.encode_video = self.encode_switch.value
         # Could show/hide output_video_row here if needed
+    
+    def on_runtime_changed(self, widget: toga.Widget) -> None:
+        """Handle runtime selection change."""
+        selected_label = str(self.runtime_select.value)
+        available_runtimes = get_available_runtimes_for_model(str(self._resolve_selected_model())) if self._resolve_selected_model() else {}
+        
+        # Map label to identifier
+        for label, identifier in available_runtimes.items():
+            if label == selected_label:
+                self.selected_runtime = identifier
+                self.append_log(f"[INFO] Selected runtime: {selected_label}")
+                break
+    
+    def on_model_changed(self, widget: toga.Widget) -> None:
+        """Handle model selection change - update available runtimes."""
+        self._update_runtime_options()
     
     async def on_browse_models_dir(self, widget: toga.Widget) -> None:
         """Browse for models directory."""
@@ -316,7 +385,6 @@ class BarpathTogaApp(toga.App):
         
         # Get parameters
         self.lift_type = str(self.lift_select.value) if self.lift_select.value else "none"
-        self.class_name = str(self.class_name_input.value) if self.class_name_input.value else "endcap"
         self.output_dir = Path(str(self.output_dir_input.value) if self.output_dir_input.value else "outputs")
         self.encode_video = bool(self.encode_switch.value)
         
@@ -334,7 +402,6 @@ class BarpathTogaApp(toga.App):
         self.append_log("=== Starting Barpath Analysis ===")
         self.append_log(f"Input Video: {self.input_video}")
         self.append_log(f"Model: {selected_model}")
-        self.append_log(f"Class Name: {self.class_name}")
         self.append_log(f"Lift Type: {self.lift_type}")
         self.append_log(f"Encode Video: {self.encode_video}")
         self.append_log(f"Output Dir: {self.output_dir}")
@@ -363,10 +430,10 @@ class BarpathTogaApp(toga.App):
                 model_path=str(selected_model),
                 output_video=str(self.output_video) if self.output_video else None,
                 lift_type=self.lift_type,
-                class_name=self.class_name,
                 output_dir=str(self.output_dir),
                 encode_video=self.encode_video,
                 technique_analysis=(self.lift_type != "none"),
+                selected_runtime=self.selected_runtime,
                 cancel_event=self._cancel_event
             ):
                 # Update UI

@@ -61,10 +61,10 @@ def run_pipeline(
     model_path,
     output_video=None,
     lift_type="none",
-    class_name="endcap",
     output_dir="outputs",
     encode_video=True,
     technique_analysis=True,
+    selected_runtime="onnxruntime",
     raw_data_path="raw_data.pkl",
     analysis_csv_path="final_analysis.csv",
     cancel_event=None
@@ -79,10 +79,10 @@ def run_pipeline(
         model_path (str): Path to YOLO model file
         output_video (str, optional): Path for output video (if encode_video=True)
         lift_type (str): Type of lift for critique ('clean', 'none')
-        class_name (str): YOLO class name for barbell endcap
         output_dir (str): Directory to save outputs (graphs, analysis, etc.)
         encode_video (bool): Whether to render output video
         technique_analysis (bool): Whether to run technique critique
+        selected_runtime (str): Runtime to use ('onnxruntime', 'onnxruntime_directml', etc.)
         raw_data_path (str): Path to save/load raw data pickle
         analysis_csv_path (str): Path to save/load analysis CSV
         cancel_event (threading.Event, optional): Event to signal cancellation
@@ -129,7 +129,7 @@ def run_pipeline(
     # --- STEP 1: Collect Data ---
     check_cancel()
     # step_1_collect_data yields progress internally
-    for update in step_1_collect_data(input_video, model_path, raw_data_path, class_name, lift_type):
+    for update in step_1_collect_data(input_video, model_path, raw_data_path, lift_type, selected_runtime=selected_runtime):
         check_cancel()
         yield update
     

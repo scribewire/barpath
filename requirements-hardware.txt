@@ -1,0 +1,49 @@
+# Optional Hardware-Accelerated Packages
+#
+# These packages provide GPU/specialized acceleration for ONNX and OpenVINO model inference.
+# The specific packages needed depend on your OS and hardware.
+#
+# Choose ONE ONNX option based on your platform and hardware:
+#
+# WINDOWS - ONNX Runtime
+#   - Default (CPU):     onnxruntime>=1.15.0
+#   - GPU (DirectML):    onnxruntime-directml>=1.15.0  [recommended for NVIDIA/AMD/Intel GPU]
+#
+# MACOS - ONNX Runtime  
+#   - Apple Metal:       onnxruntime-metal>=1.15.0  [recommended for all macOS]
+#
+# LINUX - ONNX Runtime
+#   - Default (CPU):     onnxruntime>=1.15.0
+#   - NVIDIA GPU:        onnxruntime-gpu>=1.15.0  [requires CUDA]
+#   - AMD GPU:           onnxruntime-rocm>=1.15.0  [requires ROCm]
+#
+# OpenVINO Support (Intel CPU only):
+#   - openvino>=2023.0.0
+#
+# To install with hardware acceleration:
+#   pip install -r requirements.txt -r requirements-hardware.txt
+#
+# Or use setup.py extras:
+#   pip install .[hardware]      # Install all recommended for your hardware
+#   pip install .[onnx]          # Install ONNX acceleration only
+#   pip install .[openvino]      # Install OpenVINO only
+
+# Uncomment the package(s) appropriate for your hardware.
+# Instructions are in the README.md
+
+# --- Example configurations ---
+
+# Windows with NVIDIA/AMD GPU
+# onnxruntime-directml>=1.15.0
+
+# macOS (any Mac with Metal support)
+# onnxruntime-metal>=1.15.0
+
+# Linux with NVIDIA GPU
+# onnxruntime-gpu>=1.15.0
+
+# Linux with AMD GPU (ROCm)
+# onnxruntime-rocm>=1.15.0
+
+# Intel CPU (any platform)
+# openvino>=2023.0.0

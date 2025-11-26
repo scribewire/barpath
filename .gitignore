@@ -37,6 +37,7 @@ ENV/
 test_videos/
 outputs/
 datasets/
+build/
 
 # OS
 .DS_Store

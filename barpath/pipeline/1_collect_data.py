@@ -40,8 +40,56 @@ def _looks_like_openvino_dir(path: Path) -> bool:
     return path.is_dir() and any('openvino' in part.lower() for part in path.parts)
 
 
+def _get_yolo_device() -> str:
+    """
+    Determine the best device for YOLO inference based on available hardware-accelerated packages.
+    
+    Returns:
+        str: Device string for Ultralytics YOLO ('cpu' or 'cuda').
+    
+    Note: For ONNX models, both CPU and GPU acceleration work through ONNX Runtime's
+    execution providers (DirectML, CoreML, etc.), so we use 'cpu' as the device parameter
+    and let ONNX handle the actual hardware acceleration transparently.
+    """
+    device = 'cpu'  # Default - works with all setups
+    
+    # Try to import and detect available accelerators
+    try:
+        import onnxruntime as ort
+        # Check for hardware-accelerated providers
+        providers = ort.get_available_providers()
+        
+        # Only use 'cuda' device if we have actual CUDA support
+        if 'CUDAExecutionProvider' in providers:
+            device = 'cuda'  # NVIDIA GPU (CUDA)
+            print("  ✓ CUDA detected - using GPU acceleration")
+        elif 'ROCMExecutionProvider' in providers:
+            device = 'cuda'  # AMD GPU (ROCm works with CUDA device string in YOLO)
+            print("  ✓ ROCm detected - using AMD GPU acceleration")
+        elif 'TensorrtExecutionProvider' in providers:
+            device = 'cuda'
+            print("  ✓ TensorRT detected - using GPU acceleration")
+        elif 'DmlExecutionProvider' in providers:
+            # DirectML is handled automatically by ONNX Runtime at the CPU device level
+            print("  ✓ DirectML detected - using GPU acceleration via ONNX Runtime")
+        elif 'CoreMLExecutionProvider' in providers:
+            # Core ML is handled automatically by ONNX Runtime at the CPU device level
+            print("  ✓ Core ML detected - using Metal acceleration via ONNX Runtime")
+        elif 'TFLiteExecutionProvider' in providers:
+            print("  ℹ TFLite provider available - using CPU for YOLO")
+        else:
+            print("  ℹ Using CPU for inference")
+    except ImportError:
+        pass
+    
+    # OpenVINO is only supported for native PyTorch models, not for ONNX models in YOLO
+    # so we don't check for it here - stick with ONNX Runtime's backend optimization
+    
+    return device
+
+
 # --- Step 1: Data Collection Function ---
-def step_1_collect_data(video_path, model_path, output_path, class_name, lift_type='none'):
+def step_1_collect_data(video_path, model_path, output_path, lift_type='none', selected_runtime='onnxruntime'):
     print("--- Step 1: Collecting Raw Data ---")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -72,6 +120,29 @@ def step_1_collect_data(video_path, model_path, output_path, class_name, lift_ty
     is_openvino_dir = _looks_like_openvino_dir(model_path_obj)
     is_onnx = model_path_obj.suffix.lower() == '.onnx'
 
+    # Determine device to use based on selected_runtime
+    # For ONNX models, the device parameter needs to be 'cpu' to allow
+    # ONNX Runtime to manage the actual hardware acceleration
+    cuda_like_runtimes = ['onnxruntime_gpu', 'onnxruntime_rocm']  # These use YOLO's 'cuda' device
+    
+    if selected_runtime in cuda_like_runtimes:
+        # NVIDIA CUDA or AMD ROCm - these use YOLO's CUDA device string
+        yolo_device = 'cuda'
+        print(f"  Using {selected_runtime} GPU acceleration")
+    else:
+        # For DirectML, Metal, or plain CPU, use 'cpu' and let ONNX Runtime manage the backend
+        yolo_device = 'cpu'
+        if selected_runtime == 'onnxruntime_directml':
+            print(f"  Using DirectML GPU acceleration via ONNX Runtime")
+        elif selected_runtime == 'onnxruntime_metal':
+            print(f"  Using Metal GPU acceleration via ONNX Runtime")
+        elif selected_runtime == 'openvino':
+            print(f"  Using OpenVINO CPU optimization")
+        else:
+            print(f"  Using CPU inference")
+    
+    print(f"  Selected runtime: {selected_runtime} -> YOLO device: {yolo_device}")
+
     try:
         if is_openvino_dir:
             print(f"Loading OpenVINO model directory: {model_path_str}")
@@ -80,37 +151,13 @@ def step_1_collect_data(video_path, model_path, output_path, class_name, lift_ty
             print(f"Loading ONNX model: {model_path_str}")
             yolo_model = YOLO(model_path_str, task='detect')
         else:
+            print(f"Loading YOLO model: {model_path_str}")
             yolo_model = YOLO(model_path_str)
     except Exception as e:
         cap.release()
         if pose:
             pose.close()
         raise RuntimeError(f"Error loading YOLO model from {model_path}: {e}")
-    
-    # --- NEW: Validate class name ---
-    target_class_name = class_name
-    
-    # ONNX models loaded via Ultralytics might not have 'names' populated correctly immediately
-    # or might have default names. We'll try to access it, but be robust.
-    if hasattr(yolo_model, 'names') and yolo_model.names:
-        if target_class_name not in yolo_model.names.values():
-            print(f"\n[Warning] Class name '{target_class_name}' not found in model.")
-            print(f"  Available classes: {list(yolo_model.names.values())}")
-            # Fallback logic
-            if len(yolo_model.names) > 0:
-                target_class_name = yolo_model.names[0] # Get name of class ID 0
-                print(f"  Falling back to class ID 0: '{target_class_name}'\n")
-        else:
-            print(f"  Target class name '{target_class_name}' found in model.")
-    else:
-        print(f"\n[Warning] Could not validate class names for model (likely ONNX). Assuming class ID 0.")
-        # For ONNX without metadata, we might just have to assume class 0 is what we want
-        # or rely on the user providing the correct class name if the model outputs it.
-        # However, raw ONNX output from YOLO usually includes class indices.
-        # If we can't map name->id, we might need to rely on the user knowing the ID or just take ID 0.
-        # Let's assume the user wants the first class if we can't verify.
-        pass 
-    # --- End new block ---
     
     # Stabilization parameters
     lk_params = dict(winSize=(15, 15), maxLevel=2, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
@@ -150,8 +197,8 @@ def step_1_collect_data(video_path, model_path, output_path, class_name, lift_ty
         if pose:
             results_pose = pose.process(frame_rgb)
         
-        # Explicitly set confidence threshold
-        results_yolo = yolo_model(frame, verbose=False, conf=0.25)
+        # Run YOLO inference with hardware acceleration device if available
+        results_yolo = yolo_model(frame, verbose=False, conf=0.25, device=yolo_device)
         
         # 1. Process MediaPipe Data
         segmentation_mask = None
@@ -175,14 +222,9 @@ def step_1_collect_data(video_path, model_path, output_path, class_name, lift_ty
                 for box in r.boxes:
                     cls_id = int(box.cls[0])
                     
-                    # Check if we can map ID to name
-                    if hasattr(yolo_model, 'names') and cls_id in yolo_model.names:
-                        detected_name = yolo_model.names[cls_id]
-                        is_match = (detected_name == target_class_name)
-                    else:
-                        # If no names metadata (common in bare ONNX), assume class 0 is the target
-                        # or match strictly on class ID 0 if that's the convention
-                        is_match = (cls_id == 0) 
+                    # YOLO convention: class 0 is the target object (barbell endcap)
+                    # For models trained on single-class datasets, all detections will be class 0
+                    is_match = (cls_id == 0)
 
                     if is_match:
                         coords = box.xyxy[0].cpu().numpy()
