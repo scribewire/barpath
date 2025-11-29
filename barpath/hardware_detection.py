@@ -266,7 +266,7 @@ def detect_installed_runtimes() -> Dict[str, bool]:
         pass
 
     try:
-        import openvino as ov
+        import openvino as ov  # noqa: F401
 
         runtimes["openvino"] = True
     except ImportError:
