@@ -9,13 +9,7 @@ the barpath weightlifting analysis pipeline.
 import argparse
 import os
 import sys
-import warnings
 from pathlib import Path
-
-# Suppress Google protobuf deprecation warnings (can't be fixed in our code)
-warnings.filterwarnings(
-    "ignore", message=".*google._upb._message.*", category=DeprecationWarning
-)
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -30,7 +24,6 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from rich.table import Table
-from rich.text import Text
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -38,7 +31,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import the core pipeline runner and hardware detection
 from barpath_core import run_pipeline
 from hardware_detection import (
-    detect_installed_runtimes,
     get_available_runtimes_for_model,
 )
 
@@ -298,7 +290,7 @@ def main():
         )
     )
 
-    console.print(f"\n[bold]Configuration:[/bold]")
+    console.print("\n[bold]Configuration:[/bold]")
     console.print(f"  Input Video:  [cyan]{args.input_video}[/cyan]")
     model_display = f"{args.model} [OpenVINO]" if is_openvino_dir else args.model
     console.print(f"  Model Source: [cyan]{model_display}[/cyan]")
@@ -306,7 +298,7 @@ def main():
     if not args.no_video:
         console.print(f"  Output Video: [cyan]{args.output_video}[/cyan]")
     else:
-        console.print(f"  Output Video: [yellow][SKIPPED - using --no-video][/yellow]")
+        console.print("  Output Video: [yellow][SKIPPED - using --no-video][/yellow]")
     console.print(f"  Lift Type:    [cyan]{args.lift_type}[/cyan]")
     console.print(f"  Output Dir:   [cyan]{args.output_dir}[/cyan]\n")
 
