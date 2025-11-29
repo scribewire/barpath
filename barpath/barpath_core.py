@@ -11,20 +11,19 @@ This module orchestrates the 5-step barpath analysis pipeline:
 The runner yields progress updates that can be consumed by CLI or GUI frontends.
 """
 
+# Import step functions - using importlib for dynamic loading
+import importlib.util
 import os
+import pickle
 import sys
-import warnings
 from pathlib import Path
 
-# Suppress Google protobuf deprecation warnings (can't be fixed in our code)
-warnings.filterwarnings("ignore", message=".*google._upb._message.*", category=DeprecationWarning)
+import pandas as pd
 
 # Add pipeline directory to path for imports
 pipeline_dir = Path(__file__).parent / "pipeline"
 sys.path.insert(0, str(pipeline_dir))
 
-# Import step functions - using importlib for dynamic loading
-import importlib.util
 
 def _import_step_function(step_file, function_name):
     """Dynamically import a function from a step file."""
@@ -34,6 +33,7 @@ def _import_step_function(step_file, function_name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return getattr(module, function_name)
+
 
 # Import the step functions
 step_1_collect_data = _import_step_function(
@@ -52,9 +52,6 @@ critique_lift = _import_step_function(
     pipeline_dir / "5_critique_lift.py", "critique_lift"
 )
 
-import pandas as pd
-import pickle
-
 
 def run_pipeline(
     input_video,
@@ -67,13 +64,13 @@ def run_pipeline(
     selected_runtime="onnxruntime",
     raw_data_path="raw_data.pkl",
     analysis_csv_path="final_analysis.csv",
-    cancel_event=None
+    cancel_event=None,
 ):
     """
     Run the complete barpath analysis pipeline.
-    
+
     Yields progress updates as (step_name, progress_value, message) tuples.
-    
+
     Args:
         input_video (str): Path to input video file
         model_path (str): Path to YOLO model file
@@ -86,14 +83,14 @@ def run_pipeline(
         raw_data_path (str): Path to save/load raw data pickle
         analysis_csv_path (str): Path to save/load analysis CSV
         cancel_event (threading.Event, optional): Event to signal cancellation
-    
+
     Yields:
         tuple: (step_name, progress, message) where:
             - step_name: 'step1', 'step2', 'step3', 'step4', or 'step5'
             - progress: float 0.0-1.0 for steps with progress, or None for steps without
             - message: str describing current status
     """
-    
+
     # Helper to check cancellation
     def check_cancel():
         if cancel_event and cancel_event.is_set():
@@ -103,115 +100,123 @@ def run_pipeline(
     check_cancel()
     if not os.path.exists(input_video):
         raise FileNotFoundError(f"Input video not found: {input_video}")
-    
+
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
-    
+
     if encode_video and not output_video:
         raise ValueError("output_video required when encode_video=True")
-    
+
     # Create output directory if needed
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
-        
+
     # Update paths to be inside output_dir if they are defaults
     if raw_data_path == "raw_data.pkl":
         raw_data_path = os.path.join(output_dir, "raw_data.pkl")
     if analysis_csv_path == "final_analysis.csv":
         analysis_csv_path = os.path.join(output_dir, "final_analysis.csv")
-    
+
     # Create output directory for video if needed (if absolute path provided)
     if encode_video and output_video:
         video_dir = os.path.dirname(output_video)
         if video_dir and not os.path.exists(video_dir):
             os.makedirs(video_dir, exist_ok=True)
-    
+
     # --- STEP 1: Collect Data ---
     check_cancel()
     # step_1_collect_data yields progress internally
-    for update in step_1_collect_data(input_video, model_path, raw_data_path, lift_type, selected_runtime=selected_runtime):
+    for update in step_1_collect_data(
+        input_video,
+        model_path,
+        raw_data_path,
+        lift_type,
+        selected_runtime=selected_runtime,
+    ):
         check_cancel()
         yield update
-    
+
     # --- STEP 2: Analyze Data ---
     check_cancel()
-    yield ('step2', None, 'Starting data analysis...')
-    
+    yield ("step2", None, "Starting data analysis...")
+
     # Load the raw data
-    with open(raw_data_path, 'rb') as f:
+    with open(raw_data_path, "rb") as f:
         input_data = pickle.load(f)
-    
+
     check_cancel()
     # Run analysis (no progress reporting)
     step_2_analyze_data(input_data, analysis_csv_path)
-    
+
     # Free memory
     del input_data
-    
-    yield ('step2', None, f'Analysis complete. Saved to {analysis_csv_path}')
-    
+
+    yield ("step2", None, f"Analysis complete. Saved to {analysis_csv_path}")
+
     # --- STEP 3: Generate Graphs ---
     check_cancel()
-    yield ('step3', None, 'Generating kinematic graphs...')
-    
+    yield ("step3", None, "Generating kinematic graphs...")
+
     # Load analysis data
     df = pd.read_csv(analysis_csv_path)
-    
+
     check_cancel()
     # Generate graphs (no progress reporting)
     step_3_generate_graphs(df, output_dir)
-    
+
     # Free memory
     del df
-    
-    yield ('step3', None, f'Graphs generated in {output_dir}/')
-    
+
+    yield ("step3", None, f"Graphs generated in {output_dir}/")
+
     # --- STEP 4: Render Video ---
     check_cancel()
     if encode_video:
         # Load analysis data with frame index
         df = pd.read_csv(analysis_csv_path)
-        if 'frame' in df.columns:
-            df = df.set_index('frame')
-        
-        pose_overlay_enabled = (lift_type != 'none')
+        if "frame" in df.columns:
+            df = df.set_index("frame")
+
+        pose_overlay_enabled = lift_type != "none"
         # step_4_render_video yields progress internally
-        for update in step_4_render_video(df, input_video, output_video, draw_pose=pose_overlay_enabled):
+        for update in step_4_render_video(
+            df, input_video, output_video, draw_pose=pose_overlay_enabled
+        ):
             check_cancel()
             yield update
-        
+
         # Free memory
         del df
     else:
-        yield ('step4', None, 'Video rendering skipped')
-    
+        yield ("step4", None, "Video rendering skipped")
+
     # --- STEP 5: Critique Lift ---
     check_cancel()
-    if technique_analysis and lift_type != 'none':
-        yield ('step5', None, f'Analyzing {lift_type} technique...')
-        
+    if technique_analysis and lift_type != "none":
+        yield ("step5", None, f"Analyzing {lift_type} technique...")
+
         # Load analysis data
         df = pd.read_csv(analysis_csv_path)
-        if 'frame' in df.columns:
-            df = df.set_index('frame')
-        
+        if "frame" in df.columns:
+            df = df.set_index("frame")
+
         check_cancel()
         # Run critique
         critiques = critique_lift(df, lift_type, output_dir)
-        
+
         # Format results
         if not critiques:
             message = "✓ Analysis complete (No phases detected?)"
         else:
             # Short message for progress bar/log, since full report is in analysis.md
             message = f"Analysis complete. Report saved to {os.path.join(output_dir, 'analysis.md')}"
-        
-        yield ('step5', None, message)
+
+        yield ("step5", None, message)
     else:
-        yield ('step5', None, 'Technique analysis skipped')
-    
+        yield ("step5", None, "Technique analysis skipped")
+
     # Final completion
-    yield ('complete', 1.0, 'Pipeline complete!')
+    yield ("complete", 1.0, "Pipeline complete!")
 
 
 def run_pipeline_simple(
@@ -219,43 +224,41 @@ def run_pipeline_simple(
     model_path,
     output_video=None,
     lift_type="none",
-    class_name="endcap",
     output_dir="outputs",
     encode_video=True,
-    technique_analysis=True
+    technique_analysis=True,
 ):
     """
     Simple wrapper that runs the pipeline and consumes all progress updates.
-    
+
     Returns:
         dict: Summary of results
     """
     results = {
-        'step1': None,
-        'step2': None,
-        'step3': None,
-        'step4': None,
-        'step5': None,
-        'success': True,
-        'error': None
+        "step1": None,
+        "step2": None,
+        "step3": None,
+        "step4": None,
+        "step5": None,
+        "success": True,
+        "error": None,
     }
-    
+
     try:
         for step_name, progress, message in run_pipeline(
             input_video=input_video,
             model_path=model_path,
             output_video=output_video,
             lift_type=lift_type,
-            class_name=class_name,
             output_dir=output_dir,
             encode_video=encode_video,
-            technique_analysis=technique_analysis
+            technique_analysis=technique_analysis,
         ):
             results[step_name] = message
             print(f"[{step_name}] {message}")
     except Exception as e:
-        results['success'] = False
-        results['error'] = str(e)
+        results["success"] = False
+        results["error"] = str(e)
         raise
-    
+
     return results
