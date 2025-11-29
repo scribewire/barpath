@@ -143,7 +143,11 @@ def step_1_collect_data(
         "onnxruntime_rocm",
     ]  # These use YOLO's 'cuda' device
 
-    if selected_runtime in cuda_like_runtimes:
+    if selected_runtime == "ultralytics":
+        # Ultralytics PyTorch runtime - uses default device detection
+        yolo_device = "cpu"  # Will use default YOLO device detection
+        print("  Using Ultralytics PyTorch runtime (default device detection)")
+    elif selected_runtime in cuda_like_runtimes:
         # NVIDIA CUDA or AMD ROCm - these use YOLO's CUDA device string
         yolo_device = "cuda"
         print(f"  Using {selected_runtime} GPU acceleration")
