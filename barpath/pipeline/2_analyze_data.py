@@ -2,8 +2,12 @@ import gc
 import sys
 from typing import cast
 
-import pandas as pd
-from pandas import Series
+try:
+    import pandas as pd
+    from pandas import Series
+except ImportError:
+    print("Missing dependency: pandas. Install with: pip install pandas")
+    sys.exit(1)
 
 try:
     import numpy as np
@@ -52,7 +56,7 @@ def step_2_analyze_data(input_data, output_path):
 
     frame_gaps = df.index.to_series().diff()
 
-    # FIX: Cast the result to a Series explicitly
+    # Cast the result to a Series explicitly
     frame_gaps_numeric = cast(Series, pd.to_numeric(frame_gaps, errors="coerce"))
 
     if (frame_gaps_numeric.fillna(0) > 1).any():
