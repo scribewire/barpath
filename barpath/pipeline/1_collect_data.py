@@ -181,12 +181,24 @@ def step_1_collect_data(
             pose.close()
         raise RuntimeError(f"Error loading YOLO model from {model_path}: {e}")
 
-    # Stabilization parameters for Lucas-Kanade optical flow
-    lk_win_size = (15, 15)
-    lk_max_level = 2
-    lk_criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
+    # Stabilization parameters for global motion model
     prev_gray = None
-    background_features = None
+    prev_background_features = None  # Features from previous frame
+
+    # Feature detection parameters
+    feature_max_corners = 300
+    feature_quality_level = 0.01
+    feature_min_distance = 10
+    feature_block_size = 7
+
+    # Lucas-Kanade optical flow parameters (for feature tracking)
+    lk_win_size = (21, 21)
+    lk_max_level = 3
+    lk_criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
+
+    # RANSAC parameters for robust transform estimation
+    ransac_threshold = 3.0  # pixels
+    min_inliers = 10  # Minimum number of inliers for valid transform
 
     raw_data_list = []
 
@@ -340,48 +352,120 @@ def step_1_collect_data(
             frame_data["barbell_center"] = best_endcap["center"]
             frame_data["barbell_box"] = best_endcap["box"]
 
-        # 3. Process Stabilization Data
+        # 3. Process Stabilization Data with Global Motion Model
         shake_dx, shake_dy = 0.0, 0.0
-        if prev_gray is not None:
-            if background_features is not None and len(background_features) > 0:
-                next_features = np.zeros_like(background_features)
-                next_features, status, _ = cv2.calcOpticalFlowPyrLK(
-                    prev_gray,
-                    gray,
-                    background_features,
-                    next_features,
-                    winSize=lk_win_size,
-                    maxLevel=lk_max_level,
-                    criteria=lk_criteria,
-                )
-                good_new = next_features[status == 1]
-                good_old = background_features[status == 1]
+        camera_transform = None
 
-                if len(good_new) > 5:
-                    deltas_x = good_new[:, 0] - good_old[:, 0]
-                    deltas_y = good_new[:, 1] - good_old[:, 1]
-                    shake_dx = float(np.median(deltas_x))  # type: ignore[arg-type]
-                    shake_dy = float(np.median(deltas_y))  # type: ignore[arg-type]
-
-                background_features = good_new.reshape(-1, 1, 2)
-            else:
-                background_features = None
-
+        # Create background mask for feature detection (exclude person and bar)
         background_mask = None
-        if background_features is None and segmentation_mask is not None:
-            background_mask = 1 - segmentation_mask
-            new_features = cv2.goodFeaturesToTrack(
-                gray,
-                maxCorners=200,
-                qualityLevel=0.01,
-                minDistance=10,
-                mask=background_mask,
-            )
-            if new_features is not None:
-                background_features = new_features
+        if segmentation_mask is not None:
+            # Invert segmentation mask: 1 for background, 0 for foreground
+            background_mask = (1 - segmentation_mask) * 255
+            background_mask = background_mask.astype(np.uint8)
 
+            # Optionally dilate the foreground mask to create a safety margin
+            kernel = np.ones((15, 15), np.uint8)
+            background_mask = cv2.erode(background_mask, kernel, iterations=1)
+
+        # Detect or track background features
+        curr_background_features = None
+
+        if prev_gray is not None and prev_background_features is not None:
+            # Track features from previous frame using Lucas-Kanade
+            curr_features, status, err = cv2.calcOpticalFlowPyrLK(
+                prev_gray,
+                gray,
+                prev_background_features,
+                None,  # type: ignore[arg-type]
+                winSize=lk_win_size,
+                maxLevel=lk_max_level,
+                criteria=lk_criteria,
+            )
+
+            if curr_features is not None and status is not None:
+                # Select good matches
+                good_new = curr_features[status.flatten() == 1]
+                good_old = prev_background_features[status.flatten() == 1]
+
+                # Estimate global affine transform using RANSAC
+                if len(good_new) >= min_inliers:
+                    try:
+                        # Use partial affine (rotation, translation, uniform scale)
+                        transform_matrix, inliers = cv2.estimateAffinePartial2D(
+                            good_old,
+                            good_new,
+                            method=cv2.RANSAC,
+                            ransacReprojThreshold=ransac_threshold,
+                            confidence=0.99,
+                            maxIters=2000,
+                        )
+
+                        if transform_matrix is not None and inliers is not None:
+                            num_inliers = np.sum(inliers)
+
+                            # Validate transform (check if it's reasonable)
+                            if num_inliers >= min_inliers:
+                                # Extract translation from transform matrix
+                                # Transform matrix is [[cos θ, -sin θ, tx], [sin θ, cos θ, ty]]
+                                shake_dx = float(transform_matrix[0, 2])
+                                shake_dy = float(transform_matrix[1, 2])
+                                camera_transform = transform_matrix
+
+                                # Keep only inlier features for next frame
+                                curr_background_features = good_new[
+                                    inliers.flatten() == 1
+                                ].reshape(-1, 1, 2)
+                            else:
+                                # Not enough inliers, detection failed
+                                curr_background_features = None
+                        else:
+                            # Transform estimation failed
+                            curr_background_features = None
+                    except cv2.error:
+                        # OpenCV error during estimation
+                        curr_background_features = None
+                else:
+                    # Not enough matched features
+                    curr_background_features = None
+
+        # Detect new features if we don't have enough or this is the first frame
+        if curr_background_features is None or len(curr_background_features) < 50:
+            # Detect new features in background regions
+            if background_mask is not None:
+                new_features = cv2.goodFeaturesToTrack(
+                    gray,
+                    maxCorners=feature_max_corners,
+                    qualityLevel=feature_quality_level,
+                    minDistance=feature_min_distance,
+                    mask=background_mask,
+                    blockSize=feature_block_size,
+                )
+            else:
+                # Fallback: detect features in entire frame if no segmentation mask
+                new_features = cv2.goodFeaturesToTrack(
+                    gray,
+                    maxCorners=feature_max_corners,
+                    qualityLevel=feature_quality_level,
+                    minDistance=feature_min_distance,
+                    mask=None,
+                    blockSize=feature_block_size,
+                )
+
+            if new_features is not None:
+                if curr_background_features is not None:
+                    # Merge with existing features
+                    curr_background_features = np.vstack(
+                        (curr_background_features, new_features)
+                    )
+                else:
+                    curr_background_features = new_features
+
+        # Store stabilization data
         frame_data["shake_dx"] = shake_dx
         frame_data["shake_dy"] = shake_dy
+
+        # Update state for next iteration
+        prev_background_features = curr_background_features
 
         raw_data_list.append(frame_data)
         prev_gray = gray
@@ -412,6 +496,8 @@ def step_1_collect_data(
             del segmentation_mask
         if background_mask is not None:
             del background_mask
+        if camera_transform is not None:
+            del camera_transform
 
         # Periodically force garbage collection to prevent memory ballooning
         if frame_count % 50 == 0:
