@@ -188,6 +188,42 @@ def step_2_analyze_data(input_data, output_path):
         df["barbell_x_smooth"] = df["barbell_x_stable"]
         df["barbell_y_smooth"] = df["barbell_y_stable"]
 
+    # --- NEW: Truncate data at beginning - discard frames before bar passes knee ---
+    # Calculate average knee position
+    df["knee_y_avg"] = df[["left_knee_y", "right_knee_y"]].mean(axis=1) * frame_height
+
+    # Find when bar passes knee (bar Y > knee Y, since Y=0 is top)
+    if bool(df["barbell_y_smooth"].notna().any()) and bool(
+        df["knee_y_avg"].notna().any()
+    ):
+        # Create a boolean mask where bar is above (lower Y value than) knee
+        bar_above_knee = df["barbell_y_smooth"] < df["knee_y_avg"]
+
+        # Find the first frame where bar is above knee
+        frames_above_knee = df[bar_above_knee].index.values
+
+        if len(frames_above_knee) > 0:
+            # Extract scalar values from pandas Index
+            knee_pass_frame = int(frames_above_knee[0])
+
+            # Calculate frame offset for 1 second before knee pass
+            frames_before = int(fps)
+            first_frame = int(df.index.values[0])
+
+            start_frame = max(first_frame, knee_pass_frame - frames_before)
+
+            print(
+                f"Bar passes knee at frame {knee_pass_frame}. "
+                f"Keeping data from frame {start_frame} onwards (1s before knee pass)."
+            )
+
+            # Truncate data before start_frame
+            df = df.loc[start_frame:].copy()
+        else:
+            print("Warning: Bar never detected above knee. Keeping all data at start.")
+    else:
+        print("Warning: Cannot determine knee pass frame. Keeping all data at start.")
+
     # --- NEW: Truncate data at maximum height ---
     # Note: Y=0 is top, so max height is min Y value
     if bool(df["barbell_y_smooth"].notna().any()):

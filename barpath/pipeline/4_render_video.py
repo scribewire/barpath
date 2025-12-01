@@ -1,5 +1,6 @@
 import gc
 import sys
+import time
 
 try:
     import cv2
@@ -127,23 +128,38 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
     # Array of phase numbers
     path_phases = path_df["bar_phase"].values
 
-    # --- CHANGED: Store frame count in a variable ---
-    # Render frames up to the end of analysis + 1 second of raw footage
-    # This gives a buffer after the lift/analysis finishes before cutting the video
+    # --- CHANGED: Render only analyzed timeframe + 1 second buffer ---
+    # Start from first analyzed frame (1s before knee pass)
+    # End at last analyzed frame (peak height) + 1 second
+    first_analyzed_frame = int(df.index.min()) if not df.empty else 0
     last_analyzed_frame = int(df.index.max()) if not df.empty else 0
     extra_frames = int(fps)
-    frames_to_render = min(last_analyzed_frame + extra_frames, total_frames)
+
+    start_frame = first_analyzed_frame
+    end_frame = min(last_analyzed_frame + extra_frames, total_frames)
+    frames_to_render = end_frame - start_frame
+
     print(
-        f"Rendering {frames_to_render} frames (Analysis end: {last_analyzed_frame})..."
+        f"Rendering frames {start_frame} to {end_frame} "
+        f"({frames_to_render} total frames, Analysis: {first_analyzed_frame}-{last_analyzed_frame})..."
     )
+
+    # Seek to the start frame in the video
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     # Initialize persistent state for "extra frames" rendering
     last_shake_x = 0.0
     last_shake_y = 0.0
     last_lifter_angle = np.nan
 
+    # Performance tracking for FPS display
+    last_iter_timestamp = time.perf_counter()
+    smoothed_fps = None
+    fps_smoothing = 0.2
+
     # Loop through frames and yield progress
-    for frame_count in range(frames_to_render):
+    for frame_idx in range(frames_to_render):
+        frame_count = start_frame + frame_idx
         points_to_draw = None
         success, frame = cap.read()
         if not success:
@@ -287,19 +303,31 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
 
         out.write(frame)
 
-        # Yield progress update
-        progress_fraction = (frame_count + 1) / frames_to_render
+        # Calculate rendering FPS
+        now_ts = time.perf_counter()
+        frame_duration = max(now_ts - last_iter_timestamp, 1e-6)
+        inst_fps = 1.0 / frame_duration
+        if smoothed_fps is None:
+            smoothed_fps = inst_fps
+        else:
+            smoothed_fps = (fps_smoothing * inst_fps) + (
+                (1 - fps_smoothing) * smoothed_fps
+            )
+        last_iter_timestamp = now_ts
+
+        # Yield progress update with FPS measurement
+        progress_fraction = (frame_idx + 1) / frames_to_render
         yield (
             "step4",
             progress_fraction,
-            f"Rendering video: frame {frame_count + 1}/{frames_to_render}",
+            f"Rendering video: frame {frame_count} ({frame_idx + 1}/{frames_to_render}) - {smoothed_fps:.1f} FPS",
         )
 
         # --- Memory Management ---
         del frame
         if points_to_draw is not None:
             del points_to_draw
-        if frame_count % 50 == 0:
+        if frame_idx % 50 == 0:
             gc.collect()
 
     cap.release()
