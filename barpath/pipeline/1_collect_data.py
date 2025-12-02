@@ -186,7 +186,7 @@ def step_1_collect_data(
     prev_background_features = None  # Features from previous frame
 
     # Feature detection parameters
-    feature_max_corners = 300
+    feature_max_corners = 200
     feature_quality_level = 0.01
     feature_min_distance = 10
     feature_block_size = 7
