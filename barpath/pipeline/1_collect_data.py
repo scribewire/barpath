@@ -1,34 +1,12 @@
-import gc
-import sys
+import argparse
+import pickle
 import time
 from pathlib import Path
 
-try:
-    import cv2
-except ImportError:
-    print(
-        "Missing dependency: opencv-python (cv2). Install with: pip install opencv-python"
-    )
-    sys.exit(1)
-import argparse
-
-try:
-    import numpy as np
-except ImportError:
-    print("Missing dependency: numpy. Install with: pip install numpy")
-    sys.exit(1)
-try:
-    import mediapipe as mp  # type: ignore[import-untyped]
-except ImportError:
-    print("Missing dependency: mediapipe. Install with: pip install mediapipe")
-    sys.exit(1)
-try:
-    from ultralytics import YOLO  # type: ignore
-except Exception:
-    print("Missing dependency: ultralytics. Install with: pip install ultralytics")
-    sys.exit(1)
-import pickle
-
+import cv2
+import mediapipe as mp
+import numpy as np
+from ultralytics import YOLO  # type: ignore[attr-defined]
 from utils import LANDMARK_NAMES
 
 # --- Constants ---
@@ -46,55 +24,6 @@ LANDMARK_ENUMS = {
 def _looks_like_openvino_dir(path: Path) -> bool:
     """Return True when the provided path appears to be an OpenVINO export directory."""
     return path.is_dir() and any("openvino" in part.lower() for part in path.parts)
-
-
-def _get_yolo_device() -> str:
-    """
-    Determine the best device for YOLO inference based on available hardware-accelerated packages.
-
-    Returns:
-        str: Device string for Ultralytics YOLO ('cpu' or 'cuda').
-
-    Note: For ONNX models, both CPU and GPU acceleration work through ONNX Runtime's
-    execution providers (DirectML, CoreML, etc.), so we use 'cpu' as the device parameter
-    and let ONNX handle the actual hardware acceleration transparently.
-    """
-    device = "cpu"  # Default - works with all setups
-
-    # Try to import and detect available accelerators
-    try:
-        import onnxruntime as ort
-
-        # Check for hardware-accelerated providers
-        providers = ort.get_available_providers()
-
-        # Only use 'cuda' device if we have actual CUDA support
-        if "CUDAExecutionProvider" in providers:
-            device = "cuda"  # NVIDIA GPU (CUDA)
-            print("  ✓ CUDA detected - using GPU acceleration")
-        elif "ROCMExecutionProvider" in providers:
-            device = "cuda"  # AMD GPU (ROCm works with CUDA device string in YOLO)
-            print("  ✓ ROCm detected - using AMD GPU acceleration")
-        elif "TensorrtExecutionProvider" in providers:
-            device = "cuda"
-            print("  ✓ TensorRT detected - using GPU acceleration")
-        elif "DmlExecutionProvider" in providers:
-            # DirectML is handled automatically by ONNX Runtime at the CPU device level
-            print("  ✓ DirectML detected - using GPU acceleration via ONNX Runtime")
-        elif "CoreMLExecutionProvider" in providers:
-            # Core ML is handled automatically by ONNX Runtime at the CPU device level
-            print("  ✓ Core ML detected - using Metal acceleration via ONNX Runtime")
-        elif "TFLiteExecutionProvider" in providers:
-            print("  ℹ TFLite provider available - using CPU for YOLO")
-        else:
-            print("  ℹ Using CPU for inference")
-    except ImportError:
-        pass
-
-    # OpenVINO is only supported for native PyTorch models, not for ONNX models in YOLO
-    # so we don't check for it here - stick with ONNX Runtime's backend optimization
-
-    return device
 
 
 # --- Step 1: Data Collection Function ---
@@ -127,6 +56,7 @@ def step_1_collect_data(
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
             enable_segmentation=True,  # Enable segmentation for stabilization
+            model_complexity=1,  # Balance between accuracy and performance
         )
 
     # Initialize YOLO Model
@@ -135,45 +65,21 @@ def step_1_collect_data(
     is_openvino_dir = _looks_like_openvino_dir(model_path_obj)
     is_onnx = model_path_obj.suffix.lower() == ".onnx"
 
-    # Determine device to use based on selected_runtime
-    # For ONNX models, the device parameter needs to be 'cpu' to allow
-    # ONNX Runtime to manage the actual hardware acceleration
-    cuda_like_runtimes = [
-        "onnxruntime_gpu",
-        "onnxruntime_rocm",
-    ]  # These use YOLO's 'cuda' device
+    # All models use CPU device
+    yolo_device = "cpu"
 
-    if selected_runtime == "ultralytics":
-        # Ultralytics PyTorch runtime - uses default device detection
-        yolo_device = "cpu"  # Will use default YOLO device detection
-        print("  Using Ultralytics PyTorch runtime (default device detection)")
-    elif selected_runtime in cuda_like_runtimes:
-        # NVIDIA CUDA or AMD ROCm - these use YOLO's CUDA device string
-        yolo_device = "cuda"
-        print(f"  Using {selected_runtime} GPU acceleration")
-    else:
-        # For DirectML, Metal, or plain CPU, use 'cpu' and let ONNX Runtime manage the backend
-        yolo_device = "cpu"
-        if selected_runtime == "onnxruntime_directml":
-            print("  Using DirectML GPU acceleration via ONNX Runtime")
-        elif selected_runtime == "onnxruntime_metal":
-            print("  Using Metal GPU acceleration via ONNX Runtime")
-        elif selected_runtime == "openvino":
-            print("  Using OpenVINO CPU optimization")
-        else:
-            print("  Using CPU inference")
-
-    print(f"  Selected runtime: {selected_runtime} -> YOLO device: {yolo_device}")
+    print(f"  Selected runtime: {selected_runtime} (CPU)")
 
     try:
-        if is_openvino_dir:
-            print(f"Loading OpenVINO model directory: {model_path_str}")
+        if selected_runtime == "openvino" or is_openvino_dir:
+            print(f"Loading OpenVINO model: {model_path_str}")
             yolo_model = YOLO(model_path_str, task="detect")
-        elif is_onnx:
+        elif selected_runtime == "onnxruntime" or is_onnx:
             print(f"Loading ONNX model: {model_path_str}")
             yolo_model = YOLO(model_path_str, task="detect")
         else:
-            print(f"Loading YOLO model: {model_path_str}")
+            # Ultralytics PyTorch runtime
+            print(f"Loading PyTorch model: {model_path_str}")
             yolo_model = YOLO(model_path_str)
     except Exception as e:
         cap.release()
@@ -232,7 +138,7 @@ def step_1_collect_data(
         if pose:
             results_pose = pose.process(frame_rgb)
 
-        # Run YOLO inference with hardware acceleration device if available
+        # Run YOLO inference on CPU
         results_yolo = yolo_model(frame, verbose=False, conf=0.25, device=yolo_device)
 
         # 1. Process MediaPipe Data
@@ -323,7 +229,6 @@ def step_1_collect_data(
                             np.array(e["center"]) - feet_pos_px
                         ),
                     )
-                    # --- CHANGED: 'tqdm.write' to 'print' ---
                     print(
                         f"[Info] Barbell initially detected at frame {frame_count} (near feet)."
                     )
@@ -333,7 +238,6 @@ def step_1_collect_data(
                         detected_endcaps,
                         key=lambda e: abs(e["center"][0] - (frame_width / 2)),
                     )
-                    # --- CHANGED: 'tqdm.write' to 'print' ---
                     print(
                         f"[Info] Barbell initially detected at frame {frame_count} (near center). No feet visible."
                     )
@@ -353,7 +257,6 @@ def step_1_collect_data(
 
         # 3. Process Stabilization Data with Global Motion Model
         shake_dx, shake_dy = 0.0, 0.0
-        camera_transform = None
 
         # Create background mask for feature detection (exclude person and bar)
         background_mask = None
@@ -395,9 +298,6 @@ def step_1_collect_data(
 
                         shake_dx = median_dx
                         shake_dy = median_dy
-                        camera_transform = np.array(
-                            [[1.0, 0.0, median_dx], [0.0, 1.0, median_dy]]
-                        )
 
                         curr_background_features = good_new
                     except (cv2.error, ValueError, IndexError):
@@ -466,20 +366,6 @@ def step_1_collect_data(
             progress_fraction,
             f"Collecting data: frame {frame_count + 1}/{total_frames} ({smoothed_fps:.1f} FPS)",
         )
-
-        # --- Memory Management ---
-        # Explicitly delete large objects to help GC
-        del frame, frame_rgb, results_pose, results_yolo
-        if segmentation_mask is not None:
-            del segmentation_mask
-        if background_mask is not None:
-            del background_mask
-        if camera_transform is not None:
-            del camera_transform
-
-        # Periodically force garbage collection to prevent memory ballooning
-        if frame_count % 50 == 0:
-            gc.collect()
 
     cap.release()
     if pose:
@@ -555,7 +441,13 @@ def main():
         return
 
     # Consume the generator to run the function
-    for _ in step_1_collect_data(args.input, args.model, args.output, args.lift_type):
+    for _ in step_1_collect_data(
+        args.input,
+        args.model,
+        args.output,
+        args.lift_type,
+        selected_runtime="onnxruntime",
+    ):
         pass  # Progress updates ignored when run standalone
 
 

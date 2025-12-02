@@ -14,10 +14,10 @@
 - **⚡ Real-time Progress Tracking**: Generator-based architecture with live progress updates
 - **🎯 Camera Shake Stabilization**: Uses Lucas-Kanade optical flow on background features to create perfectly stabilized bar path tracking
 - **📐 3D Orientation Detection**: Automatically detects lifter orientation using MediaPipe's pseudo-depth (z-coordinate)
-- **⚙️ Hardware-Accelerated Inference**: Automatic detection and use of GPU/specialized hardware acceleration:
-  - NVIDIA CUDA, AMD ROCm, Intel DirectML, Apple Metal, and OpenVINO support
-  - Interactive installer detects your hardware and installs appropriate packages
-  - Falls back to CPU if no acceleration available
+- **⚙️ Hardware-Accelerated Inference**: CPU-optimized inference with optional acceleration:
+  - ONNX Runtime for cross-platform CPU optimization
+  - OpenVINO support for Intel CPUs
+  - Multi-threaded processing automatically configured for your CPU
 - **📊 Comprehensive Kinematic Analysis**:
   - Smoothed vertical velocity, acceleration, and specific power graphs
   - Data automatically truncated at peak height (concentric phase focus)
@@ -135,7 +135,7 @@ python barpath/briefcase_hardware_installer.py
 ```
 
 This will:
-1. Detect your OS, CPU brand, and GPU availability
+1. Detect your OS and CPU brand
 2. Show available acceleration options for your hardware
 3. Prompt you to select which packages to install
 4. Provide the exact pip command to run
@@ -145,17 +145,14 @@ This will:
 See `requirements-hardware.txt` for all available options, or install based on your hardware:
 
 **Windows**
-- GPU available (NVIDIA/AMD/Intel): `pip install onnxruntime-directml`
-- CPU only: `pip install onnxruntime`
+- `pip install onnxruntime`
 - Intel CPU: `pip install onnxruntime openvino` (optional, adds Intel optimization)
 
 **macOS**
-- All Macs with Metal support: `pip install onnxruntime-metal`
+- `pip install onnxruntime`
 
 **Linux**
-- NVIDIA GPU: `pip install onnxruntime-gpu` (requires CUDA installed)
-- AMD GPU: `pip install onnxruntime-rocm` (requires ROCm installed)
-- CPU only: `pip install onnxruntime`
+- `pip install onnxruntime`
 - Intel CPU: `pip install onnxruntime openvino` (optional, adds Intel optimization)
 
 #### Using setup.py extras
@@ -202,7 +199,7 @@ python barpath/barpath_gui.py
 The GUI provides an intuitive interface for:
 - 📂 Interactive file/directory selection
 - 🎯 Model auto-detection from directory
-- ⚡ Runtime selection dropdown (shows available GPU/CPU options)
+- ⚡ Runtime selection dropdown (shows available CPU options)
 - 📊 Real-time progress tracking and live log output
 - 👁️ View analysis reports directly in the application
 
@@ -233,11 +230,6 @@ Optional Arguments:
   --no-video                Skip video rendering (Step 4)
                             Graphs and analysis still generated (faster)
   
-  --gpu                     Attempt GPU acceleration if available
-                            Falls back to CPU automatically if no GPU runtime
-                            Supports: CUDA, ROCm, DirectML, Metal
-                            (Default: CPU-only)
-  
   --output_dir PATH         Directory to save generated outputs
                             (Default: outputs)
 ```
@@ -265,13 +257,12 @@ python barpath/barpath_cli.py \
   --lift_type clean
 ```
 
-**With GPU acceleration (if available):**
+**With OpenVINO (Intel CPUs):**
 ```bash
 python barpath/barpath_cli.py \
   --input_video "lift.mp4" \
-  --model "barpath/models/yolo11s.pt" \
-  --lift_type clean \
-  --gpu
+  --model "barpath/models/yolo11s_openvino_model" \
+  --lift_type clean
 ```
 
 **Skip video rendering (analyze only):**
@@ -410,7 +401,7 @@ For optimal tracking results:
 ```bash
 python -c "from barpath.pipeline import _get_yolo_device; print(_get_yolo_device())"
 ```
-- Should show: `cuda`, `openvino`, `directml`, `0`, or `cpu`
+- Should show: `cpu` (CPU inference is used)
 
 ### Verifying Hardware Acceleration Installation
 
@@ -425,11 +416,8 @@ python -c "import openvino; print('OpenVINO version:', openvino.__version__)"
 ```
 
 Expected output for your hardware:
-- **Windows with GPU**: `['DmlExecutionProvider', 'CPUExecutionProvider']`
-- **macOS**: `['CoreMLExecutionProvider', 'CPUExecutionProvider']`
-- **Linux with NVIDIA**: `['CUDAExecutionProvider', 'CPUExecutionProvider']`
-- **Linux with AMD**: `['ROCMExecutionProvider', 'CPUExecutionProvider']`
-- **Intel CPU**: `['CPUExecutionProvider']` + OpenVINO available
+- **All platforms**: `['CPUExecutionProvider']`
+- **Intel CPUs with OpenVINO**: OpenVINO available as separate runtime option
 
 ### FFmpeg Errors
 

@@ -1,8 +1,8 @@
 """
 Hardware detection utility for barpath.
 
-Detects OS, CPU type (Intel/AMD), and GPU availability to recommend
-appropriate hardware-accelerated dependencies for ONNX and OpenVINO.
+Detects OS and CPU type (Intel/AMD) to recommend appropriate
+hardware-accelerated dependencies for ONNX Runtime and OpenVINO.
 """
 
 import platform
@@ -78,74 +78,16 @@ def detect_cpu_brand() -> Optional[str]:
     return None
 
 
-def detect_nvidia_gpu() -> bool:
-    """
-    Detect NVIDIA GPU availability.
-
-    Returns:
-        bool: True if NVIDIA GPU detected, False otherwise
-    """
-    try:
-        result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=5)
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
-def detect_amd_gpu() -> bool:
-    """
-    Detect AMD GPU availability (rocm).
-
-    Returns:
-        bool: True if AMD GPU with ROCm support detected, False otherwise
-    """
-    try:
-        result = subprocess.run(["rocm-smi"], capture_output=True, timeout=5)
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
-def detect_intel_gpu() -> bool:
-    """
-    Detect Intel GPU availability.
-
-    Returns:
-        bool: True if Intel GPU detected, False otherwise
-    """
-    try:
-        if sys.platform == "win32":
-            result = subprocess.run(
-                ["wmic", "path", "win32_videocontroller", "get", "name"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return "intel" in result.stdout.lower()
-        elif sys.platform == "linux":
-            result = subprocess.run(
-                ["lspci"], capture_output=True, text=True, timeout=5
-            )
-            return "intel" in result.stdout.lower() and "vga" in result.stdout.lower()
-    except Exception:
-        pass
-
-    return False
-
-
 def get_hardware_profile() -> Dict[str, Any]:
     """
     Get complete hardware profile.
 
     Returns:
-        dict: Hardware profile with os, cpu_brand, has_nvidia_gpu, has_amd_gpu, has_intel_gpu
+        dict: Hardware profile with os and cpu_brand
     """
     return {
         "os": detect_os(),
         "cpu_brand": detect_cpu_brand(),
-        "has_nvidia_gpu": detect_nvidia_gpu(),
-        "has_amd_gpu": detect_amd_gpu(),
-        "has_intel_gpu": detect_intel_gpu(),
     }
 
 
@@ -161,34 +103,13 @@ def get_optional_packages(
     Returns:
         tuple: (onnx_packages, openvino_packages) - lists of recommended packages
     """
-    os_type = hardware_profile.get("os", "unknown")
     cpu_brand = hardware_profile.get("cpu_brand")
-    has_nvidia = hardware_profile.get("has_nvidia_gpu", False)
-    has_amd = hardware_profile.get("has_amd_gpu", False)
 
-    onnx_packages = []
-    openvino_packages = []
-
-    # ONNX Runtime options
-    if os_type == "windows":
-        # Windows: CPU default, but offer DirectML for any GPU
-        if has_nvidia or has_amd or hardware_profile.get("has_intel_gpu"):
-            onnx_packages = ["onnxruntime-directml"]
-        else:
-            onnx_packages = ["onnxruntime"]
-    elif os_type == "macos":
-        # macOS: Metal acceleration
-        onnx_packages = ["onnxruntime-metal"]
-    elif os_type == "linux":
-        # Linux: CPU default, but offer GPU if available
-        if has_nvidia:
-            onnx_packages = ["onnxruntime-gpu"]
-        elif has_amd:
-            onnx_packages = ["onnxruntime-rocm"]
-        else:
-            onnx_packages = ["onnxruntime"]
+    # ONNX Runtime - always use CPU version
+    onnx_packages = ["onnxruntime"]
 
     # OpenVINO options (Intel CPU only)
+    openvino_packages = []
     if cpu_brand == "intel":
         openvino_packages = ["openvino"]
 
@@ -207,24 +128,8 @@ def get_hardware_description(hardware_profile: Dict[str, Any]) -> str:
     """
     os_type = hardware_profile.get("os", "unknown").upper()
     cpu_brand = (hardware_profile.get("cpu_brand") or "Unknown").upper()
-    has_nvidia = hardware_profile.get("has_nvidia_gpu", False)
-    has_amd = hardware_profile.get("has_amd_gpu", False)
-    has_intel = hardware_profile.get("has_intel_gpu", False)
 
     parts = [f"OS: {os_type}", f"CPU: {cpu_brand}"]
-
-    gpu_parts = []
-    if has_nvidia:
-        gpu_parts.append("NVIDIA GPU")
-    if has_amd:
-        gpu_parts.append("AMD GPU (ROCm)")
-    if has_intel:
-        gpu_parts.append("Intel GPU")
-
-    if gpu_parts:
-        parts.append(f"GPU: {', '.join(gpu_parts)}")
-    else:
-        parts.append("GPU: None detected")
 
     return " | ".join(parts)
 
@@ -234,37 +139,22 @@ def detect_installed_runtimes() -> Dict[str, bool]:
     Detect which hardware acceleration runtimes are currently installed.
 
     Returns:
-        dict: {'onnxruntime': bool, 'onnxruntime_directml': bool, 'onnxruntime_gpu': bool,
-               'onnxruntime_rocm': bool, 'onnxruntime_metal': bool, 'openvino': bool}
+        dict: {'onnxruntime': bool, 'openvino': bool}
     """
     runtimes = {
         "onnxruntime": False,
-        "onnxruntime_directml": False,
-        "onnxruntime_gpu": False,
-        "onnxruntime_rocm": False,
-        "onnxruntime_metal": False,
         "openvino": False,
     }
 
-    # Try to import each runtime and check for availability
+    # Try to import ONNX Runtime
     try:
-        import onnxruntime as ort
+        import onnxruntime as ort  # noqa: F401
 
         runtimes["onnxruntime"] = True
-
-        # Check for specific providers
-        providers = ort.get_available_providers()
-        if "DmlExecutionProvider" in providers:
-            runtimes["onnxruntime_directml"] = True
-        if "CUDAExecutionProvider" in providers:
-            runtimes["onnxruntime_gpu"] = True
-        if "ROCMExecutionProvider" in providers:
-            runtimes["onnxruntime_rocm"] = True
-        if "CoreMLExecutionProvider" in providers:
-            runtimes["onnxruntime_metal"] = True
     except ImportError:
         pass
 
+    # Try to import OpenVINO
     try:
         import openvino as ov  # noqa: F401
 
@@ -296,25 +186,14 @@ def get_available_runtimes_for_model(model_path: str) -> Dict[str, str]:
 
     # For PT files, offer Ultralytics PyTorch runtime first
     if model_ext == ".pt":
-        available["Ultralytics (PyTorch)"] = "ultralytics"
+        available["Ultralytics (PyTorch CPU)"] = "ultralytics"
 
-    # For ONNX/PT models, offer ONNX runtimes
+    # For ONNX/PT models, offer ONNX Runtime (CPU only)
     if model_ext in [".onnx", ".pt"] or is_openvino_dir:
-        # Always offer CPU fallback
         if installed["onnxruntime"]:
             available["ONNX Runtime (CPU)"] = "onnxruntime"
 
-        # Offer accelerated versions if available
-        if installed["onnxruntime_directml"]:
-            available["ONNX Runtime (DirectML - GPU)"] = "onnxruntime_directml"
-        if installed["onnxruntime_gpu"]:
-            available["ONNX Runtime (CUDA - NVIDIA GPU)"] = "onnxruntime_gpu"
-        if installed["onnxruntime_rocm"]:
-            available["ONNX Runtime (ROCm - AMD GPU)"] = "onnxruntime_rocm"
-        if installed["onnxruntime_metal"]:
-            available["ONNX Runtime (Metal - Apple GPU)"] = "onnxruntime_metal"
-
-    # For OpenVINO models/pt files, offer OpenVINO runtime
+    # For OpenVINO models/pt files, offer OpenVINO runtime (Intel CPU only)
     if is_openvino_dir or model_ext == ".pt":
         if installed["openvino"]:
             available["OpenVINO (Intel CPU)"] = "openvino"

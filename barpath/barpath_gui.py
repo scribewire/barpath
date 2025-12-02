@@ -55,7 +55,7 @@ class BarpathTogaApp(toga.App):
         self.lift_type: str = "none"
         self.encode_video: bool = True
         self.technique_analysis: bool = True
-        self.selected_runtime: str = "onnxruntime"  # Default runtime
+        self.selected_runtime: str = "onnxruntime"  # Default CPU runtime
         self._is_running: bool = False
         self._pipeline_task: Optional[asyncio.Task[Any]] = None
         self._cancel_event = threading.Event()
@@ -304,7 +304,7 @@ class BarpathTogaApp(toga.App):
             self._update_runtime_options()
 
     def _update_runtime_options(self) -> None:
-        """Update available runtime options based on selected model and installed runtimes."""
+        """Update available CPU runtime options based on selected model and installed runtimes."""
         selected_model = self._resolve_selected_model()
 
         if not selected_model:
@@ -314,20 +314,20 @@ class BarpathTogaApp(toga.App):
             self.runtime_select.enabled = False
             return
 
-        # Get available runtimes for this model
+        # Get available CPU runtimes for this model
         available_runtimes = get_available_runtimes_for_model(str(selected_model))
 
         if not available_runtimes:
-            # No hardware runtimes installed
-            self.runtime_select.items = ["No hardware acceleration installed"]
-            self.runtime_select.value = "No hardware acceleration installed"
+            # No runtimes installed
+            self.runtime_select.items = ["No runtime installed"]
+            self.runtime_select.value = "No runtime installed"
             self.runtime_select.enabled = False
             self.append_log(
-                "[INFO] No hardware acceleration packages installed. Model will use CPU (slower)."
+                "[INFO] No runtime packages installed. Please install onnxruntime."
             )
             return
 
-        # Update dropdown with available runtimes
+        # Update dropdown with available CPU runtimes
         runtime_labels = list(available_runtimes.keys())
         self.runtime_select.items = runtime_labels
 
@@ -339,7 +339,7 @@ class BarpathTogaApp(toga.App):
                     self.runtime_select.value = label
                     break
         else:
-            # Default to first available (usually CPU fallback)
+            # Default to first available
             self.runtime_select.value = runtime_labels[0]
             self.selected_runtime = available_runtimes[runtime_labels[0]]
 
@@ -377,7 +377,8 @@ class BarpathTogaApp(toga.App):
     def on_encode_toggle(self, widget: toga.Widget) -> None:
         """Handle encode video toggle."""
         self.encode_video = self.encode_switch.value
-        # Could show/hide output_video_row here if needed
+        # Enable/disable output video input based on checkbox state
+        self.output_video_input.enabled = self.encode_video
 
     def on_runtime_changed(self, widget: toga.Widget) -> None:
         """Handle runtime selection change."""

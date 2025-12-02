@@ -1,27 +1,11 @@
+import argparse
 import gc
-import sys
+import os
 import time
 
-try:
-    import cv2
-except ImportError:
-    print(
-        "Missing dependency: opencv-python (cv2). Install with: pip install opencv-python"
-    )
-    sys.exit(1)
-import argparse
-import os
-
-try:
-    import numpy as np
-except ImportError:
-    print("Missing dependency: numpy. Install with: pip install numpy")
-    sys.exit(1)
-try:
-    import pandas as pd
-except ImportError:
-    print("Missing dependency: pandas. Install with: pip install pandas")
-    sys.exit(1)
+import cv2
+import numpy as np
+import pandas as pd
 from utils import (
     COLOR_SCHEME,
     draw_legend,

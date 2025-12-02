@@ -1,28 +1,13 @@
-import gc
-import sys
-from typing import cast
-
-try:
-    import pandas as pd
-    from pandas import Series
-except ImportError:
-    print("Missing dependency: pandas. Install with: pip install pandas")
-    sys.exit(1)
-
-try:
-    import numpy as np
-except ImportError:
-    print("Missing dependency: numpy. Install with: pip install numpy")
-    sys.exit(1)
 import argparse
+import gc
 import os
 import pickle
+from typing import cast
 
-try:
-    from scipy.signal import savgol_filter
-except Exception:
-    print("Missing dependency: scipy (savgol_filter). Install with: pip install scipy")
-    sys.exit(1)
+import numpy as np
+import pandas as pd
+from pandas import Series
+from scipy.signal import savgol_filter
 from utils import calculate_angle, calculate_lifter_angle
 
 
@@ -368,10 +353,6 @@ def main():
     try:
         with open(args.input, "rb") as f:
             input_data = pickle.load(f)
-    except ImportError:
-        print("\nError: `scipy` is required for smoothing. Please install it:")
-        print("  pip install scipy")
-        return
     except Exception as e:
         print(f"Error loading pickle file {args.input}: {e}")
         return

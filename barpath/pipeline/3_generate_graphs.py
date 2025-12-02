@@ -1,20 +1,11 @@
-import sys
-
-try:
-    import pandas as pd
-except ImportError:
-    print("Missing dependency: pandas. Install with: pip install pandas")
-    sys.exit(1)
-try:
-    import matplotlib
-
-    matplotlib.use("Agg")  # Use non-interactive backend
-    import matplotlib.pyplot as plt
-except Exception:
-    print("Missing dependency: matplotlib. Install with: pip install matplotlib")
-    sys.exit(1)
 import argparse
 import os
+
+import matplotlib
+import pandas as pd
+
+matplotlib.use("Agg")  # Use non-interactive backend
+import matplotlib.pyplot as plt
 
 
 def step_3_generate_graphs(df, output_dir):

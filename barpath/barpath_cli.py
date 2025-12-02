@@ -105,13 +105,10 @@ python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type
 [dim]# 2. Full analysis with snatch (CPU, output video)[/dim]
 python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type snatch --output_video out.mp4
 
-[dim]# 3. GPU acceleration (if available, fallback to CPU)[/dim]
-python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type clean --gpu
+[dim]# 3. OpenVINO model (Intel CPU optimization)[/dim]
+python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo_openvino_export --lift_type none --no-video
 
-[dim]# 4. OpenVINO model with GPU option[/dim]
-python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo_openvino_export --lift_type none --no-video --gpu
-
-[dim]# 5. Custom output directory[/dim]
+[dim]# 4. Custom output directory[/dim]
 python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --output_dir my_results/
 """
     console.print(
@@ -168,11 +165,7 @@ def main():
         action="store_true",
         help="If set, skips Step 4 (video rendering), which is computationally expensive.",
     )
-    parser.add_argument(
-        "--gpu",
-        action="store_true",
-        help="If set, attempts to use GPU acceleration if available. Falls back to CPU if no GPU runtime is installed.",
-    )
+
     parser.add_argument(
         "--output_dir",
         default="outputs",
@@ -240,61 +233,56 @@ def main():
         )
         sys.exit(1)
 
-    # Determine runtime to use
-    # For .pt files, prefer Ultralytics; otherwise default to ONNX Runtime (CPU)
+    # Determine runtime to use based on model type and available runtimes
     model_path_obj = Path(args.model)
     model_ext = model_path_obj.suffix.lower()
+    is_openvino_dir = model_path_obj.is_dir() and any(
+        "openvino" in part.lower() for part in model_path_obj.parts
+    )
 
-    selected_runtime = "onnxruntime"  # Default to CPU
+    # Get available runtimes for this model
+    available_runtimes = get_available_runtimes_for_model(args.model)
 
-    if model_ext == ".pt":
-        # For PyTorch models, prefer Ultralytics runtime
-        selected_runtime = "ultralytics"
-
-    if args.gpu:
-        # User requested GPU - try to find available GPU runtime
-        available_runtimes = get_available_runtimes_for_model(args.model)
-
-        # Prefer GPU runtimes in order
-        gpu_runtimes = {
-            "onnxruntime_gpu": "onnxruntime_gpu",
-            "onnxruntime_rocm": "onnxruntime_rocm",
-            "onnxruntime_directml": "onnxruntime_directml",
-            "onnxruntime_metal": "onnxruntime_metal",
-        }
-
-        found_gpu = False
-        for gpu_label, gpu_id in gpu_runtimes.items():
-            # Check if this GPU runtime is available
-            if any(gpu_id in str(v) for v in available_runtimes.values()):
-                selected_runtime = gpu_id
-                found_gpu = True
-                break
-
-        if not found_gpu:
-            # No GPU runtime found, fall back to CPU
-            print(
-                "[yellow]⚠ --gpu flag used but no GPU acceleration runtime found. "
-                "Falling back to CPU.[/yellow]"
-            )
-            selected_runtime = "onnxruntime"
+    # Default runtime selection logic
+    if is_openvino_dir:
+        # OpenVINO directory - use openvino runtime if available
+        selected_runtime = (
+            "openvino" if "openvino" in available_runtimes.values() else "onnxruntime"
+        )
+    elif model_ext == ".onnx":
+        # ONNX model - use onnxruntime
+        selected_runtime = "onnxruntime"
+    elif model_ext == ".pt":
+        # PyTorch model - prefer ultralytics, fallback to onnxruntime
+        selected_runtime = (
+            "ultralytics"
+            if "ultralytics" in available_runtimes.values()
+            else "onnxruntime"
+        )
+    else:
+        # Default fallback
+        selected_runtime = "onnxruntime"
 
     # Set up rich console
     # console = Console() # Already initialized in main
 
     # Print startup banner
-    console.print(
-        Panel.fit(
-            "[bold cyan]barpath: Weightlifting Technique Analysis Pipeline[/bold cyan]",
-            border_style="cyan",
-        )
-    )
+    console.print()
+    console.print("[bold green]═══ Barpath Pipeline ═══[/bold green]")
+    console.print()
 
     console.print("\n[bold]Configuration:[/bold]")
     console.print(f"  Input Video:  [cyan]{args.input_video}[/cyan]")
-    model_display = f"{args.model} [OpenVINO]" if is_openvino_dir else args.model
-    console.print(f"  Model Source: [cyan]{model_display}[/cyan]")
-    console.print(f"  Runtime:      [cyan]{selected_runtime}[/cyan]")
+    console.print(f"  Model Source: [cyan]{args.model}[/cyan]")
+
+    # Display selected runtime
+    runtime_display_map = {
+        "onnxruntime": "ONNX Runtime (CPU)",
+        "openvino": "OpenVINO (Intel CPU)",
+        "ultralytics": "Ultralytics PyTorch (CPU)",
+    }
+    runtime_display = runtime_display_map.get(selected_runtime, selected_runtime)
+    console.print(f"  Runtime:      [cyan]{runtime_display}[/cyan]")
     if not args.no_video:
         console.print(f"  Output Video: [cyan]{args.output_video}[/cyan]")
     else:
