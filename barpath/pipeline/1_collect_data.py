@@ -196,9 +196,8 @@ def step_1_collect_data(
     lk_max_level = 3
     lk_criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
 
-    # RANSAC parameters for robust transform estimation
-    ransac_threshold = 3.0  # pixels
-    min_inliers = 10  # Minimum number of inliers for valid transform
+    # Minimum number of matched features for motion estimation
+    min_inliers = 10
 
     raw_data_list = []
 
@@ -387,42 +386,21 @@ def step_1_collect_data(
                 good_new = curr_features[status.flatten() == 1]
                 good_old = prev_background_features[status.flatten() == 1]
 
-                # Estimate global affine transform using RANSAC
+                # Estimate translation-only motion using median displacement
                 if len(good_new) >= min_inliers:
                     try:
-                        # Use partial affine (rotation, translation, uniform scale)
-                        transform_matrix, inliers = cv2.estimateAffinePartial2D(
-                            good_old,
-                            good_new,
-                            method=cv2.RANSAC,
-                            ransacReprojThreshold=ransac_threshold,
-                            confidence=0.99,
-                            maxIters=2000,
+                        displacements = good_new - good_old
+                        median_dx = float(np.median(displacements[:, 0, 0]))
+                        median_dy = float(np.median(displacements[:, 0, 1]))
+
+                        shake_dx = median_dx
+                        shake_dy = median_dy
+                        camera_transform = np.array(
+                            [[1.0, 0.0, median_dx], [0.0, 1.0, median_dy]]
                         )
 
-                        if transform_matrix is not None and inliers is not None:
-                            num_inliers = np.sum(inliers)
-
-                            # Validate transform (check if it's reasonable)
-                            if num_inliers >= min_inliers:
-                                # Extract translation from transform matrix
-                                # Transform matrix is [[cos θ, -sin θ, tx], [sin θ, cos θ, ty]]
-                                shake_dx = float(transform_matrix[0, 2])
-                                shake_dy = float(transform_matrix[1, 2])
-                                camera_transform = transform_matrix
-
-                                # Keep only inlier features for next frame
-                                curr_background_features = good_new[
-                                    inliers.flatten() == 1
-                                ].reshape(-1, 1, 2)
-                            else:
-                                # Not enough inliers, detection failed
-                                curr_background_features = None
-                        else:
-                            # Transform estimation failed
-                            curr_background_features = None
-                    except cv2.error:
-                        # OpenCV error during estimation
+                        curr_background_features = good_new
+                    except (cv2.error, ValueError, IndexError):
                         curr_background_features = None
                 else:
                     # Not enough matched features
