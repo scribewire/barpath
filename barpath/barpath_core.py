@@ -61,7 +61,6 @@ def run_pipeline(
     output_dir="outputs",
     encode_video=True,
     technique_analysis=True,
-    selected_runtime="onnxruntime",
     raw_data_path="raw_data.pkl",
     analysis_csv_path="final_analysis.csv",
     cancel_event=None,
@@ -79,7 +78,6 @@ def run_pipeline(
         output_dir (str): Directory to save outputs (graphs, analysis, etc.)
         encode_video (bool): Whether to render output video
         technique_analysis (bool): Whether to run technique critique
-        selected_runtime (str): Runtime to use ('onnxruntime', 'openvino', or 'ultralytics')
         raw_data_path (str): Path to save/load raw data pickle
         analysis_csv_path (str): Path to save/load analysis CSV
         cancel_event (threading.Event, optional): Event to signal cancellation
@@ -131,7 +129,6 @@ def run_pipeline(
         model_path,
         raw_data_path,
         lift_type,
-        selected_runtime=selected_runtime,
     ):
         check_cancel()
         yield update
@@ -227,7 +224,6 @@ def run_pipeline_simple(
     output_dir="outputs",
     encode_video=True,
     technique_analysis=True,
-    selected_runtime="onnxruntime",
 ):
     """
     Simple wrapper that runs the pipeline and consumes all progress updates.
@@ -254,7 +250,6 @@ def run_pipeline_simple(
             output_dir=output_dir,
             encode_video=encode_video,
             technique_analysis=technique_analysis,
-            selected_runtime=selected_runtime,
         ):
             results[step_name] = message
             print(f"[{step_name}] {message}")

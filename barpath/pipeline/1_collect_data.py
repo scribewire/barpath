@@ -32,7 +32,6 @@ def step_1_collect_data(
     model_path,
     output_path,
     lift_type="none",
-    selected_runtime="onnxruntime",
 ):
     print("--- Step 1: Collecting Raw Data ---")
     cap = cv2.VideoCapture(video_path)
@@ -60,27 +59,13 @@ def step_1_collect_data(
         )
 
     # Initialize YOLO Model
-    model_path_obj = Path(model_path)
-    model_path_str = str(model_path_obj)
-    is_openvino_dir = _looks_like_openvino_dir(model_path_obj)
-    is_onnx = model_path_obj.suffix.lower() == ".onnx"
-
-    # All models use CPU device
+    model_path_str = str(model_path)
     yolo_device = "cpu"
 
-    print(f"  Selected runtime: {selected_runtime} (CPU)")
+    print(f"Loading YOLO model: {model_path_str}")
 
     try:
-        if selected_runtime == "openvino" or is_openvino_dir:
-            print(f"Loading OpenVINO model: {model_path_str}")
-            yolo_model = YOLO(model_path_str, task="detect")
-        elif selected_runtime == "onnxruntime" or is_onnx:
-            print(f"Loading ONNX model: {model_path_str}")
-            yolo_model = YOLO(model_path_str, task="detect")
-        else:
-            # Ultralytics PyTorch runtime
-            print(f"Loading PyTorch model: {model_path_str}")
-            yolo_model = YOLO(model_path_str)
+        yolo_model = YOLO(model_path_str, task="detect")
     except Exception as e:
         cap.release()
         if pose:
@@ -446,7 +431,6 @@ def main():
         args.model,
         args.output,
         args.lift_type,
-        selected_runtime="onnxruntime",
     ):
         pass  # Progress updates ignored when run standalone
 

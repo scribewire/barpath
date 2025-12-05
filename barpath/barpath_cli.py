@@ -28,11 +28,8 @@ from rich.table import Table
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Import the core pipeline runner and hardware detection
+# Import the core pipeline runner
 from barpath_core import run_pipeline
-from hardware_detection import (
-    get_available_runtimes_for_model,
-)
 
 
 def _is_openvino_model_dir(path_str: str) -> bool:
@@ -233,39 +230,6 @@ def main():
         )
         sys.exit(1)
 
-    # Determine runtime to use based on model type and available runtimes
-    model_path_obj = Path(args.model)
-    model_ext = model_path_obj.suffix.lower()
-    is_openvino_dir = model_path_obj.is_dir() and any(
-        "openvino" in part.lower() for part in model_path_obj.parts
-    )
-
-    # Get available runtimes for this model
-    available_runtimes = get_available_runtimes_for_model(args.model)
-
-    # Default runtime selection logic
-    if is_openvino_dir:
-        # OpenVINO directory - use openvino runtime if available
-        selected_runtime = (
-            "openvino" if "openvino" in available_runtimes.values() else "onnxruntime"
-        )
-    elif model_ext == ".onnx":
-        # ONNX model - use onnxruntime
-        selected_runtime = "onnxruntime"
-    elif model_ext == ".pt":
-        # PyTorch model - prefer ultralytics, fallback to onnxruntime
-        selected_runtime = (
-            "ultralytics"
-            if "ultralytics" in available_runtimes.values()
-            else "onnxruntime"
-        )
-    else:
-        # Default fallback
-        selected_runtime = "onnxruntime"
-
-    # Set up rich console
-    # console = Console() # Already initialized in main
-
     # Print startup banner
     console.print()
     console.print("[bold green]═══ Barpath Pipeline ═══[/bold green]")
@@ -274,15 +238,6 @@ def main():
     console.print("\n[bold]Configuration:[/bold]")
     console.print(f"  Input Video:  [cyan]{args.input_video}[/cyan]")
     console.print(f"  Model Source: [cyan]{args.model}[/cyan]")
-
-    # Display selected runtime
-    runtime_display_map = {
-        "onnxruntime": "ONNX Runtime (CPU)",
-        "openvino": "OpenVINO (Intel CPU)",
-        "ultralytics": "Ultralytics PyTorch (CPU)",
-    }
-    runtime_display = runtime_display_map.get(selected_runtime, selected_runtime)
-    console.print(f"  Runtime:      [cyan]{runtime_display}[/cyan]")
     if not args.no_video:
         console.print(f"  Output Video: [cyan]{args.output_video}[/cyan]")
     else:
@@ -313,7 +268,6 @@ def main():
                 output_dir=args.output_dir,
                 encode_video=not args.no_video,
                 technique_analysis=(args.lift_type != "none"),
-                selected_runtime=selected_runtime,
             ):
                 # Create task on first encounter of each step
                 if step_name not in task_map and step_name != "complete":

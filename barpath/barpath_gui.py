@@ -17,11 +17,6 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import toga
-
-# Import hardware detection utilities (local import)
-from hardware_detection import (
-    get_available_runtimes_for_model,
-)
 from toga.style import Pack
 
 # Prepare for lazy import of the pipeline runner
@@ -55,7 +50,6 @@ class BarpathTogaApp(toga.App):
         self.lift_type: str = "none"
         self.encode_video: bool = True
         self.technique_analysis: bool = True
-        self.selected_runtime: str = "onnxruntime"  # Default CPU runtime
         self._is_running: bool = False
         self._pipeline_task: Optional[asyncio.Task[Any]] = None
         self._cancel_event = threading.Event()
@@ -121,26 +115,10 @@ class BarpathTogaApp(toga.App):
         self.model_select = toga.Selection(
             items=["(Select directory first)"],
             style=Pack(flex=1),
-            on_change=self.on_model_changed,
         )
         self.model_select.enabled = False
         model_row.add(self.model_select)
         config_box.add(model_row)
-
-        # Row: Runtime selection dropdown
-        runtime_row = toga.Box(
-            style=Pack(direction="row", margin_bottom=6, align_items="center")
-        )
-        runtime_row.add(toga.Label("Runtime:", style=Pack(width=170)))
-        self.runtime_select = toga.Selection(
-            items=["ONNX Runtime (CPU)"],
-            style=Pack(flex=1),
-            on_change=self.on_runtime_changed,
-        )
-        self.runtime_select.value = "ONNX Runtime (CPU)"
-        self.runtime_select.enabled = False
-        runtime_row.add(self.runtime_select)
-        config_box.add(runtime_row)
 
         # Lift type dropdown
         lift_row = toga.Box(
@@ -295,56 +273,10 @@ class BarpathTogaApp(toga.App):
             self.model_select.value = model_names[0]
             self.model_select.enabled = True
             self.append_log(f"Found {len(model_names)} model source(s) in {directory}")
-            # Update runtime options for the first selected model
-            self._update_runtime_options()
         else:
             self.model_select.items = ["(No supported models found)"]
             self.model_select.enabled = False
             self.append_log(f"No supported model sources found in {directory}")
-            self._update_runtime_options()
-
-    def _update_runtime_options(self) -> None:
-        """Update available CPU runtime options based on selected model and installed runtimes."""
-        selected_model = self._resolve_selected_model()
-
-        if not selected_model:
-            # No model selected, disable runtime selection
-            self.runtime_select.items = ["No runtime available"]
-            self.runtime_select.value = "No runtime available"
-            self.runtime_select.enabled = False
-            return
-
-        # Get available CPU runtimes for this model
-        available_runtimes = get_available_runtimes_for_model(str(selected_model))
-
-        if not available_runtimes:
-            # No runtimes installed
-            self.runtime_select.items = ["No runtime installed"]
-            self.runtime_select.value = "No runtime installed"
-            self.runtime_select.enabled = False
-            self.append_log(
-                "[INFO] No runtime packages installed. Please install onnxruntime."
-            )
-            return
-
-        # Update dropdown with available CPU runtimes
-        runtime_labels = list(available_runtimes.keys())
-        self.runtime_select.items = runtime_labels
-
-        # Try to preserve current selection, otherwise use first available
-        if self.selected_runtime in available_runtimes.values():
-            # Find the label for the currently selected runtime
-            for label, identifier in available_runtimes.items():
-                if identifier == self.selected_runtime:
-                    self.runtime_select.value = label
-                    break
-        else:
-            # Default to first available
-            self.runtime_select.value = runtime_labels[0]
-            self.selected_runtime = available_runtimes[runtime_labels[0]]
-
-        self.runtime_select.enabled = True
-        self.append_log(f"[INFO] Available runtimes: {', '.join(runtime_labels)}")
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -379,26 +311,6 @@ class BarpathTogaApp(toga.App):
         self.encode_video = self.encode_switch.value
         # Enable/disable output video input based on checkbox state
         self.output_video_input.enabled = self.encode_video
-
-    def on_runtime_changed(self, widget: toga.Widget) -> None:
-        """Handle runtime selection change."""
-        selected_label = str(self.runtime_select.value)
-        available_runtimes = (
-            get_available_runtimes_for_model(str(self._resolve_selected_model()))
-            if self._resolve_selected_model()
-            else {}
-        )
-
-        # Map label to identifier
-        for label, identifier in available_runtimes.items():
-            if label == selected_label:
-                self.selected_runtime = identifier
-                self.append_log(f"[INFO] Selected runtime: {selected_label}")
-                break
-
-    def on_model_changed(self, widget: toga.Widget) -> None:
-        """Handle model selection change - update available runtimes."""
-        self._update_runtime_options()
 
     async def on_browse_models_dir(self, widget: toga.Widget) -> None:
         """Browse for models directory."""
@@ -521,7 +433,6 @@ class BarpathTogaApp(toga.App):
                 output_dir=str(self.output_dir),
                 encode_video=self.encode_video,
                 technique_analysis=(self.lift_type != "none"),
-                selected_runtime=self.selected_runtime,
                 cancel_event=self._cancel_event,
             ):
                 # Update UI
