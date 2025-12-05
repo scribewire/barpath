@@ -35,8 +35,6 @@ def plot_barbell_lateral_corrected(df, output_dir):
 
     # Define colors and labels for phases
     colors = ["red", "orange", "green"]
-    labels = ["Phase (Up)", "Phase (Down)", "Phase (Up)"]
-    plotted_labels = set()
 
     current_phase = int(path_data[0, 2])
     start_index = 0
@@ -50,20 +48,9 @@ def plot_barbell_lateral_corrected(df, output_dir):
 
             color_index = current_phase % len(colors)
             color = colors[color_index]
-            label = labels[color_index]
 
-            # Add label only once per color
-            if label not in plotted_labels:
-                plt.plot(
-                    segment[:, 0],
-                    segment[:, 1],
-                    color=color,
-                    linewidth=2,
-                    label=label,
-                )
-                plotted_labels.add(label)
-            else:
-                plt.plot(segment[:, 0], segment[:, 1], color=color, linewidth=2)
+            # Plot without adding phase labels to legend
+            plt.plot(segment[:, 0], segment[:, 1], color=color, linewidth=2)
 
             start_index = i
             current_phase = new_phase
@@ -193,8 +180,6 @@ def step_3_generate_graphs(df, output_dir):
 
             # Define colors and labels
             colors = ["red", "orange", "green"]
-            labels = ["Phase (Up)", "Phase (Down)", "Phase (Up)"]
-            plotted_labels = set()
 
             current_phase = int(path_data[0, 2])
             start_index = 0
@@ -208,20 +193,9 @@ def step_3_generate_graphs(df, output_dir):
 
                     color_index = current_phase % len(colors)
                     color = colors[color_index]
-                    label = labels[color_index]
 
-                    # Add label only once per color
-                    if label not in plotted_labels:
-                        plt.plot(
-                            segment[:, 0],
-                            segment[:, 1],
-                            color=color,
-                            linewidth=2,
-                            label=label,
-                        )
-                        plotted_labels.add(label)
-                    else:
-                        plt.plot(segment[:, 0], segment[:, 1], color=color, linewidth=2)
+                    # Plot without adding phase labels to legend
+                    plt.plot(segment[:, 0], segment[:, 1], color=color, linewidth=2)
 
                     start_index = i
                     current_phase = new_phase
