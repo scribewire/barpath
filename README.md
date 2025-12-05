@@ -10,7 +10,6 @@
 
 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;">
     <img src="barpath/assets/sample_video.gif" alt="Sample Output Video";>
-    <img src="barpath/assets/sample_gui.png" alt="Graphical Interface" height="360">
     <img src="barpath/assets/sample_graph.png" alt="Sample Output Graph" height="360">
 </div>
 
