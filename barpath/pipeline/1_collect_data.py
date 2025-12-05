@@ -6,6 +6,17 @@ from pathlib import Path
 import cv2
 import mediapipe as mp
 import numpy as np
+from step1_helpers import (
+    StabilizationParams,
+    create_background_mask,
+    detect_features,
+    estimate_motion,
+    get_ankle_positions,
+    get_landmark_enums,
+    process_pose_results,
+    track_features,
+    update_features,
+)
 from ultralytics import YOLO  # type: ignore[attr-defined]
 from utils import LANDMARK_NAMES
 
@@ -15,10 +26,7 @@ from utils import LANDMARK_NAMES
 LANDMARKS_TO_TRACK = LANDMARK_NAMES
 
 # Convert string names to MediaPipe PoseLandmark objects
-LANDMARK_ENUMS = {
-    name: mp.solutions.pose.PoseLandmark[name.upper()]  # type: ignore[attr-defined]
-    for name in LANDMARKS_TO_TRACK
-}
+LANDMARK_ENUMS = get_landmark_enums(LANDMARKS_TO_TRACK)
 
 
 def _looks_like_openvino_dir(path: Path) -> bool:
@@ -58,6 +66,9 @@ def step_1_collect_data(
             model_complexity=1,  # Balance between accuracy and performance
         )
 
+    # Initialize stabilization parameters
+    stab_params = StabilizationParams()
+
     # Initialize YOLO Model
     model_path_str = str(model_path)
     yolo_device = "cpu"
@@ -72,23 +83,9 @@ def step_1_collect_data(
             pose.close()
         raise RuntimeError(f"Error loading YOLO model from {model_path}: {e}")
 
-    # Stabilization parameters for global motion model
+    # Stabilization state
     prev_gray = None
     prev_background_features = None  # Features from previous frame
-
-    # Feature detection parameters
-    feature_max_corners = 200
-    feature_quality_level = 0.01
-    feature_min_distance = 10
-    feature_block_size = 7
-
-    # Lucas-Kanade optical flow parameters (for feature tracking)
-    lk_win_size = (21, 21)
-    lk_max_level = 3
-    lk_criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
-
-    # Minimum number of matched features for motion estimation
-    min_inliers = 10
 
     raw_data_list = []
 
@@ -109,6 +106,7 @@ def step_1_collect_data(
         frame_data = {
             "frame": frame_count,
             "landmarks": None,
+            "world_landmarks": None,
             "barbell_center": None,
             "barbell_box": None,
             "shake_dx": 0.0,
@@ -127,19 +125,15 @@ def step_1_collect_data(
         results_yolo = yolo_model(frame, verbose=False, conf=0.25, device=yolo_device)
 
         # 1. Process MediaPipe Data
-        segmentation_mask = None
-        if results_pose and results_pose.pose_landmarks:
-            landmarks_data = {}
-            for name, enum in LANDMARK_ENUMS.items():
-                lm = results_pose.pose_landmarks.landmark[enum]
-                landmarks_data[name] = (lm.x, lm.y, lm.z, lm.visibility)
-            frame_data["landmarks"] = landmarks_data
+        landmarks_data, world_landmarks_data, segmentation_mask = None, None, None
+        if results_pose is not None:
+            # Use helper to extract both landmark types and segmentation mask
+            landmarks_data, world_landmarks_data, segmentation_mask = (
+                process_pose_results(results_pose, LANDMARK_ENUMS)
+            )
 
-            if results_pose.segmentation_mask is not None:
-                # Create a binary mask (1 for person, 0 for background)
-                segmentation_mask = (results_pose.segmentation_mask > 0.5).astype(
-                    np.uint8
-                )
+            frame_data["landmarks"] = landmarks_data
+            frame_data["world_landmarks"] = world_landmarks_data
 
         # 2. Process YOLO Data
         best_endcap = None
@@ -173,38 +167,12 @@ def step_1_collect_data(
                 # --- INITIAL DETECTION ---
                 feet_pos_px = None
                 if results_pose and results_pose.pose_landmarks:
-                    l_ankle = results_pose.pose_landmarks.landmark[
-                        mp_pose_solution.PoseLandmark.LEFT_ANKLE
-                    ]
-                    r_ankle = results_pose.pose_landmarks.landmark[
-                        mp_pose_solution.PoseLandmark.RIGHT_ANKLE
-                    ]
-
-                    l_visible = l_ankle.visibility > 0.3
-                    r_visible = r_ankle.visibility > 0.3
-
-                    l_pos = (
-                        np.array([l_ankle.x * frame_width, l_ankle.y * frame_height])
-                        if l_visible
-                        else None
+                    feet_pos_px = get_ankle_positions(
+                        results_pose.pose_landmarks,
+                        mp_pose_solution,
+                        frame_width,
+                        frame_height,
                     )
-                    r_pos = (
-                        np.array([r_ankle.x * frame_width, r_ankle.y * frame_height])
-                        if r_visible
-                        else None
-                    )
-
-                    if (
-                        l_visible
-                        and r_visible
-                        and l_pos is not None
-                        and r_pos is not None
-                    ):
-                        feet_pos_px = (l_pos + r_pos) / 2
-                    elif l_visible and l_pos is not None:
-                        feet_pos_px = l_pos
-                    elif r_visible and r_pos is not None:
-                        feet_pos_px = r_pos
 
                 if feet_pos_px is not None:
                     # Logic 1: Use feet position
@@ -246,82 +214,31 @@ def step_1_collect_data(
         # Create background mask for feature detection (exclude person and bar)
         background_mask = None
         if segmentation_mask is not None:
-            # Invert segmentation mask: 1 for background, 0 for foreground
-            background_mask = (1 - segmentation_mask) * 255
-            background_mask = background_mask.astype(np.uint8)
-
-            # Optionally dilate the foreground mask to create a safety margin
-            kernel = np.ones((15, 15), np.uint8)
-            background_mask = cv2.erode(background_mask, kernel, iterations=1)
+            background_mask = create_background_mask(segmentation_mask)
 
         # Detect or track background features
         curr_background_features = None
 
         if prev_gray is not None and prev_background_features is not None:
             # Track features from previous frame using Lucas-Kanade
-            curr_features, status, err = cv2.calcOpticalFlowPyrLK(
-                prev_gray,
-                gray,
-                prev_background_features,
-                None,  # type: ignore[arg-type]
-                winSize=lk_win_size,
-                maxLevel=lk_max_level,
-                criteria=lk_criteria,
+            curr_features, status, err = track_features(
+                prev_gray, gray, prev_background_features, stab_params
             )
 
             if curr_features is not None and status is not None:
-                # Select good matches
-                good_new = curr_features[status.flatten() == 1]
-                good_old = prev_background_features[status.flatten() == 1]
-
-                # Estimate translation-only motion using median displacement
-                if len(good_new) >= min_inliers:
-                    try:
-                        displacements = good_new - good_old
-                        median_dx = float(np.median(displacements[:, 0, 0]))
-                        median_dy = float(np.median(displacements[:, 0, 1]))
-
-                        shake_dx = median_dx
-                        shake_dy = median_dy
-
-                        curr_background_features = good_new
-                    except (cv2.error, ValueError, IndexError):
-                        curr_background_features = None
-                else:
-                    # Not enough matched features
-                    curr_background_features = None
+                # Estimate motion from tracked features
+                shake_dx, shake_dy, curr_background_features = estimate_motion(
+                    prev_background_features, curr_features, status, stab_params
+                )
 
         # Detect new features if we don't have enough or this is the first frame
         if curr_background_features is None or len(curr_background_features) < 50:
             # Detect new features in background regions
-            if background_mask is not None:
-                new_features = cv2.goodFeaturesToTrack(
-                    gray,
-                    maxCorners=feature_max_corners,
-                    qualityLevel=feature_quality_level,
-                    minDistance=feature_min_distance,
-                    mask=background_mask,
-                    blockSize=feature_block_size,
-                )
-            else:
-                # Fallback: detect features in entire frame if no segmentation mask
-                new_features = cv2.goodFeaturesToTrack(
-                    gray,
-                    maxCorners=feature_max_corners,
-                    qualityLevel=feature_quality_level,
-                    minDistance=feature_min_distance,
-                    mask=None,
-                    blockSize=feature_block_size,
-                )
-
+            new_features = detect_features(gray, background_mask, stab_params)
             if new_features is not None:
-                if curr_background_features is not None:
-                    # Merge with existing features
-                    curr_background_features = np.vstack(
-                        (curr_background_features, new_features)
-                    )
-                else:
-                    curr_background_features = new_features
+                curr_background_features = update_features(
+                    curr_background_features, new_features, min_features=50
+                )
 
         # Store stabilization data
         frame_data["shake_dx"] = shake_dx

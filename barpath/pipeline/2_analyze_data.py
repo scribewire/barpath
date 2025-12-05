@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from pandas import Series
 from scipy.signal import savgol_filter
+from step2_helpers import calculate_perspective_correction
 from utils import calculate_angle, calculate_lifter_angle
 
 
@@ -271,6 +272,51 @@ def step_2_analyze_data(input_data, output_path):
     df["bar_phase"] = df["phase_change"].cumsum()
     # --- End new block ---
 
+    # --- Calculate Perspective Correction (if world landmarks available) ---
+    # This happens after barbell_x_stable and barbell_y_stable are calculated
+
+    # Check if world_landmarks column exists and has data
+    has_world_landmarks = "world_landmarks" in df.columns and bool(
+        df["world_landmarks"].notna().any()
+    )
+
+    if has_world_landmarks:
+        print("Calculating perspective-corrected bar path...")
+        df = calculate_perspective_correction(df, frame_width, frame_height)
+
+        # Report statistics and quality checks
+        valid_frames = df["barbell_x_corrected_px"].notna().sum()
+        if valid_frames > 10:  # Need minimum frames for meaningful analysis
+            print(
+                f"  Perspective correction calculated for {valid_frames}/{len(df)} frames"
+            )
+
+            # Calculate displacement statistics
+            corrected_range = (
+                df["barbell_x_corrected_px"].max() - df["barbell_x_corrected_px"].min()
+            )
+            uncorrected_range = (
+                df["barbell_x_smooth"].max() - df["barbell_x_smooth"].min()
+            )
+            print(
+                f"  Horizontal displacement: {uncorrected_range:.1f} px (uncorrected) -> {corrected_range:.1f} px (corrected)"
+            )
+            avg_yaw = df["camera_yaw_deg"].mean()
+            avg_yaw_val = float(avg_yaw) if not bool(pd.isna(avg_yaw)) else None
+            if avg_yaw_val is not None:
+                print(f"  Reference camera yaw: {avg_yaw_val:.1f}°")
+
+            avg_factor = df["lateral_correction_factor"].mean()
+            factor_val = float(avg_factor) if not bool(pd.isna(avg_factor)) else None
+            if factor_val is not None:
+                print(f"  Lateral correction factor: {factor_val:.3f}x")
+        elif valid_frames > 0:
+            print(
+                f"  Warning: Only {valid_frames} frames with perspective correction (need >10)"
+            )
+    else:
+        print("Skipping perspective correction (no world landmarks available)")
+
     # Y-Acceleration (px/s^2)
     # df['accel_y_px_s2'] = df['vel_y_px_s'].diff() / df['dt'] # OLD
 
@@ -315,6 +361,10 @@ def step_2_analyze_data(input_data, output_path):
         cols_to_drop.append("barbell_center")
     if "barbell_box" in df.columns:
         cols_to_drop.append("barbell_box")
+
+    # Also drop world landmark intermediate columns (keep only final results)
+    world_landmark_cols = [col for col in df.columns if "world" in col]
+    cols_to_drop.extend(world_landmark_cols)
 
     cols_to_drop = [col for col in cols_to_drop if col in df.columns]
     df = df.drop(columns=cols_to_drop)

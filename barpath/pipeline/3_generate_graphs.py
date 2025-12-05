@@ -1,11 +1,118 @@
 import argparse
 import os
+from pathlib import Path
 
 import matplotlib
 import pandas as pd
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
+
+
+def plot_barbell_lateral_corrected(df, output_dir):
+    """
+    Plot perspective-corrected lateral bar path in pixel coordinates.
+
+    This shows the true horizontal displacement of the bar as if viewed at 90°,
+    corrected for camera angle using MediaPipe world landmarks.
+    Styled to match the barbell_xy_stable_path graph.
+    """
+    # Check if corrected data exists
+    path_cols = ["barbell_x_corrected_px", "barbell_y_smooth", "bar_phase"]
+    if not all(col in df.columns for col in path_cols):
+        print("Skipping corrected path plot (no correction data available)")
+        return
+
+    path_data_df = df[path_cols].dropna()
+
+    if len(path_data_df) < 2:
+        print("Skipping corrected path plot (insufficient data points)")
+        return
+
+    path_data = path_data_df.values
+
+    plt.figure(figsize=(8, 10))  # Taller than wide
+
+    # Define colors and labels for phases
+    colors = ["red", "orange", "green"]
+    labels = ["Phase (Up)", "Phase (Down)", "Phase (Up)"]
+    plotted_labels = set()
+
+    current_phase = int(path_data[0, 2])
+    start_index = 0
+
+    # Plot segment by segment to change colors by phase
+    for i in range(1, len(path_data)):
+        new_phase = int(path_data[i, 2])
+        # Plot if phase changes or if it's the last point
+        if new_phase != current_phase or i == len(path_data) - 1:
+            segment = path_data[start_index : i + 1]  # Get (x,y)
+
+            color_index = current_phase % len(colors)
+            color = colors[color_index]
+            label = labels[color_index]
+
+            # Add label only once per color
+            if label not in plotted_labels:
+                plt.plot(
+                    segment[:, 0],
+                    segment[:, 1],
+                    color=color,
+                    linewidth=2,
+                    label=label,
+                )
+                plotted_labels.add(label)
+            else:
+                plt.plot(segment[:, 0], segment[:, 1], color=color, linewidth=2)
+
+            start_index = i
+            current_phase = new_phase
+
+    # Mark start (green circle) and end (red 'x')
+    plt.plot(
+        path_data[0, 0], path_data[0, 1], "go", markersize=10, label="Start"
+    )  # Start point
+    plt.plot(
+        path_data[-1, 0],
+        path_data[-1, 1],
+        "rx",
+        markersize=10,
+        mew=3,
+        label="End",
+    )  # End point
+
+    plt.title("Perspective-Corrected Bar Path by Phase", fontsize=16, fontweight="bold")
+    plt.xlabel("Horizontal Position (px, corrected)", fontsize=12)
+    plt.ylabel("Vertical Position (px)", fontsize=12)
+    plt.grid(True, alpha=0.3)
+
+    plt.gca().invert_yaxis()
+    plt.axis("equal")
+
+    # Add camera angle info if available
+    if "camera_yaw_deg" in df.columns:
+        camera_yaw = df["camera_yaw_deg"].dropna()
+        if len(camera_yaw) > 0:
+            ref_yaw = camera_yaw.iloc[0]  # Reference angle from first frame
+            angle_text = f"Reference Camera Angle: {ref_yaw:.1f}°"
+            plt.text(
+                0.02,
+                0.98,
+                angle_text,
+                transform=plt.gca().transAxes,
+                verticalalignment="top",
+                bbox=dict(boxstyle="round", facecolor="lightblue", alpha=0.7),
+                fontsize=10,
+            )
+
+    plt.legend()
+
+    # Save
+    output_path = Path(output_dir) / "barbell_lateral_corrected_path.png"
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    print(f"  ✓ Generated: {output_path}")
 
 
 def step_3_generate_graphs(df, output_dir):
@@ -164,6 +271,17 @@ def step_3_generate_graphs(df, output_dir):
         print(f"  Skipped: {len(skipped)} graphs due to missing/insufficient data")
         for title in skipped:
             print(f"    - {title}")
+
+    # Generate corrected path graph if available
+    # Only generate if world landmarks were captured (lift_type != "none")
+    if (
+        "barbell_x_corrected_px" in df.columns
+        and df["barbell_x_corrected_px"].notna().any()
+    ):
+        try:
+            plot_barbell_lateral_corrected(df, output_dir)
+        except Exception as e:
+            print(f"Warning: Could not generate corrected path graph: {e}")
 
     # Ensure all figures are closed to free memory
     plt.close("all")
