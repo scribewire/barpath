@@ -148,11 +148,11 @@ python barpath/barpath_gui.py
 
 ## 🚀 Quick Start
 
-For comprehensive usage instructions, including GUI and CLI usage, command-line options, examples, and running individual pipeline steps, see the [**USAGE_GUIDE.md**](USAGE_GUIDE.md).
+For comprehensive usage instructions, including GUI and CLI usage, command-line options, examples, and running individual pipeline steps, see the [**USAGE_GUIDE.md**](docs/USAGE_GUIDE.md).
 
 ## 📦 Building Installers
 
-For comprehensive instructions on building standalone installers for Windows, macOS, and Linux using Briefcase, see the [**BUILD_INSTRUCTIONS.md**](BUILD_INSTRUCTIONS.md).
+For comprehensive instructions on building standalone installers for Windows, macOS, and Linux using Briefcase, see the [**BUILD_INSTRUCTIONS.md**](docs/BUILD_INSTRUCTIONS.md).
 
 ## 📊 Project Status
 
