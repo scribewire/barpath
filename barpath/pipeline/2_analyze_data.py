@@ -164,7 +164,7 @@ def step_2_analyze_data(input_data, output_path):
     x_filled = df["barbell_x_stable"].interpolate(method="linear").bfill().ffill()
     y_filled = df["barbell_y_stable"].interpolate(method="linear").bfill().ffill()
 
-    pos_window = min(11, len(x_filled) // 2 * 2 + 1)  # Must be odd
+    pos_window = min(9, len(x_filled) // 2 * 2 + 1)  # Must be odd
     if pos_window >= 5 and len(x_filled) >= pos_window:
         print(f"Applying position smoothing with window {pos_window}...")
         df["barbell_x_smooth"] = savgol_filter(x_filled, pos_window, 3)

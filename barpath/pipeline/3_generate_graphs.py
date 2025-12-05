@@ -238,6 +238,82 @@ def step_3_generate_graphs(df, output_dir):
         )
         skipped.append("Stabilized Bar Path")
 
+    # --- Add unsmoothed Bar Path X-Y Graph ---
+    path_cols_raw = ["barbell_x_stable", "barbell_y_stable", "bar_phase"]
+    if all(col in df.columns for col in path_cols_raw):
+        path_data_df_raw = df[path_cols_raw].dropna()
+
+        if len(path_data_df_raw) > 2:
+            path_data_raw = path_data_df_raw.values
+
+            plt.figure(figsize=(8, 10))  # Taller than wide
+
+            # Define colors and labels
+            colors = ["red", "orange", "green"]
+
+            current_phase = int(path_data_raw[0, 2])
+            start_index = 0
+
+            # Plot segment by segment to change colors
+            for i in range(1, len(path_data_raw)):
+                new_phase = int(path_data_raw[i, 2])
+                # Plot if phase changes or if it's the last point
+                if new_phase != current_phase or i == len(path_data_raw) - 1:
+                    segment = path_data_raw[start_index : i + 1]  # Get (x,y)
+
+                    color_index = current_phase % len(colors)
+                    color = colors[color_index]
+
+                    # Plot without adding phase labels to legend
+                    plt.plot(segment[:, 0], segment[:, 1], color=color, linewidth=2)
+
+                    start_index = i
+                    current_phase = new_phase
+
+            # Mark start (green circle) and end (red 'x')
+            plt.plot(
+                path_data_raw[0, 0],
+                path_data_raw[0, 1],
+                "go",
+                markersize=10,
+                label="Start",
+            )  # Start point
+            plt.plot(
+                path_data_raw[-1, 0],
+                path_data_raw[-1, 1],
+                "rx",
+                markersize=10,
+                mew=3,
+                label="End",
+            )  # End point
+
+            plt.title("Unsmoothed Bar Path by Phase", fontsize=16, fontweight="bold")
+            plt.xlabel("Horizontal Position (px)", fontsize=12)
+            plt.ylabel("Vertical Position (px)", fontsize=12)
+            plt.grid(True, alpha=0.3)
+
+            plt.gca().invert_yaxis()
+            plt.axis("equal")
+            plt.legend()
+
+            graph_path = os.path.join(
+                output_dir, "barbell_xy_stable_path_unsmoothed.png"
+            )
+            plt.savefig(graph_path, dpi=150, bbox_inches="tight")
+            plt.close()
+            graph_files.append(graph_path)
+            print(f"  ✓ Generated: {graph_path}")
+        else:
+            print(
+                f"Warning: Insufficient data for 'Unsmoothed Bar Path' ({len(path_data_df_raw)} points). Skipping graph."
+            )
+            skipped.append("Unsmoothed Bar Path")
+    else:
+        print(
+            "Warning: Columns for 'barbell_xy_stable_path_unsmoothed' not found. Skipping Unsmoothed Bar Path graph."
+        )
+        skipped.append("Unsmoothed Bar Path")
+
     # Summary
     print("\nStep 3 Complete.")
     print(f"  Generated: {len(graph_files)} graphs in '{output_dir}'")
