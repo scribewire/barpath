@@ -8,6 +8,11 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
 
+<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;">
+    <img src="barpath/assets/clean.gif" alt="Sample Output Video";>
+    <img src="barpath/assets/gui.png" alt="Graphical Interface" height="360">
+</div>
+
 ## ✨ Features
 
 - **🖥️ Dual Interface**: Command-line tool for batch processing and GUI for interactive analysis
