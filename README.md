@@ -42,7 +42,7 @@
 
 | Dependency | Purpose | Installation |
 |------------|---------|--------------|
-| **Python 3.12++** | Runtime environment | [python.org](https://www.python.org/downloads/) |
+| **Python 3.12+** | Runtime environment | [python.org](https://www.python.org/downloads/) |
 | **FFmpeg** | Video processing | See below |
 | **Git LFS** | Large file support | See below |
 
