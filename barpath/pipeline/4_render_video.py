@@ -1,6 +1,7 @@
 import argparse
 import gc
 import os
+import subprocess
 import time
 
 import cv2
@@ -316,7 +317,69 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
 
     cap.release()
     out.release()
-    print(f"Step 4 Complete. Final video saved to '{output_video_path}'")
+
+    # Mux audio from original video into rendered video
+    start_time = start_frame / fps
+    duration = frames_to_render / fps
+
+    temp_video_path = output_video_path + ".temp.mp4"
+    os.replace(output_video_path, temp_video_path)
+
+    try:
+        print(
+            f"Muxing audio from original video (start: {start_time:.2f}s, duration: {duration:.2f}s)..."
+        )
+
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(start_time),
+            "-i",
+            video_path,
+            "-i",
+            temp_video_path,
+            "-t",
+            str(duration),
+            "-map",
+            "1:v:0",
+            "-map",
+            "0:a:0?",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-shortest",
+            output_video_path,
+        ]
+
+        result = subprocess.run(
+            ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+
+        if result.returncode == 0:
+            os.remove(temp_video_path)
+            print(
+                f"Step 4 Complete. Final video with audio saved to '{output_video_path}'"
+            )
+        else:
+            os.replace(temp_video_path, output_video_path)
+            print(
+                f"Warning: ffmpeg audio muxing failed. Video saved without audio to '{output_video_path}'"
+            )
+            print(f"ffmpeg stderr: {result.stderr}")
+
+    except FileNotFoundError:
+        os.replace(temp_video_path, output_video_path)
+        print(
+            f"Warning: ffmpeg not found. Video saved without audio to '{output_video_path}'"
+        )
+    except Exception as e:
+        if os.path.exists(temp_video_path):
+            os.replace(temp_video_path, output_video_path)
+        print(
+            f"Warning: Error during audio muxing: {e}. Video saved without audio to '{output_video_path}'"
+        )
 
 
 def main():
