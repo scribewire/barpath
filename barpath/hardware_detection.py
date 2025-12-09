@@ -78,16 +78,66 @@ def detect_cpu_brand() -> Optional[str]:
     return None
 
 
+def detect_intel_gpu() -> bool:
+    """
+    Detect if an Intel GPU (integrated or discrete) is present.
+
+    Returns:
+        bool: True if Intel GPU detected, False otherwise
+    """
+    try:
+        if sys.platform == "win32":
+            # Windows: Check for Intel graphics adapters
+            result = subprocess.run(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            output = result.stdout.lower()
+            # Check for Intel integrated graphics (UHD, Iris, HD) or Arc discrete
+            if any(term in output for term in ["intel", "arc", "iris", "uhd"]):
+                return True
+        elif sys.platform == "linux":
+            # Linux: Check lspci for VGA/Display controllers
+            result = subprocess.run(
+                ["lspci"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            output = result.stdout.lower()
+            # Look for Intel VGA or display controller
+            if "intel" in output and ("vga" in output or "display" in output):
+                return True
+        elif sys.platform == "darwin":
+            # macOS: Use system_profiler to check graphics
+            result = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            output = result.stdout.lower()
+            if "intel" in output:
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
 def get_hardware_profile() -> Dict[str, Any]:
     """
     Get complete hardware profile.
 
     Returns:
-        dict: Hardware profile with os and cpu_brand
+        dict: Hardware profile with os, cpu_brand, and intel_gpu
     """
     return {
         "os": detect_os(),
         "cpu_brand": detect_cpu_brand(),
+        "intel_gpu": detect_intel_gpu(),
     }
 
 
@@ -216,3 +266,7 @@ if __name__ == "__main__":
     for name, installed in runtimes.items():
         status = "✓ Installed" if installed else "✗ Not installed"
         print(f"  {name}: {status}")
+
+    print("\n--- GPU Detection ---")
+    has_intel_gpu = detect_intel_gpu()
+    print(f"  Intel GPU: {'✓ Detected' if has_intel_gpu else '✗ Not detected'}")

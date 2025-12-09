@@ -8,6 +8,9 @@ A comprehensive guide to using the BARPATH system for AI-powered weightlifting t
 - [How It Works](#how-it-works)
   - [Camera Stabilization](#camera-stabilization)
   - [Perspective Angle Compensation](#perspective-angle-compensation)
+- [Batch Processing and Hardware Acceleration](#batch-processing-and-hardware-acceleration)
+  - [Batch Processing](#batch-processing)
+  - [Hardware Acceleration with OpenVINO](#hardware-acceleration-with-openvino)
 - [Output Files](#output-files)
 - [Recording Best Practices](#recording-best-practices)
 - [Troubleshooting](#troubleshooting)
@@ -217,6 +220,73 @@ The BARPATH system analyzes weightlifting videos in two complementary ways:
 - ❌ `lift_type = "none"` (pose landmarks not collected)
 - ❌ Insufficient world landmark data
 - ❌ Unrealistic shoulder width (< 0.3m or > 0.6m)
+
+---
+
+## Batch Processing and Hardware Acceleration
+
+### Batch Processing
+
+BARPATH supports processing multiple videos in a single run, which is useful for analyzing multiple lifts or sessions efficiently.
+
+**How it works:**
+- In the **GUI**: Add multiple video files using the "Add Video" button. The system will process them sequentially, one after another.
+- In the **CLI**: Use the `--input_video` argument multiple times or pass a list of files.
+
+**Behavior:**
+- Videos are processed **sequentially**, not in parallel. This means the total time is the sum of individual video processing times.
+- For each video, a separate subfolder is created in the output directory, named after the video file (e.g., `video1.mp4` → `video1/`).
+- Progress is tracked per video, and the GUI updates the progress bar accordingly.
+- If any video fails, the others continue processing.
+- Output files (graphs, CSV, video) are generated in each video's subfolder.
+
+**Example CLI batch processing:**
+```
+python barpath_cli.py --input_video lift1.mp4 lift2.mp4 lift3.mp4 --model yolo.pt --lift_type clean --no-video
+```
+This will create `lift1/`, `lift2/`, `lift3/` subfolders in the output directory.
+
+**When to use batch processing:**
+- Analyzing multiple attempts of the same lift for consistency.
+- Processing a session's worth of videos overnight.
+- Comparing different lifters or techniques.
+
+### Hardware Acceleration with OpenVINO
+
+BARPATH can leverage Intel's OpenVINO toolkit for faster inference on Intel CPUs, providing 2-5x speed improvements over standard PyTorch models.
+
+**How it works:**
+- Export your YOLO model to OpenVINO format using Ultralytics:
+  ```
+  yolo export model=yolo11n.pt format=openvino
+  ```
+  This creates a directory like `yolo11n_openvino_model/` containing `.xml` and `.bin` files.
+
+- Point BARPATH to this directory instead of the `.pt` file:
+  - GUI: Select the OpenVINO directory in the model dropdown.
+  - CLI: `--model yolo11n_openvino_model`
+
+**Detection and Usage:**
+- BARPATH automatically detects OpenVINO models by checking for directories with "openvino" in the name containing `.xml` and `.bin` files.
+- On Intel CPUs, it uses the OpenVINO runtime for inference.
+- If OpenVINO is not installed or the CPU is not Intel, it falls back to standard PyTorch/ONNX Runtime.
+- No GPU support currently; OpenVINO here refers to CPU optimization.
+
+**Requirements:**
+- Intel CPU (detection is automatic).
+- Install OpenVINO: `pip install openvino`
+- Export model as above.
+
+**Benefits:**
+- Faster processing, especially for long videos.
+- Lower CPU usage during inference.
+- Compatible with existing BARPATH workflows.
+
+**Verification:**
+Check if OpenVINO is active:
+```bash
+python -c "import openvino; print('OpenVINO available')"
+```
 
 ---
 

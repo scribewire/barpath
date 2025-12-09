@@ -20,6 +20,15 @@ from pathlib import Path
 
 import pandas as pd
 
+
+def _is_openvino_model_dir(path_str: str) -> bool:
+    """Return True when the provided path looks like an OpenVINO export directory."""
+    path = Path(path_str)
+    if not path.is_dir():
+        return False
+    return any("openvino" in part.lower() for part in path.parts)
+
+
 # Add pipeline directory to path for imports
 pipeline_dir = Path(__file__).parent / "pipeline"
 sys.path.insert(0, str(pipeline_dir))
@@ -99,7 +108,20 @@ def run_pipeline(
     if not os.path.exists(input_video):
         raise FileNotFoundError(f"Input video not found: {input_video}")
 
-    if not os.path.exists(model_path):
+    # Handle OpenVINO directories - validate they contain both .xml and .bin files
+    if _is_openvino_model_dir(model_path):
+        xml_files = list(Path(model_path).glob("*.xml"))
+        bin_files = list(Path(model_path).glob("*.bin"))
+        if not xml_files:
+            raise FileNotFoundError(
+                f"OpenVINO directory '{model_path}' does not contain a .xml model file"
+            )
+        if not bin_files:
+            raise FileNotFoundError(
+                f"OpenVINO directory '{model_path}' does not contain a .bin weights file. "
+                f"OpenVINO models require both .xml (model definition) and .bin (weights) files."
+            )
+    elif not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
     if encode_video and not output_video:

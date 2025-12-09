@@ -45,6 +45,7 @@ class BarpathTogaApp(toga.App):
         self.model_files: List[Path] = []
         self.selected_model: Optional[Path] = None
         self.input_video: Optional[Path] = None
+        self.input_videos: List[Path] = []  # List of videos for batch processing
         self.output_video: Optional[Path] = None
         self.output_dir: Path = Path("outputs")
         self.lift_type: str = "none"
@@ -53,6 +54,19 @@ class BarpathTogaApp(toga.App):
         self._is_running: bool = False
         self._pipeline_task: Optional[asyncio.Task[Any]] = None
         self._cancel_event = threading.Event()
+
+        # Supported video extensions
+        self.video_extensions = [
+            "mp4",
+            "MP4",
+            "avi",
+            "mov",
+            "MOV",
+            "mkv",
+            "MKV",
+            "webm",
+            "WEBM",
+        ]
 
         # --- Main window ---
         self.main_window = toga.MainWindow(
@@ -91,21 +105,32 @@ class BarpathTogaApp(toga.App):
         )
         config_box.add(models_row)
 
-        # Row: Input video file
-        video_row = toga.Box(
+        # Row: Input video files (batch processing)
+        video_label_row = toga.Box(
             style=Pack(direction="row", margin_bottom=6, align_items="center")
         )
-        video_row.add(toga.Label("Input Video File:", style=Pack(width=170)))
-        self.video_input = toga.TextInput(
-            readonly=True,
-            placeholder="Select video file to analyze...",
-            style=Pack(flex=1, margin_right=6),
+        video_label_row.add(toga.Label("Input Videos:", style=Pack(width=170)))
+        video_label_row.add(
+            toga.Button(
+                "Add Videos", on_press=self.on_browse_video, style=Pack(width=90)
+            )
         )
-        video_row.add(self.video_input)
-        video_row.add(
-            toga.Button("Browse", on_press=self.on_browse_video, style=Pack(width=90))
+        config_box.add(video_label_row)
+
+        # Video queue list - scrollable container with unique background
+        self.video_list_container = toga.ScrollContainer(
+            horizontal=True,
+            vertical=True,
+            style=Pack(
+                height=120,
+                margin_bottom=6,
+                background_color="#e8f4f8",
+                margin=5,
+            ),
         )
-        config_box.add(video_row)
+        self.video_list_box = toga.Box(style=Pack(direction="column"))
+        self.video_list_container.content = self.video_list_box
+        config_box.add(self.video_list_container)
 
         # Row: Select model dropdown
         model_row = toga.Box(
@@ -326,30 +351,66 @@ class BarpathTogaApp(toga.App):
             )
 
     async def on_browse_video(self, widget: toga.Widget) -> None:
-        """Browse for input video file."""
+        """Browse for input video files (supports multiple selection)."""
         try:
             path = await self.main_window.dialog(  # type: ignore
                 toga.OpenFileDialog(
-                    title="Select Video File",
-                    file_types=[
-                        "mp4",
-                        "MP4",
-                        "avi",
-                        "mov",
-                        "MOV",
-                        "mkv",
-                        "MKV",
-                        "webm",
-                        "WEBM",
-                    ],
+                    title="Select Video File(s)",
+                    file_types=self.video_extensions,
+                    multiple_select=True,  # KEY: Enable multiple selection
                 )
             )
             if path:
-                self.input_video = Path(path)
-                self.video_input.value = str(path)
-                self.append_log(f"Selected video: {path}")
+                # Handle both single file and multiple files
+                paths = path if isinstance(path, list) else [path]
+
+                for p in paths:
+                    video_path = Path(p)
+                    if video_path not in self.input_videos:
+                        self.input_videos.append(video_path)
+                        self._add_video_row(video_path)  # Add to UI
+                        self.append_log(f"Added video: {p}")
         except Exception as e:
             await self.main_window.error_dialog("Error", f"Could not select file: {e}")  # type: ignore
+
+    def on_remove_video(self, widget: toga.Widget, video_path: Path) -> None:
+        """Remove a video from the queue."""
+        if video_path in self.input_videos:
+            self.input_videos.remove(video_path)
+            # Remove the corresponding row from UI
+            # We need to rebuild the entire list
+            self.video_list_box.clear()
+            for vp in self.input_videos:
+                self._add_video_row(vp)
+            self.append_log(f"Removed video: {video_path}")
+
+    def _add_video_row(self, video_path: Path) -> None:
+        """Add a video row with a remove button to the list."""
+        row = toga.Box(
+            style=Pack(
+                direction="row",
+                margin_bottom=3,
+                margin=5,
+                background_color="#ffffff",
+            )
+        )
+
+        # Video name label
+        label = toga.Label(
+            str(video_path),
+            style=Pack(flex=1, margin_left=5, margin_right=10),
+        )
+        row.add(label)
+
+        # Remove button with more prominent styling
+        remove_btn = toga.Button(
+            "Remove",
+            on_press=lambda widget, vp=video_path: self.on_remove_video(widget, vp),
+            style=Pack(width=80, margin_right=5),
+        )
+        row.add(remove_btn)
+
+        self.video_list_box.add(row)
 
     def _resolve_selected_model(self) -> Optional[Path]:
         """Get the full path of the currently selected model."""
@@ -364,8 +425,8 @@ class BarpathTogaApp(toga.App):
     def on_run_analysis(self, widget: toga.Widget) -> None:
         """Start the analysis pipeline."""
         # Validate inputs
-        if not self.input_video:
-            self.append_log("[ERROR] Please select an input video file")
+        if not self.input_videos:
+            self.append_log("[ERROR] Please add at least one video file")
             return
 
         selected_model = self._resolve_selected_model()
@@ -400,7 +461,12 @@ class BarpathTogaApp(toga.App):
         # Clear log
         self.log_output.value = ""
         self.append_log("=== Starting Barpath Analysis ===")
-        self.append_log(f"Input Video: {self.input_video}")
+        if len(self.input_videos) > 1:
+            self.append_log(f"Batch Mode: Processing {len(self.input_videos)} videos")
+            for idx, vid in enumerate(self.input_videos, 1):
+                self.append_log(f"  {idx}. {vid.name}")
+        else:
+            self.append_log(f"Input Video: {self.input_videos[0]}")
         self.append_log(f"Model: {selected_model}")
         self.append_log(f"Lift Type: {self.lift_type}")
         self.append_log(f"Encode Video: {self.encode_video}")
@@ -424,37 +490,88 @@ class BarpathTogaApp(toga.App):
             run_pipeline = _get_run_pipeline()
             selected_model = self._resolve_selected_model()
 
-            # Run the pipeline generator
-            for step_name, progress_value, message in run_pipeline(
-                input_video=str(self.input_video),
-                model_path=str(selected_model),
-                output_video=str(self.output_video) if self.output_video else None,
-                lift_type=self.lift_type,
-                output_dir=str(self.output_dir),
-                encode_video=self.encode_video,
-                technique_analysis=(self.lift_type != "none"),
-                cancel_event=self._cancel_event,
-            ):
-                # Update UI
-                # Only log if it's not a frame update to avoid freezing/OOM
-                if "frame" not in message.lower() or progress_value is None:
-                    self.append_log(f"[{step_name}] {message}")
+            # Determine if batch processing (multiple videos)
+            is_batch = len(self.input_videos) > 1
+            total_videos = len(self.input_videos)
 
-                if progress_value is not None:
-                    self.progress_bar.value = int(progress_value * 100)
-                    self.progress_label.text = message
+            # Process each video
+            for video_idx, input_video in enumerate(self.input_videos, 1):
+                if self._cancel_event.is_set():
+                    break
+
+                self.append_log(
+                    f"\n=== Processing video {video_idx}/{total_videos}: {input_video.name} ==="
+                )
+
+                # Determine output directory for this video
+                if is_batch:
+                    # Create subfolder for each video
+                    video_output_dir = self.output_dir / input_video.stem
+                    video_output_dir.mkdir(parents=True, exist_ok=True)
                 else:
-                    self.progress_label.text = f"✓ {message}"
+                    # Single video: use main output directory
+                    video_output_dir = self.output_dir
 
-                # Allow UI to update
-                await asyncio.sleep(0.01)
+                # Determine output video path
+                if self.encode_video:
+                    if is_batch:
+                        video_output_path = video_output_dir / "output.mp4"
+                    else:
+                        video_output_path = self.output_video
+                else:
+                    video_output_path = None
+
+                # Run the pipeline generator
+                for step_name, progress_value, message in run_pipeline(
+                    input_video=str(input_video),
+                    model_path=str(selected_model),
+                    output_video=str(video_output_path) if video_output_path else None,
+                    lift_type=self.lift_type,
+                    output_dir=str(video_output_dir),
+                    encode_video=self.encode_video,
+                    technique_analysis=(self.lift_type != "none"),
+                    cancel_event=self._cancel_event,
+                ):
+                    # Update UI
+                    # Only log if it's not a frame update to avoid freezing/OOM
+                    if "frame" not in message.lower() or progress_value is None:
+                        self.append_log(f"[{step_name}] {message}")
+
+                    if progress_value is not None:
+                        # Calculate overall progress including video index
+                        video_progress = (video_idx - 1) / total_videos
+                        step_progress = progress_value / total_videos
+                        overall_progress = video_progress + step_progress
+
+                        self.progress_bar.value = int(overall_progress * 100)
+                        self.progress_label.text = (
+                            f"[{video_idx}/{total_videos}] {message}"
+                        )
+                    else:
+                        self.progress_label.text = (
+                            f"[{video_idx}/{total_videos}] ✓ {message}"
+                        )
+
+                    # Allow UI to update
+                    await asyncio.sleep(0.01)
+
+                self.append_log(
+                    f"✓ Completed video {video_idx}/{total_videos}: {input_video.name}"
+                )
 
             # Success!
-            self.append_log("\n=== Pipeline Complete! ===")
+            self.append_log("\n=== All Videos Complete! ===")
             self.progress_bar.value = 100
             self.progress_label.text = "Analysis complete!"
 
-            if (self.output_dir / "analysis.md").exists():
+            # Enable view analysis button for the last processed video
+            if is_batch:
+                last_video = self.input_videos[-1]
+                analysis_path = self.output_dir / last_video.stem / "analysis.md"
+            else:
+                analysis_path = self.output_dir / "analysis.md"
+
+            if analysis_path.exists():
                 self.view_analysis_button.enabled = True
 
         except InterruptedError:
@@ -485,7 +602,16 @@ class BarpathTogaApp(toga.App):
 
     def on_view_analysis(self, widget: toga.Widget) -> None:
         """Open a dialog to view the analysis report."""
-        analysis_path = self.output_dir / "analysis.md"
+        # Check if batch mode
+        is_batch = len(self.input_videos) > 1
+
+        if is_batch and self.input_videos:
+            # For batch mode, show the last video's analysis
+            last_video = self.input_videos[-1]
+            analysis_path = self.output_dir / last_video.stem / "analysis.md"
+        else:
+            analysis_path = self.output_dir / "analysis.md"
+
         if not analysis_path.exists():
             self.main_window.info_dialog(  # type: ignore[attr-defined]
                 "Info", f"No analysis report found at {analysis_path}"

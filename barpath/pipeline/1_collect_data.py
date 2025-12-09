@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import mediapipe as mp
 import numpy as np
+from hardware_detection import detect_intel_gpu
 from step1_helpers import (
     StabilizationParams,
     create_background_mask,
@@ -29,9 +30,42 @@ LANDMARKS_TO_TRACK = LANDMARK_NAMES
 LANDMARK_ENUMS = get_landmark_enums(LANDMARKS_TO_TRACK)
 
 
-def _looks_like_openvino_dir(path: Path) -> bool:
-    """Return True when the provided path appears to be an OpenVINO export directory."""
-    return path.is_dir() and any("openvino" in part.lower() for part in path.parts)
+def _get_model_path(model_path: Path) -> tuple[str, bool]:
+    """
+    Return the appropriate model path string for YOLO and whether it's OpenVINO.
+
+    If model_path is a directory containing .xml files (OpenVINO format),
+    returns the path to the directory. Otherwise returns the path as-is.
+
+    Returns:
+        tuple: (model_path_str, is_openvino)
+
+    Raises ValueError if the path is invalid.
+    """
+    if model_path.is_dir():
+        # Check for OpenVINO model files
+        xml_files = list(model_path.glob("*.xml"))
+        bin_files = list(model_path.glob("*.bin"))
+
+        if xml_files and bin_files:
+            # OpenVINO model directory
+            print(f"Detected OpenVINO model in: {model_path}")
+            return str(model_path), True
+        elif xml_files:
+            raise ValueError(
+                f"OpenVINO directory missing .bin weights file: {model_path}"
+            )
+        elif bin_files:
+            raise ValueError(
+                f"OpenVINO directory missing .xml model file: {model_path}"
+            )
+        else:
+            raise ValueError(f"Directory does not contain a valid model: {model_path}")
+    elif model_path.is_file():
+        # Regular model file (.pt, .onnx, etc.)
+        return str(model_path), False
+    else:
+        raise ValueError(f"Model path does not exist: {model_path}")
 
 
 # --- Step 1: Data Collection Function ---
@@ -70,18 +104,25 @@ def step_1_collect_data(
     stab_params = StabilizationParams()
 
     # Initialize YOLO Model
-    model_path_str = str(model_path)
-    yolo_device = "cpu"
-
-    print(f"Loading YOLO model: {model_path_str}")
-
     try:
+        model_path_obj = Path(model_path)
+        model_path_str, is_openvino = _get_model_path(model_path_obj)
+        print(f"Loading model: {model_path_str}")
         yolo_model = YOLO(model_path_str, task="detect")
+
+        # Determine device for inference
+        if is_openvino and detect_intel_gpu():
+            yolo_device = "intel:gpu"
+            print("Intel GPU detected - using GPU acceleration for OpenVINO")
+        else:
+            yolo_device = "cpu"
+            if is_openvino:
+                print("No Intel GPU detected - using CPU for OpenVINO")
     except Exception as e:
         cap.release()
         if pose:
             pose.close()
-        raise RuntimeError(f"Error loading YOLO model from {model_path}: {e}")
+        raise RuntimeError(f"Failed to load model: {e}")
 
     # Stabilization state
     prev_gray = None
@@ -121,7 +162,7 @@ def step_1_collect_data(
         if pose:
             results_pose = pose.process(frame_rgb)
 
-        # Run YOLO inference on CPU
+        # Run YOLO inference
         results_yolo = yolo_model(frame, verbose=False, conf=0.25, device=yolo_device)
 
         # 1. Process MediaPipe Data
@@ -324,22 +365,15 @@ def main():
         print(f"Error: Input file not found at {args.input}")
         return
 
-    is_openvino_dir = _looks_like_openvino_dir(model_path)
-
     if not model_path.exists():
         print(f"Error: Model path not found at {args.model}")
         return
 
-    if model_path.is_dir() and not is_openvino_dir:
-        print(
-            "Error: Model directory must include 'openvino' in its name to be treated as an OpenVINO export."
-        )
-        return
-
-    if is_openvino_dir and not any(model_path.glob("*.xml")):
-        print(
-            f"Error: OpenVINO directory '{args.model}' does not contain a .xml model definition."
-        )
+    # Validate model path
+    try:
+        _get_model_path(model_path)  # Returns tuple but we just validate here
+    except ValueError as e:
+        print(f"Error: {e}")
         return
 
     # Consume the generator to run the function

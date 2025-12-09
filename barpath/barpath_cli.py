@@ -105,7 +105,10 @@ python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type
 [dim]# 3. OpenVINO model (Intel CPU optimization)[/dim]
 python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo_openvino_export --lift_type none --no-video
 
-[dim]# 4. Custom output directory[/dim]
+[dim]# 4. Batch processing multiple videos[/dim]
+python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 vid3.mp4 --model yolo.pt --lift_type clean --no-video
+
+[dim]# 5. Custom output directory[/dim]
 python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --output_dir my_results/
 """
     console.print(
@@ -136,7 +139,8 @@ def main():
     parser.add_argument(
         "--input_video",
         required=True,
-        help="Path to the source video file (e.g., 'videos/my_clean.mp4')",
+        nargs="+",  # KEY: Accept one or more arguments
+        help="Path to the source video file(s) (e.g., 'videos/my_clean.mp4' or multiple files for batch processing)",
     )
     parser.add_argument(
         "--model",
@@ -191,13 +195,34 @@ def main():
         # Let's just proceed.
         raise
 
-    # Validate inputs
-    input_video_path = Path(args.input_video)
-    model_path = Path(args.model)
+    # Supported video extensions
+    video_extensions = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 
-    if not input_video_path.exists():
-        print(f"Error: Input video file not found: {args.input_video}", file=sys.stderr)
+    # Process input videos - can be multiple files
+    input_videos = []
+    for video_arg in args.input_video:
+        video_path = Path(video_arg)
+        # Check if it's a valid video file
+        if video_path.suffix.lower() in video_extensions:
+            if video_path.exists():
+                input_videos.append(video_path)
+            else:
+                print(
+                    f"Error: Input video file not found: {video_arg}", file=sys.stderr
+                )
+                sys.exit(1)
+        else:
+            print(f"Warning: Skipping non-video file: {video_arg}", file=sys.stderr)
+
+    if not input_videos:
+        print("Error: No valid video files provided", file=sys.stderr)
         sys.exit(1)
+
+    # Determine if batch processing
+    is_batch = len(input_videos) > 1
+
+    # Validate model
+    model_path = Path(args.model)
 
     is_openvino_dir = _is_openvino_model_dir(args.model)
 
@@ -212,12 +237,19 @@ def main():
         )
         sys.exit(1)
 
-    if is_openvino_dir and not any(model_path.glob("*.xml")):
-        print(
-            f"Error: OpenVINO directory '{args.model}' does not contain a .xml model definition.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    if is_openvino_dir:
+        if not any(model_path.glob("*.xml")):
+            print(
+                f"Error: OpenVINO directory '{args.model}' does not contain a .xml model definition.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not any(model_path.glob("*.bin")):
+            print(
+                f"Error: OpenVINO directory '{args.model}' does not contain a .bin weights file.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Set default output video path if not provided
     if not args.output_video and not args.no_video:
@@ -236,7 +268,14 @@ def main():
     console.print()
 
     console.print("\n[bold]Configuration:[/bold]")
-    console.print(f"  Input Video:  [cyan]{args.input_video}[/cyan]")
+    if is_batch:
+        console.print(
+            f"  Input Videos: [cyan]{len(input_videos)} videos to process[/cyan]"
+        )
+        for i, vid in enumerate(input_videos, 1):
+            console.print(f"    {i}. {vid.name}")
+    else:
+        console.print(f"  Input Video:  [cyan]{input_videos[0]}[/cyan]")
     console.print(f"  Model Source: [cyan]{args.model}[/cyan]")
     if not args.no_video:
         console.print(f"  Output Video: [cyan]{args.output_video}[/cyan]")
@@ -256,79 +295,127 @@ def main():
         console=console,
     ) as progress:
         # Map step names to task IDs (created dynamically)
-        task_map = {}
-
         try:
-            # Run the pipeline and consume progress updates
-            for step_name, prog_value, message in run_pipeline(
-                input_video=args.input_video,
-                model_path=args.model,
-                output_video=args.output_video if not args.no_video else None,
-                lift_type=args.lift_type,
-                output_dir=args.output_dir,
-                encode_video=not args.no_video,
-                technique_analysis=(args.lift_type != "none"),
-            ):
-                # Create task on first encounter of each step
-                if step_name not in task_map and step_name != "complete":
-                    if step_name == "step1":
-                        task_map[step_name] = progress.add_task(
-                            "[cyan]Step 1: Collecting data...", total=100
-                        )
-                    elif step_name == "step2":
-                        task_map[step_name] = progress.add_task(
-                            "[cyan]Step 2: Analyzing data...", total=None
-                        )
-                    elif step_name == "step3":
-                        task_map[step_name] = progress.add_task(
-                            "[cyan]Step 3: Generating graphs...", total=None
-                        )
-                    elif step_name == "step4":
-                        task_map[step_name] = progress.add_task(
-                            "[cyan]Step 4: Rendering video...",
-                            total=100 if not args.no_video else None,
-                        )
-                    elif step_name == "step5":
-                        task_map[step_name] = progress.add_task(
-                            "[cyan]Step 5: Critiquing lift...", total=None
-                        )
+            # Process each video
+            for video_idx, input_video in enumerate(input_videos, 1):
+                console.print(
+                    f"\n[bold cyan]Processing video {video_idx}/{len(input_videos)}: {input_video.name}[/bold cyan]"
+                )
 
-                # Update the corresponding task
-                if step_name in task_map:
-                    task_id = task_map[step_name]
+                # Determine output directory for this video
+                if is_batch:
+                    # Create subfolder for each video
+                    video_output_dir = os.path.join(args.output_dir, input_video.stem)
+                    os.makedirs(video_output_dir, exist_ok=True)
+                else:
+                    # Single video: use main output directory
+                    video_output_dir = args.output_dir
 
-                    if prog_value is not None:
-                        # Update progress bar
-                        progress.update(
-                            task_id,
-                            completed=prog_value * 100,
-                            description=f"[cyan]{message}",
-                        )
+                # Determine output video path
+                if not args.no_video:
+                    if is_batch:
+                        video_output_path = os.path.join(video_output_dir, "output.mp4")
                     else:
-                        # Just update the description for steps without progress
-                        progress.update(
-                            task_id, description=f"[green]✓[/green] {message}"
-                        )
-                        progress.stop_task(task_id)
-                elif step_name == "complete":
-                    # Pipeline complete
-                    pass
+                        video_output_path = args.output_video
+                else:
+                    video_output_path = None
+
+                # Map step names to task IDs (created dynamically per video)
+                task_map = {}
+
+                # Run the pipeline and consume progress updates
+                for step_name, prog_value, message in run_pipeline(
+                    input_video=str(input_video),
+                    model_path=args.model,
+                    output_video=video_output_path,
+                    lift_type=args.lift_type,
+                    output_dir=video_output_dir,
+                    encode_video=not args.no_video,
+                    technique_analysis=(args.lift_type != "none"),
+                ):
+                    # Create task on first encounter of each step
+                    if step_name not in task_map and step_name != "complete":
+                        if step_name == "step1":
+                            task_map[step_name] = progress.add_task(
+                                f"[cyan][{video_idx}/{len(input_videos)}] Step 1: Collecting data...",
+                                total=100,
+                            )
+                        elif step_name == "step2":
+                            task_map[step_name] = progress.add_task(
+                                f"[cyan][{video_idx}/{len(input_videos)}] Step 2: Analyzing data...",
+                                total=None,
+                            )
+                        elif step_name == "step3":
+                            task_map[step_name] = progress.add_task(
+                                f"[cyan][{video_idx}/{len(input_videos)}] Step 3: Generating graphs...",
+                                total=None,
+                            )
+                        elif step_name == "step4":
+                            task_map[step_name] = progress.add_task(
+                                f"[cyan][{video_idx}/{len(input_videos)}] Step 4: Rendering video...",
+                                total=100 if not args.no_video else None,
+                            )
+                        elif step_name == "step5":
+                            task_map[step_name] = progress.add_task(
+                                f"[cyan][{video_idx}/{len(input_videos)}] Step 5: Critiquing lift...",
+                                total=None,
+                            )
+
+                    # Update the corresponding task
+                    if step_name in task_map:
+                        task_id = task_map[step_name]
+
+                        if prog_value is not None:
+                            # Update progress bar
+                            progress.update(
+                                task_id,
+                                completed=prog_value * 100,
+                                description=f"[cyan][{video_idx}/{len(input_videos)}] {message}",
+                            )
+                        else:
+                            # Just update the description for steps without progress
+                            progress.update(
+                                task_id,
+                                description=f"[green]✓[/green] [{video_idx}/{len(input_videos)}] {message}",
+                            )
+                            progress.stop_task(task_id)
+                    elif step_name == "complete":
+                        # Pipeline complete
+                        pass
 
             # Final summary
-            console.print("\n[bold green]✓ Pipeline Complete![/bold green]")
+            console.print("\n[bold green]✓ All Videos Processed![/bold green]")
             console.print("\n[bold]Generated files:[/bold]")
-            console.print(f"  • Output Dir:      [cyan]{args.output_dir}/[/cyan]")
-            console.print(
-                f"  • Raw data:        [cyan]{os.path.join(args.output_dir, 'raw_data.pkl')}[/cyan]"
-            )
-            console.print(
-                f"  • Analysis CSV:    [cyan]{os.path.join(args.output_dir, 'final_analysis.csv')}[/cyan]"
-            )
-            if not args.no_video:
-                console.print(f"  • Output video:    [cyan]{args.output_video}[/cyan]")
+            if is_batch:
+                console.print(f"  • Output Dir:      [cyan]{args.output_dir}/[/cyan]")
+                console.print(
+                    "  • [cyan]Results saved in subfolders for each video[/cyan]"
+                )
+                for vid in input_videos:
+                    subfolder = os.path.join(args.output_dir, vid.stem)
+                    console.print(f"    - {vid.name} → {subfolder}/")
+            else:
+                console.print(f"  • Output Dir:      [cyan]{args.output_dir}/[/cyan]")
+                console.print(
+                    f"  • Raw data:        [cyan]{os.path.join(args.output_dir, 'raw_data.pkl')}[/cyan]"
+                )
+                console.print(
+                    f"  • Analysis CSV:    [cyan]{os.path.join(args.output_dir, 'final_analysis.csv')}[/cyan]"
+                )
+                if not args.no_video:
+                    console.print(
+                        f"  • Output video:    [cyan]{args.output_video}[/cyan]"
+                    )
 
-            # Display Analysis Report if available
-            analysis_path = os.path.join(args.output_dir, "analysis.md")
+            # Display Analysis Report if available (for last video in batch mode)
+            if is_batch and input_videos:
+                last_video = input_videos[-1]
+                analysis_path = os.path.join(
+                    args.output_dir, last_video.stem, "analysis.md"
+                )
+            else:
+                analysis_path = os.path.join(args.output_dir, "analysis.md")
+
             if os.path.exists(analysis_path) and args.lift_type != "none":
                 console.print()
                 try:

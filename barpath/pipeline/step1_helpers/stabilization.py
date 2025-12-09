@@ -16,7 +16,7 @@ class StabilizationParams:
     """Parameters for the global motion stabilization model."""
 
     # Feature detection parameters
-    feature_max_corners = 200
+    feature_max_corners = 250
     feature_quality_level = 0.01
     feature_min_distance = 10
     feature_block_size = 7
