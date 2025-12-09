@@ -112,9 +112,18 @@ class BarpathTogaApp(toga.App):
         video_label_row.add(toga.Label("Input Videos:", style=Pack(width=170)))
         video_label_row.add(
             toga.Button(
-                "Add Videos", on_press=self.on_browse_video, style=Pack(width=90)
+                "Add Videos",
+                on_press=self.on_browse_video,
+                style=Pack(width=90, margin_right=6),
             )
         )
+        self.clear_videos_button = toga.Button(
+            "Clear Videos",
+            on_press=self.on_clear_videos,
+            enabled=False,
+            style=Pack(width=90),
+        )
+        video_label_row.add(self.clear_videos_button)
         config_box.add(video_label_row)
 
         # Video queue list - scrollable container with unique background
@@ -370,6 +379,8 @@ class BarpathTogaApp(toga.App):
                         self.input_videos.append(video_path)
                         self._add_video_row(video_path)  # Add to UI
                         self.append_log(f"Added video: {p}")
+                # Enable clear button after adding videos
+                self.clear_videos_button.enabled = len(self.input_videos) > 0
         except Exception as e:
             await self.main_window.error_dialog("Error", f"Could not select file: {e}")  # type: ignore
 
@@ -383,6 +394,16 @@ class BarpathTogaApp(toga.App):
             for vp in self.input_videos:
                 self._add_video_row(vp)
             self.append_log(f"Removed video: {video_path}")
+            # Update clear button state
+            self.clear_videos_button.enabled = len(self.input_videos) > 0
+
+    def on_clear_videos(self, widget: toga.Widget) -> None:
+        """Clear all videos from the queue."""
+        self.input_videos.clear()
+        self.video_list_box.clear()
+        self.append_log("Cleared all videos")
+        # Disable clear button when no videos
+        self.clear_videos_button.enabled = False
 
     def _add_video_row(self, video_path: Path) -> None:
         """Add a video row with a remove button to the list."""
@@ -411,6 +432,8 @@ class BarpathTogaApp(toga.App):
         row.add(label)
 
         self.video_list_box.add(row)
+        # Enable clear button when videos are added
+        self.clear_videos_button.enabled = True
 
     def _resolve_selected_model(self) -> Optional[Path]:
         """Get the full path of the currently selected model."""
@@ -685,23 +708,14 @@ class BarpathTogaApp(toga.App):
 
 def main() -> None:
     """Main entry point."""
-    # Prefer local project asset for app icon and about dialog
-    repo_assets = Path(__file__).resolve().parent / "assets" / "assets"
-    icon_candidate = repo_assets / "barpath.png"
+    # Path to the app icon
+    icon_path = Path(__file__).resolve().parent / "assets" / "barpath_icon.png"
 
-    # Fallback paths
-    if not icon_candidate.exists():
-        repo_assets = Path(__file__).resolve().parent / "gui" / "assets"
-        icon_candidate = repo_assets / "barpath.png"
-
-    if not icon_candidate.exists():
-        icon_candidate = Path(__file__).resolve().parent / "assets" / "barpath.png"
-
-    if icon_candidate.exists():
+    if icon_path.exists():
         app = BarpathTogaApp(
             "Barpath",
             "org.barpath.app",
-            icon=str(icon_candidate),
+            icon=str(icon_path),
             description="Weightlifting Technique Analysis Tool",
             version="1.0.0",
             author="Barpath Team",

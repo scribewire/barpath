@@ -90,9 +90,11 @@ def calculate_reference_camera_angle(
                 lateral_xz_norm = np.linalg.norm(lateral_xz)
 
                 if lateral_xz_norm > 0.01:
-                    # Angle from camera X-axis
+                    # Angle from camera X-axis (shoulder line relative to camera)
+                    # When lifter faces camera: shoulders perpendicular to view → 90°
+                    # When lifter is perpendicular to camera: shoulders parallel to view → 0°
                     camera_yaw_rad = np.arctan2(
-                        abs(lateral_axis[2]), abs(lateral_axis[0])
+                        abs(lateral_axis[0]), abs(lateral_axis[2])
                     )
                     reference_camera_yaw_deg = np.degrees(camera_yaw_rad)
 
@@ -183,7 +185,9 @@ def calculate_perspective_correction(
     The correction process:
     1. Extracts world landmarks (3D coordinates in meters)
     2. Defines the lifter's lateral axis from shoulders at the FIRST frame
-    3. Calculates camera yaw angle (angle between camera and lifter)
+    3. Calculates camera yaw angle (shoulder line relative to camera view)
+       - 0° = lifter perpendicular to camera (side view, no correction needed)
+       - 90° = lifter facing camera (shoulders perpendicular to view, max correction)
     4. Applies a scaling factor to observed horizontal displacement based on angle
     5. Correction factor = 1 / cos(yaw_angle) to expand compressed lateral movement
 

@@ -99,16 +99,18 @@ def check_clean_faults(df, phases):
     if not p1.empty:
         # Check 1: Positive acceleration
         if "accel_y_smooth" in p1.columns:
-            # Check if mean acceleration is non-positive
-            if p1["accel_y_smooth"].mean() <= 0:
+            # Check if mean acceleration is significantly negative (below -200 px/s²)
+            # Elite lifters often have controlled, slow starts with negative acceleration
+            # Only flag if dramatically slowing down
+            if p1["accel_y_smooth"].mean() < -200:
                 critiques.append("First Pull: You are slowing down in the first pull")
 
         # Check 2: Vertical path
         if "barbell_x_stable" in p1.columns:
             x_start = p1["barbell_x_stable"].iloc[0]
             max_dev = (p1["barbell_x_stable"] - x_start).abs().max()
-            # Threshold: 5% of frame height (proxy for scale)
-            if max_dev > (frame_height * 0.05):
+            # Threshold: 8% of frame height (elite lifters may have some horizontal movement)
+            if max_dev > (frame_height * 0.08):
                 critiques.append(
                     "First Pull: The bar is being kicked out/pulled back too far"
                 )
@@ -136,34 +138,43 @@ def check_clean_faults(df, phases):
         if "left_ankle_y" in p2.columns:
             start_y = p2[["left_ankle_y", "right_ankle_y"]].mean(axis=1).iloc[0]
             end_y = p2[["left_ankle_y", "right_ankle_y"]].mean(axis=1).iloc[-1]
-            # If ankles rose significantly (> 2% frame height)
-            if (start_y - end_y) > (frame_height * 0.02):
+            # If ankles rose significantly (> 5% frame height for clear early jump)
+            if (start_y - end_y) > (frame_height * 0.05):
                 critiques.append("Second Pull: You are jumping too soon")
 
         # Check 3: Straight arms
+        # Note: Elite lifters may start arm pull at end of second pull, so only flag
+        # if arms bend very early (well before extension)
         if "left_elbow_angle" in p2.columns:
-            min_elbow = p2[["left_elbow_angle", "right_elbow_angle"]].min().min()
-            if min_elbow < 160:
-                critiques.append("Second Pull: You are bending your arms too early")
+            # Check first half of second pull only
+            mid = len(p2) // 2
+            if mid > 0:
+                min_elbow_first_half = (
+                    p2[["left_elbow_angle", "right_elbow_angle"]].iloc[:mid].min().min()
+                )
+                if min_elbow_first_half < 140:
+                    critiques.append("Second Pull: You are bending your arms too early")
 
     # --- Third Pull (T2 -> T3) ---
     p3 = get_phase_df(t2, t3)
     if not p3.empty:
-        # Check 1: Hips descend within 0.1 seconds
+        # Check 1: Hips descend within reasonable time for heavy lifts
         hip_peak_y = df.loc[t2, "hip_y_avg"]
-        # Define "descend" as dropping 5% of frame height
-        threshold_drop = frame_height * 0.05
+        # Define "descend" as dropping 8% of frame height
+        threshold_drop = frame_height * 0.08
 
         drop_mask = p3["hip_y_avg"] > (hip_peak_y + threshold_drop)
         if drop_mask.any():
             drop_frame = drop_mask.idxmax()
             time_taken = df.loc[drop_frame, "time_s"] - df.loc[t2, "time_s"]
-            if time_taken > 0.1:
+            # Elite lifters may take longer on heavy lifts (up to 0.6s is acceptable)
+            if time_taken > 0.6:
                 critiques.append("Third Pull: You are getting stuck in the transition")
         else:
             # If hips never dropped that much, check total duration
             duration = df.loc[t3, "time_s"] - df.loc[t2, "time_s"]
-            if duration > 0.2:  # Fallback check if drop is small but slow
+            # Increase tolerance for total third pull duration (heavy lifts = slower catch)
+            if duration > 0.9:
                 critiques.append("Third Pull: You are getting stuck in the transition")
 
     # --- Recovery (T3 -> T4) ---
@@ -171,9 +182,15 @@ def check_clean_faults(df, phases):
     if not p4.empty:
         # Check 1: Continuous upward movement
         if "vel_y_smooth" in p4.columns:
-            # If velocity dips below 0 (downward movement) significantly
-            # vel > 0 is UP. vel < 0 is DOWN.
-            if (p4["vel_y_smooth"] < -10).any():  # Tolerance of 10px/s
+            # Elite lifters may have minor downward adjustments during recovery
+            # Only flag if there's sustained or severe downward movement
+            # Check for multiple frames or very negative velocity
+            severe_downward = (p4["vel_y_smooth"] < -100).sum()
+            moderate_downward = (p4["vel_y_smooth"] < -50).sum()
+
+            # Flag if more than 20% of recovery has moderate downward movement
+            # or any severe downward movement
+            if severe_downward > 5 or moderate_downward > (len(p4) * 0.2):
                 critiques.append("Recovery: Your recovery is too tiring")
 
     return critiques

@@ -9,7 +9,7 @@ import pandas as pd
 from pandas import Series
 from scipy.signal import savgol_filter
 from step2_helpers import calculate_perspective_correction
-from utils import calculate_angle, calculate_lifter_angle
+from utils import calculate_angle
 
 
 # --- Step 2: Data Analysis Function ---
@@ -91,8 +91,6 @@ def step_2_analyze_data(input_data, output_path):
         )
 
     # --- Calculate Angles ---
-    df["lifter_angle_deg"] = df["landmarks"].apply(calculate_lifter_angle)
-
     def get_pixel_pos(row, name):
         x_norm = row.get(f"{name}_x")
         y_norm = row.get(f"{name}_y")

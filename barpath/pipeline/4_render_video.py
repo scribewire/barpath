@@ -135,7 +135,7 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
     # Initialize persistent state for "extra frames" rendering
     last_shake_x = 0.0
     last_shake_y = 0.0
-    last_lifter_angle = np.nan
+    last_camera_angle = np.nan
 
     # Performance tracking for FPS display
     last_iter_timestamp = time.perf_counter()
@@ -159,8 +159,8 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
             if not pd.isna(row.get("total_shake_x")):
                 last_shake_x = row["total_shake_x"]
                 last_shake_y = row["total_shake_y"]
-            if not pd.isna(row.get("lifter_angle_deg")):
-                last_lifter_angle = row["lifter_angle_deg"]
+            if not pd.isna(row.get("camera_yaw_deg")):
+                last_camera_angle = row["camera_yaw_deg"]
 
             current_shake_x = last_shake_x
             current_shake_y = last_shake_y
@@ -170,7 +170,7 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
             draw_skeleton = pose_enabled
             draw_box = True
 
-            lifter_angle = row.get("lifter_angle_deg", np.nan)
+            camera_angle = row.get("camera_yaw_deg", np.nan)
             time_s = row.get("time_s", frame_count / fps)
 
             # Strings for parsing
@@ -187,7 +187,7 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
             draw_skeleton = False
             draw_box = False
 
-            lifter_angle = last_lifter_angle
+            camera_angle = last_camera_angle
             time_s = frame_count / fps
 
             landmarks_str = "{}"
@@ -252,8 +252,8 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
         # --- Draw Legend and Info Text ---
         last_y = draw_legend(frame, LEGEND_COLORS)
 
-        if not pd.isna(lifter_angle):
-            angle_text = f"Lifter Angle: {lifter_angle:.1f} deg"
+        if not pd.isna(camera_angle):
+            angle_text = f"Camera Angle: {camera_angle:.1f} deg"
             cv2.putText(
                 frame,
                 angle_text,
