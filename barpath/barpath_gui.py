@@ -395,20 +395,20 @@ class BarpathTogaApp(toga.App):
             )
         )
 
-        # Video name label
-        label = toga.Label(
-            str(video_path),
-            style=Pack(flex=1, margin_left=5, margin_right=10),
-        )
-        row.add(label)
-
         # Remove button with more prominent styling
         remove_btn = toga.Button(
             "Remove",
             on_press=lambda widget, vp=video_path: self.on_remove_video(widget, vp),
-            style=Pack(width=80, margin_right=5),
+            style=Pack(width=80, margin_left=5),
         )
         row.add(remove_btn)
+
+        # Video name label
+        label = toga.Label(
+            str(video_path),
+            style=Pack(flex=1, margin_left=10, margin_right=5),
+        )
+        row.add(label)
 
         self.video_list_box.add(row)
 
