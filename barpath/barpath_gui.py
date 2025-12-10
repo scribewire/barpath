@@ -70,64 +70,73 @@ class BarpathTogaApp(toga.App):
 
         # --- Main window ---
         self.main_window = toga.MainWindow(
-            title="Barpath - Weightlifting Analysis Tool"
+            title="Barpath - Weightlifting Analysis Tool", size=(750, 550)
         )
 
         # Root layout
         root_box = toga.Box(style=Pack(direction="column", margin=10))
 
-        # --- Configuration panel ---
-        config_label = toga.Label(
-            "Configuration", style=Pack(font_weight="bold", margin_bottom=6)
-        )
-        root_box.add(config_label)
+        # --- Top horizontal layout: Left (videos) and Right (configuration) ---
+        top_horizontal_box = toga.Box(style=Pack(direction="row", margin_bottom=10))
 
-        config_box = toga.Box(
-            style=Pack(direction="column", margin=6, margin_bottom=10)
+        # --- Left box: Video management ---
+        left_box = toga.Box(
+            style=Pack(direction="column", margin=6, margin_right=10, flex=0.65)
         )
-        root_box.add(config_box)
 
-        # Row: Input video files (batch processing)
-        video_label_row = toga.Box(
+        video_label = toga.Label(
+            "Input Videos", style=Pack(font_weight="bold", margin_bottom=6)
+        )
+        left_box.add(video_label)
+
+        # Row: Add/Clear buttons
+        button_row = toga.Box(
             style=Pack(direction="row", margin_bottom=6, align_items="center")
         )
-        video_label_row.add(toga.Label("Input Videos:", style=Pack(width=170)))
-        video_label_row.add(
+        button_row.add(
             toga.Button(
                 "Add Videos",
                 on_press=self.on_browse_video,
-                style=Pack(width=90, margin_right=6),
+                style=Pack(flex=1, margin_right=6),
             )
         )
         self.clear_videos_button = toga.Button(
             "Clear Videos",
             on_press=self.on_clear_videos,
             enabled=False,
-            style=Pack(width=90),
+            style=Pack(flex=1),
         )
-        video_label_row.add(self.clear_videos_button)
-        config_box.add(video_label_row)
+        button_row.add(self.clear_videos_button)
+        left_box.add(button_row)
 
         # Video queue list - scrollable container with unique background
         self.video_list_container = toga.ScrollContainer(
             horizontal=True,
             vertical=True,
             style=Pack(
-                height=120,
-                margin_bottom=6,
-                background_color="#e8f4f8",
+                flex=1,
                 margin=5,
             ),
         )
         self.video_list_box = toga.Box(style=Pack(direction="column"))
         self.video_list_container.content = self.video_list_box
-        config_box.add(self.video_list_container)
+        left_box.add(self.video_list_container)
+
+        top_horizontal_box.add(left_box)
+
+        # --- Right box: Configuration panel ---
+        config_box = toga.Box(style=Pack(direction="column", margin=6, flex=0.35))
+
+        config_label = toga.Label(
+            "Configuration", style=Pack(font_weight="bold", margin_bottom=6)
+        )
+        config_box.add(config_label)
 
         # Row: Select model dropdown
         model_row = toga.Box(
             style=Pack(direction="row", margin_bottom=6, align_items="center")
         )
-        model_row.add(toga.Label("Select Model:", style=Pack(width=170)))
+        model_row.add(toga.Label("Select Model:", style=Pack(width=100)))
         self.model_select = toga.Selection(
             items=["(Select directory first)"],
             style=Pack(flex=1),
@@ -140,23 +149,26 @@ class BarpathTogaApp(toga.App):
         lift_row = toga.Box(
             style=Pack(direction="row", margin_bottom=6, align_items="center")
         )
-        lift_row.add(toga.Label("Lift Type:", style=Pack(width=170)))
+        lift_row.add(toga.Label("Lift Type:", style=Pack(width=100)))
         self.lift_select = toga.Selection(
-            items=["none", "clean", "snatch"], style=Pack(width=160)
+            items=["none", "clean", "snatch"], style=Pack(flex=1)
         )
         self.lift_select.value = "none"
         lift_row.add(self.lift_select)
         config_box.add(lift_row)
 
+        top_horizontal_box.add(config_box)
+        root_box.add(top_horizontal_box)
+
         # Row: Output directory
         output_dir_row = toga.Box(
             style=Pack(direction="row", margin_bottom=6, align_items="center")
         )
-        output_dir_row.add(toga.Label("Output Directory:", style=Pack(width=170)))
+        output_dir_row.add(toga.Label("Output Directory:", style=Pack(width=120)))
         self.output_dir_input = toga.TextInput(
             value="outputs",
             placeholder="outputs",
-            style=Pack(flex=1),
+            style=Pack(flex=1, background_color="#E4E5F1"),
         )
         output_dir_row.add(self.output_dir_input)
         output_dir_row.add(
@@ -166,7 +178,7 @@ class BarpathTogaApp(toga.App):
                 style=Pack(width=90, margin_left=6),
             )
         )
-        config_box.add(output_dir_row)
+        root_box.add(output_dir_row)
 
         # --- Progress section ---
         progress_label = toga.Label(
@@ -184,14 +196,15 @@ class BarpathTogaApp(toga.App):
 
         # --- Log/Output area ---
         log_label = toga.Label(
-            "Log Output", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))
+            "Output Log",
+            style=Pack(font_weight="bold", margin=(10, 0, 6, 0)),
         )
         root_box.add(log_label)
 
         self.log_output = toga.MultilineTextInput(
             readonly=True,
             placeholder="Pipeline output will appear here...",
-            style=Pack(flex=1, margin=6, height=200),
+            style=Pack(flex=1, margin=6, height=150, background_color="#E4E5F1"),
         )
         root_box.add(self.log_output)
 
@@ -229,7 +242,7 @@ class BarpathTogaApp(toga.App):
     # ------------------------------------------------------------------
 
     def append_log(self, text: str) -> None:
-        """Append text to the log output."""
+        """Append text to the output log."""
         current = self.log_output.value or ""
         self.log_output.value = current + text + "\n"
         # Auto-scroll to bottom (Toga doesn't have direct scroll control, but this helps)
@@ -348,7 +361,7 @@ class BarpathTogaApp(toga.App):
                 direction="row",
                 margin_bottom=3,
                 margin=5,
-                background_color="#ffffff",
+                background_color="#E4E5F1",
             )
         )
 
