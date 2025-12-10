@@ -87,24 +87,6 @@ class BarpathTogaApp(toga.App):
         )
         root_box.add(config_box)
 
-        # Row: YOLO models directory
-        models_row = toga.Box(
-            style=Pack(direction="row", margin_bottom=6, align_items="center")
-        )
-        models_row.add(toga.Label("YOLO Models Directory:", style=Pack(width=170)))
-        self.model_dir_input = toga.TextInput(
-            readonly=True,
-            placeholder="Select directory containing YOLO model files...",
-            style=Pack(flex=1, margin_right=6),
-        )
-        models_row.add(self.model_dir_input)
-        models_row.add(
-            toga.Button(
-                "Browse", on_press=self.on_browse_models_dir, style=Pack(width=90)
-            )
-        )
-        config_box.add(models_row)
-
         # Row: Input video files (batch processing)
         video_label_row = toga.Box(
             style=Pack(direction="row", margin_bottom=6, align_items="center")
@@ -165,32 +147,6 @@ class BarpathTogaApp(toga.App):
         self.lift_select.value = "none"
         lift_row.add(self.lift_select)
         config_box.add(lift_row)
-
-        # Row: Encode video toggle
-        encode_row = toga.Box(
-            style=Pack(direction="row", margin_bottom=6, align_items="center")
-        )
-        self.encode_switch = toga.Switch(
-            "Generate output video",
-            value=True,
-            on_change=self.on_encode_toggle,
-            style=Pack(flex=1),
-        )
-        encode_row.add(self.encode_switch)
-        config_box.add(encode_row)
-
-        # Row: Output video path (conditionally visible)
-        self.output_video_row = toga.Box(
-            style=Pack(direction="row", margin_bottom=6, align_items="center")
-        )
-        self.output_video_row.add(toga.Label("Output Video:", style=Pack(width=170)))
-        self.output_video_input = toga.TextInput(
-            value="",
-            placeholder="Leave empty for default (outputs/output.mp4)",
-            style=Pack(flex=1),
-        )
-        self.output_video_row.add(self.output_video_input)
-        config_box.add(self.output_video_row)
 
         # Row: Output directory
         output_dir_row = toga.Box(
@@ -288,7 +244,6 @@ class BarpathTogaApp(toga.App):
     def _populate_model_files(self, directory: Path) -> None:
         """Populate the model selection dropdown with supported model files and OpenVINO exports."""
         self.model_dir = directory
-        self.model_dir_input.value = str(directory)
 
         # Find all .pt and .onnx files
         pt_files = list(directory.glob("*.pt"))
@@ -339,25 +294,6 @@ class BarpathTogaApp(toga.App):
             self.append_log(f"[ERROR] Could not open output directory: {e}")
         else:
             self.append_log(f"[INFO] Opened output directory: {target_path}")
-
-    def on_encode_toggle(self, widget: toga.Widget) -> None:
-        """Handle encode video toggle."""
-        self.encode_video = self.encode_switch.value
-        # Enable/disable output video input based on checkbox state
-        self.output_video_input.enabled = self.encode_video
-
-    async def on_browse_models_dir(self, widget: toga.Widget) -> None:
-        """Browse for models directory."""
-        try:
-            path = await self.main_window.dialog(  # type: ignore
-                toga.SelectFolderDialog(title="Select Models Directory")
-            )
-            if path:
-                self._populate_model_files(Path(path))
-        except Exception as e:
-            await self.main_window.error_dialog(  # type: ignore[attr-defined]
-                "Error", f"Could not select directory: {e}"
-            )
 
     async def on_browse_video(self, widget: toga.Widget) -> None:
         """Browse for input video files (supports multiple selection)."""
@@ -466,20 +402,8 @@ class BarpathTogaApp(toga.App):
             if self.output_dir_input.value
             else "outputs"
         )
-        self.encode_video = bool(self.encode_switch.value)
-
-        if self.encode_video:
-            output_value = (
-                str(self.output_video_input.value)
-                if self.output_video_input.value
-                else ""
-            )
-            if output_value:
-                self.output_video = Path(output_value)
-            else:
-                self.output_video = self.output_dir / "output.mp4"
-        else:
-            self.output_video = None
+        self.encode_video = True
+        self.output_video = self.output_dir / "output.mp4"
 
         # Clear log
         self.log_output.value = ""
@@ -492,7 +416,7 @@ class BarpathTogaApp(toga.App):
             self.append_log(f"Input Video: {self.input_videos[0]}")
         self.append_log(f"Model: {selected_model}")
         self.append_log(f"Lift Type: {self.lift_type}")
-        self.append_log(f"Encode Video: {self.encode_video}")
+
         self.append_log(f"Output Dir: {self.output_dir}")
         self.append_log("")
 
