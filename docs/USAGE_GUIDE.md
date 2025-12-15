@@ -27,13 +27,32 @@ The easiest way to analyze a video:
 python barpath/barpath_gui.py
 ```
 
-The GUI provides:
-- 📂 Interactive file/directory selection
-- 🎯 Automatic model detection
-- ⚡ Hardware acceleration selection (CPU, OpenVINO, etc.)
-- 📊 Real-time progress tracking
-- 📝 Live log output
-- 👁️ View analysis reports
+The GUI features a clean tabbed interface with four main sections:
+
+#### **📂 Files Tab**
+- Add one or more video files for analysis
+- Clear videos from the queue
+- Select output directory for results
+- View selected videos before running analysis
+
+#### **⚙️ Settings Tab**
+- Automatically detects available models from `barpath/models`
+- Select a model from the available options
+- Choose lift type: **none** (kinematics only) or **clean** (with technique critique)
+- Models appear as buttons once detected
+
+#### **▶️ Analyze Tab**
+- Run the analysis pipeline
+- Cancel analysis if needed
+- Monitor progress with progress bar and real-time status updates
+- View detailed logs rendered as formatted HTML with color coding
+- Logs show all steps: model loading, stabilization, analysis, and report generation
+
+#### **📊 Analysis Tab**
+- View the generated lift analysis report automatically
+- Analysis report is rendered as beautifully formatted HTML from the `analysis.md` file
+- Includes kinematic data, graphs, technique findings, and recommendations
+- Report updates automatically when a new analysis completes
 
 ### Using the Command Line
 

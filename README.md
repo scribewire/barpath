@@ -16,6 +16,8 @@
 ## ✨ Features
 
 - **🖥️ Dual Interface**: Command-line tool for batch processing and GUI for interactive analysis
+  - **GUI**: Modern tabbed interface with Files, Settings, Analyze, and Analysis tabs
+  - **CLI**: Script-friendly command-line tool for batch processing
 - **🎯 Camera Shake Stabilization**: Uses Lucas-Kanade optical flow on background features to create perfectly stabilized bar path tracking
 - **📐 3D Orientation Detection**: Automatically detects lifter orientation using MediaPipe's pseudo-depth (z-coordinate)
 - **⚙️ Hardware-Accelerated Inference**: CPU-optimized inference with optional acceleration:
@@ -30,6 +32,10 @@
   - Skeleton overlay with stabilized bar path visualization
   - Color-coded bar path phases (first/second/third pull)
   - Persistent barpath overlay at the end of the lift for easier review
+- **📋 Beautiful Analysis Reports**: Markdown-based reports rendered as formatted HTML
+  - Kinematic data and graphs
+  - Technique findings and recommendations
+  - Automatically displayed in the GUI Analysis tab
 - **🔍 Rule-Based Technique Critique**: Identifies common faults in Olympic lifts:
   - Early arm bend
   - Incomplete extension
@@ -148,7 +154,28 @@ python barpath/barpath_gui.py
 
 ## 🚀 Quick Start
 
-For comprehensive usage instructions, including GUI and CLI usage, command-line options, examples, and running individual pipeline steps, see the [**USAGE_GUIDE.md**](docs/USAGE_GUIDE.md).
+### GUI (Recommended)
+
+```bash
+python barpath/barpath_gui.py
+```
+
+Then:
+1. **Files Tab** → Select video(s) and output directory
+2. **Settings Tab** → Choose model and lift type
+3. **Analyze Tab** → Run analysis and monitor progress
+4. **Analysis Tab** → View the generated report
+
+### Command Line
+
+```bash
+python barpath/barpath_cli.py \
+  --input_video "lift.mp4" \
+  --model "models/yolo11s.pt" \
+  --lift_type clean
+```
+
+For comprehensive usage instructions, including detailed GUI workflow, CLI options, examples, and running individual pipeline steps, see the [**USAGE_GUIDE.md**](docs/USAGE_GUIDE.md).
 
 ## 📦 Building Installers
 
