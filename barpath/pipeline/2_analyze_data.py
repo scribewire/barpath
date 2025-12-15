@@ -9,6 +9,8 @@ import pandas as pd
 from pandas import Series
 from scipy.signal import savgol_filter
 from step2_helpers import calculate_perspective_correction
+from step5_helpers.classics_phase_detection import identify_classics_phases
+from step5_helpers.clean import compute_bar_phase_from_clean_phases
 from utils import calculate_angle
 
 
@@ -19,6 +21,9 @@ def step_2_analyze_data(input_data, output_path):
     # Unpack the input data
     metadata = input_data.get("metadata", {})
     df_list = input_data.get("data", [])
+
+    # Lift type may be provided by Step 1 via metadata
+    lift_type = str(metadata.get("lift_type", "none")).lower()
 
     if not df_list:
         print("Error: No data found in pickle file.")
@@ -236,7 +241,8 @@ def step_2_analyze_data(input_data, output_path):
     # Calculate velocity from smoothed position
     df["vel_y_px_s"] = (df["barbell_y_smooth"].diff() / df["dt"]) * -1
 
-    # --- NEW: Calculate Bar Path Phases ---
+    # --- Calculate Bar Path Phases ---
+    # First, always create vel_y_smooth (needed for acceleration later)
     # 1. Interpolate and fill NaNs to create a continuous velocity signal for smoothing
     vel_filled = df["vel_y_px_s"].interpolate(method="linear").fillna(0)
 
@@ -249,26 +255,54 @@ def step_2_analyze_data(input_data, output_path):
         print("Warning: Not enough data to smooth velocity. Phases may be noisy.")
         df["vel_y_smooth"] = vel_filled
 
-    # 3. Define a velocity threshold to ignore minor jitters (5% of peak, or 10px/s)
-    vel_threshold = max(10, df["vel_y_smooth"].abs().max() * 0.05)
-    print(f"Using velocity threshold of {vel_threshold:.2f} px/s for phase change.")
+    # Now determine phases based on lift type
+    # Clean: use clean-specific phase logic from Step 5 helpers (t0..t4), then map to bar_phase
+    # Other lift types: use kinematic (velocity) zero-crossing phase detection
+    if lift_type == "clean":
+        phases = identify_classics_phases(df)
+        if phases:
+            df["bar_phase"] = compute_bar_phase_from_clean_phases(df, phases)
+            df["phase_change"] = df["bar_phase"].diff().fillna(0).ne(0)
+        else:
+            print(
+                "Warning: Could not identify clean phases for bar_phase. Falling back to velocity-based phase detection."
+            )
+            lift_type = "none"
 
-    # 4. Determine direction state (1=Up, -1=Down)
-    df["direction_state"] = 0
-    df.loc[df["vel_y_smooth"] > vel_threshold, "direction_state"] = 1
-    df.loc[df["vel_y_smooth"] < -vel_threshold, "direction_state"] = -1
+    if lift_type != "clean":
+        # 3. Define a velocity threshold to ignore minor jitters (5% of peak, or 10px/s)
+        vel_threshold = max(10, df["vel_y_smooth"].abs().max() * 0.05)
+        print(f"Using velocity threshold of {vel_threshold:.2f} px/s for phase change.")
 
-    # 5. Fill gaps (0s) with the previous valid state
-    df["direction_state"] = (
-        df["direction_state"].replace(0, np.nan).ffill().fillna(1)
-    )  # Default to 1 (Up) at start
+        # 4. Detect phases based on zero-crossings (actual direction changes)
+        # Find where velocity changes sign
+        vel_array = np.asarray(df["vel_y_smooth"], dtype=np.float64)
+        vel_safe = np.nan_to_num(vel_array, nan=0.0)
+        vel_signs = np.sign(vel_safe)
+        sign_changes_diff = np.diff(vel_signs)
+        zero_cross_mask = sign_changes_diff != 0
+        zero_cross_indices = np.where(zero_cross_mask)[0] + 1  # +1 to adjust for diff
 
-    # 6. Find where the state *changes*
-    df["phase_change"] = df["direction_state"].diff().ne(0)
+        # 5. Create phase change detection array
+        phase_changes = np.zeros(len(df), dtype=bool)
 
-    # 7. Create the phase number by taking a cumulative sum of the changes
-    df["bar_phase"] = df["phase_change"].cumsum()
-    # --- End new block ---
+        # 6. Validate each zero crossing: only mark as phase change if threshold is exceeded nearby
+        for zc_idx in zero_cross_indices:
+            if zc_idx < len(vel_array):
+                # Check magnitude in window around zero crossing
+                window_start = max(0, zc_idx - 2)
+                window_end = min(len(vel_array), zc_idx + 3)
+                max_vel_magnitude = np.nanmax(
+                    np.abs(vel_array[window_start:window_end])
+                )
+
+                # Valid phase change: zero crossing with sufficient magnitude
+                if max_vel_magnitude > vel_threshold:
+                    phase_changes[zc_idx] = True
+
+        # 7. Assign phase numbers based on zero-crossing changes
+        df["phase_change"] = phase_changes
+        df["bar_phase"] = np.cumsum(phase_changes).astype(int)
 
     # --- Calculate Perspective Correction (if world landmarks available) ---
     # This happens after barbell_x_stable and barbell_y_stable are calculated

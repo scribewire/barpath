@@ -18,22 +18,19 @@ from utils import (
 # --- Constants ---
 # NEW: Updated legend colors (using COLOR_SCHEME from utils)
 LEGEND_COLORS = {
-    "Torso": COLOR_SCHEME["Torso"],
-    "Left Arm": COLOR_SCHEME["Left Arm"],
-    "Right Arm": COLOR_SCHEME["Right Arm"],
-    "Left Leg": COLOR_SCHEME["Left Leg"],
-    "Right Leg": COLOR_SCHEME["Right Leg"],
     "Barbell Box": COLOR_SCHEME["Barbell Box"],
-    "Path (Up)": (0, 0, 255),  # Red
-    "Path (Down)": (0, 165, 255),  # Orange
-    "Path (Up 2)": (0, 255, 0),  # Green
+    "First Pull": (0, 0, 255),  # Red
+    "Second Pull": (0, 165, 255),  # Orange
+    "Third Pull": (0, 255, 0),  # Green
+    "Recovery": (255, 0, 255),  # Magenta
 }
 
-# BGR color map for phases
+# BGR color map for phases (matching clean lift phases)
 PHASE_COLORS_BGR = {
-    0: (0, 0, 255),  # Phase 0: Red
-    1: (0, 165, 255),  # Phase 1: Orange
-    2: (0, 255, 0),  # Phase 2: Green
+    0: (0, 0, 255),  # Phase 0 (First Pull): Red
+    1: (0, 165, 255),  # Phase 1 (Second Pull): Orange
+    2: (0, 255, 0),  # Phase 2 (Third Pull): Green
+    3: (255, 0, 255),  # Phase 3 (Recovery): Magenta
 }
 
 # Skeleton connections to draw
@@ -171,7 +168,6 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
             draw_box = True
 
             camera_angle = row.get("camera_yaw_deg", np.nan)
-            time_s = row.get("time_s", frame_count / fps)
 
             # Strings for parsing
             landmarks_str = row.get("landmarks_str", "{}") if pose_enabled else "{}"
@@ -188,7 +184,6 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
             draw_box = False
 
             camera_angle = last_camera_angle
-            time_s = frame_count / fps
 
             landmarks_str = "{}"
             barbell_box_str = ""
@@ -263,28 +258,6 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
                 (255, 255, 255),
                 2,
             )
-
-        time_text = f"Time: {time_s:.2f}s"
-        cv2.putText(
-            frame,
-            time_text,
-            (15, last_y + 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
-
-        frame_text = f"Frame: {frame_count}"
-        cv2.putText(
-            frame,
-            frame_text,
-            (15, last_y + 90),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
 
         out.write(frame)
 

@@ -320,6 +320,7 @@ def step_1_collect_data(
             "frame_width": frame_width,
             "frame_height": frame_height,
             "fps": fps,
+            "lift_type": lift_type,
             "total_frames_processed": len(raw_data_list),
         },
         "data": raw_data_list,

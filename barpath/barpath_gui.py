@@ -373,6 +373,11 @@ class BarpathTogaApp(toga.App):
         self.run_button = toga.Button(
             "Run Analysis", on_press=self.on_run_analysis, style=Pack(margin_right=6)
         )
+        self.view_results_button = toga.Button(
+            "View Results",
+            on_press=self.on_open_output_dir,
+            style=Pack(margin_right=6),
+        )
         self.cancel_button = toga.Button(
             "Cancel",
             on_press=self.on_cancel_analysis,
@@ -381,6 +386,7 @@ class BarpathTogaApp(toga.App):
         )
 
         controls.add(self.run_button)
+        controls.add(self.view_results_button)
         controls.add(self.cancel_button)
         content.add(controls)
 

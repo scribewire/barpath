@@ -47,6 +47,7 @@ The GUI features a clean tabbed interface with four main sections:
 - Monitor progress with progress bar and real-time status updates
 - View detailed logs rendered as formatted HTML with color coding
 - Logs show all steps: model loading, stabilization, analysis, and report generation
+- **View Results** button opens the output folder to access generated files (graphs, CSV, video, report)
 
 #### **📊 Analysis Tab**
 - View the generated lift analysis report automatically
@@ -328,9 +329,13 @@ Located in `graphs/` subdirectory (generated in Step 3):
 
 #### Standard Graphs (Always Generated)
 
-- **`barbell_xy_stable_path.png`**
-  - 2D bar path diagram (stabilized)
-  - Colored by movement phase (up, down)
+- **`barbell_xy_stable_path.png`** & **`barbell_xy_smooth_path.png`** (unstabilized and smoothed versions)
+  - 2D bar path diagram showing barbell trajectory
+  - **Colored by lift phase** (when `lift_type == "clean"`):
+    - 🔴 **Red**: Phase 0 (First Pull)
+    - 🟠 **Orange**: Phase 1 (Second Pull)
+    - 🟢 **Green**: Phase 2 (Third Pull / Turnover)
+    - 🟣 **Magenta**: Phase 3 (Recovery)
   - Shows true bar trajectory as detected
   - Same horizontal scale as corrected graph (for comparison)
 
@@ -356,7 +361,11 @@ Located in `graphs/` subdirectory (generated in Step 3):
   - **Uses same horizontal scale as `barbell_xy_stable_path.png`** for direct comparison
   - Shows true lateral displacement if camera were perpendicular
   - Displays detected camera angle (reference frame)
-  - Colored by movement phase
+  - **Colored by lift phase** (same color scheme as bar path graphs):
+    - 🔴 **Red**: Phase 0 (First Pull)
+    - 🟠 **Orange**: Phase 1 (Second Pull)
+    - 🟢 **Green**: Phase 2 (Third Pull / Turnover)
+    - 🟣 **Magenta**: Phase 3 (Recovery)
   - Difference between this and uncorrected path shows camera angle effect
 
 ### CSV Data Structure
@@ -372,7 +381,7 @@ Located in `graphs/` subdirectory (generated in Step 3):
 - `vel_y_smooth` - Vertical velocity (px/s)
 - `accel_y_smooth` - Vertical acceleration (px/s²)
 - `specific_power_y_smooth` - Power-to-mass ratio proxy
-- `bar_phase` - Movement phase (1 = up, -1 = down, 0 = transitional)
+- `bar_phase` - Lift phase number (0 = First Pull, 1 = Second Pull, 2 = Third Pull, 3 = Recovery) for clean; velocity-based (-1 = down, 0 = transitional, 1 = up) for other lifts
 
 #### Stabilization
 - `shake_dx`, `shake_dy` - Per-frame camera motion (pixels)
@@ -396,7 +405,11 @@ Located in `graphs/` subdirectory (generated in Step 3):
 The output video (`output.mp4`) includes:
 
 - **Skeleton overlay**: Person's joints and connections (when `lift_type != "none"`)
-- **Bar path**: Red line showing barbell trajectory
+- **Bar path**: Barbell trajectory **colored by lift phase** (when `lift_type == "clean"`):
+  - 🔴 **Red**: Phase 0 (First Pull)
+  - 🟠 **Orange**: Phase 1 (Second Pull)
+  - 🟢 **Green**: Phase 2 (Third Pull / Turnover)
+  - 🟣 **Magenta**: Phase 3 (Recovery)
 - **Grid**: Reference grid for spatial orientation
 - **Statistics**: Frame number, timestamp, velocity, phase information
 

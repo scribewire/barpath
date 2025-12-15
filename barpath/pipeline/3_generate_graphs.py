@@ -33,8 +33,8 @@ def plot_barbell_lateral_corrected(df, output_dir):
 
     plt.figure(figsize=(8, 10))  # Taller than wide
 
-    # Define colors and labels for phases
-    colors = ["red", "orange", "green"]
+    # Define colors and labels for phases (supports up to 4 phases for clean)
+    colors = ["red", "orange", "green", "magenta"]
 
     current_phase = int(path_data[0, 2])
     start_index = 0
@@ -162,6 +162,29 @@ def step_3_generate_graphs(df, output_dir):
         if y_min < 0 < y_max:
             plt.axhline(y=0, color="k", linestyle="--", alpha=0.3, linewidth=0.8)
 
+        # --- Add phase change indicators ---
+        if "bar_phase" in df.columns:
+            phase_data = df[["time_s", "bar_phase"]].dropna()
+            if len(phase_data) > 0:
+                # Find phase transitions
+                prev_phase = None
+                phase_colors = ["red", "orange", "green", "magenta"]
+                for idx, row in phase_data.iterrows():
+                    current_phase = int(row["bar_phase"])
+                    if prev_phase is not None and current_phase != prev_phase:
+                        # Draw vertical line at phase transition with next phase color
+                        next_phase_color = phase_colors[
+                            current_phase % len(phase_colors)
+                        ]
+                        plt.axvline(
+                            x=row["time_s"],
+                            color=next_phase_color,
+                            linestyle="--",
+                            alpha=0.6,
+                            linewidth=1.5,
+                        )
+                    prev_phase = current_phase
+
         graph_path = os.path.join(output_dir, f"{column}_graph.png")
         plt.savefig(graph_path, dpi=150, bbox_inches="tight")
         plt.close()
@@ -178,8 +201,8 @@ def step_3_generate_graphs(df, output_dir):
 
             plt.figure(figsize=(8, 10))  # Taller than wide
 
-            # Define colors and labels
-            colors = ["red", "orange", "green"]
+            # Define colors and labels (supports up to 4 phases for clean)
+            colors = ["red", "orange", "green", "magenta"]
 
             current_phase = int(path_data[0, 2])
             start_index = 0
@@ -248,8 +271,8 @@ def step_3_generate_graphs(df, output_dir):
 
             plt.figure(figsize=(8, 10))  # Taller than wide
 
-            # Define colors and labels
-            colors = ["red", "orange", "green"]
+            # Define colors and labels (supports up to 4 phases for clean)
+            colors = ["red", "orange", "green", "magenta"]
 
             current_phase = int(path_data_raw[0, 2])
             start_index = 0
