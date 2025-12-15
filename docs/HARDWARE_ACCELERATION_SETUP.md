@@ -1,7 +1,7 @@
 # Hardware Acceleration Implementation Summary
 
 ## Overview
-Successfully implemented hardware-aware optional dependencies for barpath with automatic detection and user-friendly installation. The system automatically detects OS, CPU brand (Intel/AMD), and GPU availability, then recommends and installs appropriate hardware-accelerated packages.
+Successfully implemented hardware-aware optional dependencies for barpath with automatic detection and user-friendly installation. The system automatically detects OS, CPU brand (Intel/AMD), and GPU availability, then recommends and installs appropriate hardware-accelerated packages, including PyTorch CUDA support for NVIDIA GPUs.
 
 ## Files Created/Modified
 
@@ -12,7 +12,7 @@ Successfully implemented hardware-aware optional dependencies for barpath with a
 - **Key Functions**:
   - `detect_os()` - Returns 'windows', 'macos', or 'linux'
   - `detect_cpu_brand()` - Returns 'intel', 'amd', or None
-  - `detect_nvidia_gpu()` - Checks for NVIDIA GPU via nvidia-smi
+  - `detect_nvidia_gpu()` - Checks for NVIDIA GPU via nvidia-smi and system info
   - `detect_amd_gpu()` - Checks for AMD GPU via rocm-smi
   - `detect_intel_gpu()` - Checks for Intel iGPU
   - `get_hardware_profile()` - Returns complete hardware dictionary
@@ -76,9 +76,9 @@ Successfully implemented hardware-aware optional dependencies for barpath with a
 
 #### `barpath/pipeline/1_collect_data.py`
 - **Changes**:
-  - Added `_get_yolo_device()` function (82 lines)
+  - Updated device selection logic to support PyTorch CUDA for NVIDIA GPUs
   - Intelligently detects available hardware accelerators:
-    - NVIDIA CUDA
+    - PyTorch CUDA (NVIDIA GPUs)
     - AMD ROCm
     - Intel DirectML (Windows)
     - Apple Metal (macOS)
@@ -122,6 +122,7 @@ Successfully implemented hardware-aware optional dependencies for barpath with a
   - CPU: `onnxruntime` (default)
   - NVIDIA GPU: `onnxruntime-gpu` (if nvidia-smi detected)
   - AMD GPU: `onnxruntime-rocm` (if rocm-smi detected)
+- **PyTorch CUDA**: `torch` with CUDA support (if NVIDIA GPU detected)
 - **OpenVINO**: `openvino` (if Intel CPU detected)
 
 ## Usage Examples
@@ -150,6 +151,8 @@ pip install -r requirements.txt onnxruntime-metal
 
 # Linux with NVIDIA GPU
 pip install -r requirements.txt onnxruntime-gpu
+# PyTorch CUDA (NVIDIA GPUs) - Install separately:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # Linux with AMD GPU
 pip install -r requirements.txt onnxruntime-rocm
@@ -177,7 +180,7 @@ When `barpath/pipeline/1_collect_data.py` runs:
 
 1. **Automatic Detection**: `_get_yolo_device()` checks for installed packages
 2. **Priority Order** (first match wins):
-   - NVIDIA CUDA (if onnxruntime-gpu installed)
+   - PyTorch CUDA (if NVIDIA GPU detected and torch.cuda.is_available())
    - AMD ROCm (if onnxruntime-rocm installed)
    - Intel DirectML (if onnxruntime-directml installed, Windows only)
    - Apple Metal (if onnxruntime-metal installed, macOS only)
@@ -192,6 +195,51 @@ Example output:
   ✓ CUDA detected - using GPU acceleration
 Loading YOLO model: barpath/models/yolo11m50e.pt
 ```
+
+## Model Format Support
+
+BARPATH supports multiple YOLO model formats with different acceleration options:
+
+### PyTorch Models (.pt)
+**Required for CUDA acceleration:**
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+- **GPU**: Automatic CUDA acceleration when NVIDIA GPU detected
+- **CPU**: Works without additional packages
+- **Best for**: Development, fine-tuning, maximum compatibility
+
+### ONNX Models (.onnx)
+**Required for GPU acceleration:**
+```bash
+# NVIDIA GPU
+pip install onnxruntime-gpu
+
+# CPU fallback
+pip install onnxruntime
+```
+- **GPU**: DirectML (Windows), CUDA (Linux), Metal (macOS)
+- **CPU**: Works on all platforms
+- **Best for**: Cross-platform deployment, optimized inference
+
+### TensorRT Models (.engine)
+**Required packages:**
+```bash
+pip install tensorrt pycuda
+```
+- **GPU**: NVIDIA TensorRT optimization (fastest inference)
+- **Requirements**: NVIDIA GPU, CUDA toolkit, compatible drivers
+- **Best for**: Production deployment, maximum performance
+- **Note**: Requires model conversion from .pt/.onnx to .engine format
+
+### OpenVINO Models
+**Required packages:**
+```bash
+pip install openvino
+```
+- **CPU**: Intel CPU optimization
+- **GPU**: Limited support (Intel integrated graphics)
+- **Best for**: Intel CPU systems
 
 ## Testing & Validation
 
@@ -234,6 +282,7 @@ python -c "import sys; sys.path.insert(0, 'barpath/pipeline'); ..."
 ## Future Enhancements
 
 Potential additions:
+- Enhanced PyTorch CUDA support with automatic detection
 - TensorRT support (NVIDIA GPUs on Linux/Windows)
 - CoreML support (macOS)
 - Qualcomm Snapdragon NPU support

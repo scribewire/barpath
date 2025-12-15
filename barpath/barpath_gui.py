@@ -566,12 +566,13 @@ class BarpathTogaApp(toga.App):
 
         pt_files = list(directory.glob("*.pt"))
         onnx_files = list(directory.glob("*.onnx"))
+        engine_files = list(directory.glob("*.engine"))
         openvino_dirs = [
             p
             for p in directory.iterdir()
             if p.is_dir() and "openvino" in p.name.lower()
         ]
-        candidates = pt_files + onnx_files + openvino_dirs
+        candidates = pt_files + onnx_files + engine_files + openvino_dirs
         self.model_files = sorted(candidates, key=lambda p: p.name.lower())
 
         # If selection no longer valid, reset

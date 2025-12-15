@@ -1,16 +1,29 @@
 # Optional Hardware-Accelerated Packages
 #
-# These packages provide CPU acceleration for ONNX Runtime and OpenVINO model inference.
-# GPU acceleration has been removed due to compatibility issues.
+# These packages provide CPU/GPU acceleration for different model formats:
+# - PyTorch (.pt models): CUDA acceleration via PyTorch
+# - ONNX (.onnx models): GPU acceleration via ONNX Runtime
+# - TensorRT (.engine models): GPU acceleration via NVIDIA TensorRT
+# - OpenVINO: Intel CPU optimization
 #
-# ONNX Runtime (CPU) - All platforms:
-#   - onnxruntime>=1.15.0
+# Model Format Support:
+# - .pt (PyTorch): torch + torchvision + torchaudio with CUDA
+# - .onnx (ONNX): onnxruntime-gpu (NVIDIA), onnxruntime (CPU)
+# - .engine (TensorRT): tensorrt + pycuda (NVIDIA only)
+# - OpenVINO formats: openvino (Intel CPU)
 #
-# OpenVINO Support (Intel CPU only):
-#   - openvino>=2023.0.0
+# NVIDIA GPU Requirements:
+# - NVIDIA GPU with CUDA support (GeForce GTX/RTX series or newer)
+# - NVIDIA drivers installed (latest recommended)
+# - CUDA toolkit (automatically handled by pip installs below)
 #
 # To install with hardware acceleration:
 #   pip install -r requirements.txt -r requirements-hardware.txt
+#
+# For NVIDIA GPU acceleration with PyTorch CUDA:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#   (Adjust cu121 to match your CUDA version: cu118, cu121, cu124, etc.)
+#   Check your CUDA version with: nvidia-smi
 #
 # Or use setup.py extras:
 #   pip install .[hardware]      # Install all recommended for your hardware
@@ -26,3 +39,25 @@
 
 # OpenVINO - Intel CPU optimization only
 # openvino>=2023.0.0
+
+# --- GPU acceleration ---
+
+# PyTorch CUDA (NVIDIA GPUs only) - Required for .pt models
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# (Requires NVIDIA GPU and CUDA toolkit installed)
+# CUDA version compatibility:
+# - cu118: CUDA 11.8 (for older GPUs)
+# - cu121: CUDA 12.1 (recommended for RTX 30/40 series)
+# - cu124: CUDA 12.4 (latest, check compatibility)
+
+# ONNX Runtime GPU (NVIDIA GPUs only) - Required for .onnx models
+# pip install onnxruntime-gpu
+# Alternative: pip install onnxruntime  # CPU-only fallback
+# Note: onnxruntime-gpu automatically detects CUDA version
+
+# TensorRT (NVIDIA GPUs only) - Required for .engine models
+# pip install tensorrt pycuda
+# (Requires CUDA toolkit and NVIDIA drivers)
+# TensorRT versions:
+# - tensorrt>=8.6.0 (recommended for latest CUDA)
+# - Must match your CUDA version and GPU architecture

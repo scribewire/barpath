@@ -308,6 +308,51 @@ Check if OpenVINO is active:
 python -c "import openvino; print('OpenVINO available')"
 ```
 
+## Model Format Support
+
+BARPATH supports multiple YOLO model formats with different acceleration options:
+
+### PyTorch Models (.pt)
+**Required for CUDA acceleration:**
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+- **GPU**: Automatic CUDA acceleration when NVIDIA GPU detected
+- **CPU**: Works without additional packages
+- **Best for**: Development, fine-tuning, maximum compatibility
+
+### ONNX Models (.onnx)
+**Required for GPU acceleration:**
+```bash
+# NVIDIA GPU
+pip install onnxruntime-gpu
+
+# CPU fallback
+pip install onnxruntime
+```
+- **GPU**: DirectML (Windows), CUDA (Linux), Metal (macOS)
+- **CPU**: Works on all platforms
+- **Best for**: Cross-platform deployment, optimized inference
+
+### TensorRT Models (.engine)
+**Required packages:**
+```bash
+pip install tensorrt pycuda
+```
+- **GPU**: NVIDIA TensorRT optimization (fastest inference)
+- **Requirements**: NVIDIA GPU, CUDA toolkit, compatible drivers
+- **Best for**: Production deployment, maximum performance
+- **Note**: Requires model conversion from .pt/.onnx to .engine format
+
+### OpenVINO Models
+**Required packages:**
+```bash
+pip install openvino
+```
+- **CPU**: Intel CPU optimization
+- **GPU**: Limited support (Intel integrated graphics)
+- **Best for**: Intel CPU systems
+
 ---
 
 ## Output Files

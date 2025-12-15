@@ -6,7 +6,8 @@ from pathlib import Path
 import cv2
 import mediapipe as mp
 import numpy as np
-from hardware_detection import detect_intel_gpu
+import torch
+from hardware_detection import detect_intel_gpu, detect_nvidia_gpu
 from step1_helpers import (
     StabilizationParams,
     create_background_mask,
@@ -37,6 +38,10 @@ def _get_model_path(model_path: Path) -> tuple[str, bool]:
     If model_path is a directory containing .xml files (OpenVINO format),
     returns the path to the directory. Otherwise returns the path as-is.
 
+    Notes:
+    - TensorRT `.engine` models are treated as regular model files (not OpenVINO).
+      Ultralytics will select the TensorRT backend automatically when given an `.engine` path.
+
     Returns:
         tuple: (model_path_str, is_openvino)
 
@@ -62,7 +67,7 @@ def _get_model_path(model_path: Path) -> tuple[str, bool]:
         else:
             raise ValueError(f"Directory does not contain a valid model: {model_path}")
     elif model_path.is_file():
-        # Regular model file (.pt, .onnx, etc.)
+        # Regular model file (.pt, .onnx, .engine, etc.)
         return str(model_path), False
     else:
         raise ValueError(f"Model path does not exist: {model_path}")
@@ -108,16 +113,35 @@ def step_1_collect_data(
         model_path_obj = Path(model_path)
         model_path_str, is_openvino = _get_model_path(model_path_obj)
         print(f"Loading model: {model_path_str}")
+
+        is_tensorrt_engine = (
+            model_path_obj.is_file() and model_path_obj.suffix.lower() == ".engine"
+        )
+        if is_tensorrt_engine:
+            print(
+                "Detected TensorRT engine model (.engine). Ultralytics will use the TensorRT backend automatically."
+            )
+
         yolo_model = YOLO(model_path_str, task="detect")
 
         # Determine device for inference
-        if is_openvino and detect_intel_gpu():
+        # - For TensorRT `.engine`, Ultralytics runs TensorRT (GPU); do not force a device override.
+        # - For OpenVINO exports, prefer Intel GPU when available.
+        # - Otherwise, prefer CUDA when available; fall back to CPU.
+        if is_tensorrt_engine:
+            yolo_device = None
+        elif is_openvino and detect_intel_gpu():
             yolo_device = "intel:gpu"
             print("Intel GPU detected - using GPU acceleration for OpenVINO")
+        elif detect_nvidia_gpu() and torch.cuda.is_available():
+            yolo_device = "cuda"
+            print("NVIDIA GPU detected with CUDA support - using GPU acceleration")
         else:
             yolo_device = "cpu"
             if is_openvino:
-                print("No Intel GPU detected - using CPU for OpenVINO")
+                print("No GPU acceleration available - using CPU for OpenVINO")
+            else:
+                print("Using CPU for inference")
     except Exception as e:
         cap.release()
         if pose:
@@ -163,7 +187,13 @@ def step_1_collect_data(
             results_pose = pose.process(frame_rgb)
 
         # Run YOLO inference
-        results_yolo = yolo_model(frame, verbose=False, conf=0.25, device=yolo_device)
+        if yolo_device is None:
+            # TensorRT `.engine` path: let Ultralytics select the TensorRT backend without a device override.
+            results_yolo = yolo_model(frame, verbose=False, conf=0.25)
+        else:
+            results_yolo = yolo_model(
+                frame, verbose=False, conf=0.25, device=yolo_device
+            )
 
         # 1. Process MediaPipe Data
         landmarks_data, world_landmarks_data, segmentation_mask = None, None, None

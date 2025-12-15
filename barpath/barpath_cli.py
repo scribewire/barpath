@@ -145,7 +145,7 @@ def main():
     parser.add_argument(
         "--model",
         required=True,
-        help="Path to the trained YOLO model (e.g., 'models/best.pt', 'models/best.onnx', or an OpenVINO export directory)",
+        help="Path to the trained YOLO model (e.g., 'models/best.pt', 'models/best.onnx', 'models/best.engine', or an OpenVINO export directory)",
     )
     parser.add_argument(
         "--output_video",
