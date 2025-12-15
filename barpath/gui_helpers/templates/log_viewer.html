@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: #FFFFFF;
+  color: #1f2937;
+}
+.log-container {
+  height: 100%;
+  width: 100%;
+  background: #f9fafb;
+  padding: 12px;
+  overflow-y: auto;
+  border: 1px solid #e5e7eb;
+}
+.line {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  margin: 3px 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  line-height: 1.5;
+}
+.bold {
+  font-weight: 700;
+}
+.dim {
+  opacity: 0.5;
+  color: #6b7280;
+}
+.cyan {
+  color: #0891b2;
+}
+.green {
+  color: #16a34a;
+}
+.yellow {
+  color: #ca8a04;
+}
+.red {
+  color: #dc2626;
+}
+.blue {
+  color: #2563eb;
+}
+.magenta {
+  color: #9333ea;
+}
+</style>
+</head>
+<body>
+<div class="log-container" id="log">
+  <!-- Log content will be inserted here -->
+</div>
+<script>
+var log = document.getElementById('log');
+log.scrollTop = log.scrollHeight;
+</script>
+</body>
+</html>

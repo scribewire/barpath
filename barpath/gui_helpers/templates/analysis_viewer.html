@@ -1,0 +1,165 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: #FFFFFF;
+  color: #1f2937;
+}
+.analysis-container {
+  height: 100%;
+  width: 100%;
+  background: #ffffff;
+  padding: 24px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+.analysis-content {
+  max-width: 800px;
+  margin: 0 auto;
+}
+h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 24px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #e5e7eb;
+}
+h2 {
+  font-size: 22px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-top: 32px;
+  margin-bottom: 16px;
+}
+h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #374151;
+  margin-top: 24px;
+  margin-bottom: 12px;
+}
+h4 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #4b5563;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+p {
+  margin-bottom: 16px;
+  color: #374151;
+}
+ul, ol {
+  margin-left: 24px;
+  margin-bottom: 16px;
+  color: #374151;
+}
+li {
+  margin-bottom: 8px;
+}
+strong {
+  font-weight: 600;
+  color: #111827;
+}
+em {
+  font-style: italic;
+  color: #4b5563;
+}
+code {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.9em;
+  color: #dc2626;
+}
+pre {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+pre code {
+  background: none;
+  padding: 0;
+  color: #1f2937;
+  font-size: 13px;
+}
+blockquote {
+  border-left: 4px solid #3b82f6;
+  padding-left: 16px;
+  margin: 16px 0;
+  color: #4b5563;
+  font-style: italic;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+th {
+  background: #f3f4f6;
+  font-weight: 600;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+}
+td {
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+}
+tr:nth-child(even) {
+  background: #f9fafb;
+}
+hr {
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 24px 0;
+}
+a {
+  color: #2563eb;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+.no-analysis {
+  text-align: center;
+  padding: 48px 24px;
+  color: #6b7280;
+}
+.no-analysis h2 {
+  margin-top: 0;
+  color: #9ca3af;
+}
+</style>
+</head>
+<body>
+<div class="analysis-container">
+  <div class="analysis-content" id="content">
+    <!-- Analysis content will be inserted here -->
+    <div class="no-analysis">
+      <h2>No Analysis Available</h2>
+      <p>Run an analysis to see results here.</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>
