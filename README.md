@@ -221,6 +221,10 @@ Built with amazing open-source tools:
 - **[OpenCV](https://opencv.org/)** - Computer vision and video processing
 - **[pandas](https://pandas.pydata.org/)** - Data analysis and manipulation
 - **[matplotlib](https://matplotlib.org/)** - Visualization and graphing
+- Barbell detection trained on:
+    - Our dataset: Bar path (2025) bar path detection unified (v6) [Dataset]. Roboflow. [Source](https://universe.roboflow.com/bar-path/bar-path-detection-unified-cyusm/dataset/6). Accessed 16 December 2025.
+    - Which contains: barbelldetection (2024) barbell detection (v2) [Dataset]. Roboflow. [Source](https://universe.roboflow.com/barbelldetection-8kean/barbell-detection-gjsrc/dataset/2). Accessed 4 December 2025
+
 ---
 
 **Made with ❤️ for weightlifters, by weightlifters**
