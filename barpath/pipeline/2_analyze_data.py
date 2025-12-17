@@ -2,7 +2,7 @@ import argparse
 import gc
 import os
 import pickle
-from typing import cast
+from typing import Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -11,10 +11,112 @@ from scipy.signal import savgol_filter
 from step2_helpers import calculate_perspective_correction
 from step5_helpers.classics_phase_detection import identify_classics_phases
 from step5_helpers.clean import compute_bar_phase_from_clean_phases
+from step5_helpers.snatch import compute_bar_phase_from_snatch_phases
 from utils import calculate_angle
 
 
 # --- Step 2: Data Analysis Function ---
+def calculate_pixel_to_meter_conversion(df, endcap_width_m=0.05):
+    """
+    Calculate pixel-to-meter conversion factor based on barbell endcap width.
+
+    Args:
+        df: DataFrame with barbell_box data
+        endcap_width_m: Real-world width of barbell endcap in meters (default 0.05m = 50mm)
+
+    Returns:
+        float: Pixels to meters conversion factor, or None if cannot calculate
+    """
+    if "barbell_box" not in df.columns:
+        return None
+
+    try:
+        # Extract barbell boxes and calculate widths
+        widths = []
+        for box in df["barbell_box"]:
+            if isinstance(box, (list, tuple)) and len(box) >= 4:
+                x1, y1, x2, y2 = box[:4]
+                # Endcap width is the horizontal extent of the bounding box
+                width_px = abs(float(x2) - float(x1))
+                if width_px > 0:
+                    widths.append(width_px)
+
+        if not widths:
+            return None
+
+        # Use median width to be robust against outliers
+        median_width_px = float(np.median(widths))
+        px_to_m = endcap_width_m / median_width_px
+
+        print(f"Endcap detection: median width = {median_width_px:.1f} px")
+        print(f"Pixel-to-meter conversion: 1 px = {px_to_m * 1000:.3f} mm")
+
+        return px_to_m
+    except Exception as e:
+        print(f"Warning: Could not calculate pixel-to-meter conversion: {e}")
+        return None
+
+
+def calculate_max_specific_power(df, phases):
+    """
+    Calculate maximum specific power between end of first pull (t1) and end of third pull (t3).
+
+    Args:
+        df: DataFrame with calculated kinematics
+        phases: ClassicsPhases dict with t0, t1, t2, t3, t4 frame indices
+
+    Returns:
+        dict: Dictionary with 'max_power_px' and optionally 'max_power_real' (W/kg),
+              or None if cannot calculate
+    """
+    if phases is None or "t1" not in phases or "t3" not in phases:
+        return None
+
+    try:
+        t1 = int(phases["t1"])
+        t3 = int(phases["t3"])
+
+        if "specific_power_y_smooth" not in df.columns:
+            return None
+
+        # Extract specific power data between t1 and t3
+        power_segment = df.loc[t1:t3, "specific_power_y_smooth"]
+
+        if power_segment.empty:
+            return None
+
+        # Get maximum absolute specific power in pixel units
+        max_power_px = float(power_segment.abs().max())
+
+        if np.isnan(max_power_px):
+            return None
+
+        # Calculate pixel-to-meter conversion
+        px_to_m = calculate_pixel_to_meter_conversion(df)
+
+        result: dict[str, Optional[float]] = {"max_power_px": max_power_px}
+
+        if px_to_m is not None:
+            # Convert from px²/s³ to m²/s³ (which equals W/kg)
+            # specific_power = acceleration × velocity
+            # (px/s²) × (px/s) × (m/px)² = m²/s³ = W/kg
+            max_power_real = max_power_px * (px_to_m**2)
+            result["max_power_real"] = max_power_real
+            print(
+                f"Maximum specific power: {max_power_px:.2f} px²/s³ = {max_power_real:.2f} W/kg"
+            )
+        else:
+            result["max_power_real"] = None
+            print(
+                f"Maximum specific power: {max_power_px:.2f} px²/s³ (real-world conversion unavailable)"
+            )
+
+        return result
+    except Exception as e:
+        print(f"Warning: Could not calculate max specific power: {e}")
+        return None
+
+
 def step_2_analyze_data(input_data, output_path):
     print("--- Step 2: Analyzing Data ---")
 
@@ -256,8 +358,9 @@ def step_2_analyze_data(input_data, output_path):
         df["vel_y_smooth"] = vel_filled
 
     # Now determine phases based on lift type
-    # Clean: use clean-specific phase logic from Step 5 helpers (t0..t4), then map to bar_phase
+    # Clean/Snatch: use lift-specific phase logic from Step 5 helpers (t0..t4), then map to bar_phase
     # Other lift types: use kinematic (velocity) zero-crossing phase detection
+    phases = None
     if lift_type == "clean":
         phases = identify_classics_phases(df)
         if phases:
@@ -268,8 +371,18 @@ def step_2_analyze_data(input_data, output_path):
                 "Warning: Could not identify clean phases for bar_phase. Falling back to velocity-based phase detection."
             )
             lift_type = "none"
+    elif lift_type == "snatch":
+        phases = identify_classics_phases(df)
+        if phases:
+            df["bar_phase"] = compute_bar_phase_from_snatch_phases(df, phases)
+            df["phase_change"] = df["bar_phase"].diff().fillna(0).ne(0)
+        else:
+            print(
+                "Warning: Could not identify snatch phases for bar_phase. Falling back to velocity-based phase detection."
+            )
+            lift_type = "none"
 
-    if lift_type != "clean":
+    if lift_type not in ("clean", "snatch"):
         # 3. Define a velocity threshold to ignore minor jitters (5% of peak, or 10px/s)
         vel_threshold = max(10, df["vel_y_smooth"].abs().max() * 0.05)
         print(f"Using velocity threshold of {vel_threshold:.2f} px/s for phase change.")
@@ -385,6 +498,26 @@ def step_2_analyze_data(input_data, output_path):
         df["barbell_box_str"] = df["barbell_box"].apply(box_to_str)
     else:
         df["barbell_box_str"] = ""
+
+    # --- Calculate Maximum Specific Power (before dropping barbell_box) ---
+    # Also save conversion factor to CSV for use in Step 5
+    if phases is not None and lift_type in ("clean", "snatch"):
+        print("\n--- Maximum Specific Power Analysis ---")
+        # Calculate and store the conversion factor
+        px_to_m_factor = calculate_pixel_to_meter_conversion(df)
+        if px_to_m_factor is not None:
+            df["px_to_m_conversion"] = px_to_m_factor
+
+        max_power_result = calculate_max_specific_power(df, phases)
+        if max_power_result is not None and "max_power_real" in max_power_result:
+            if max_power_result["max_power_real"] is not None:
+                print(
+                    f"Peak power output (t1→t3): {max_power_result['max_power_real']:.2f} W/kg"
+                )
+            else:
+                print(
+                    f"Peak power output (t1→t3): {max_power_result['max_power_px']:.2f} px²/s³ (endcap detection failed)"
+                )
 
     # --- Clean up and Save ---
     # Drop raw data columns that are no longer needed

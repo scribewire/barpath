@@ -8,6 +8,7 @@ A comprehensive guide to using the BARPATH system for AI-powered weightlifting t
 - [How It Works](#how-it-works)
   - [Camera Stabilization](#camera-stabilization)
   - [Perspective Angle Compensation](#perspective-angle-compensation)
+  - [Lift Analysis Features](#lift-analysis-features)
 - [Batch Processing and Hardware Acceleration](#batch-processing-and-hardware-acceleration)
   - [Batch Processing](#batch-processing)
   - [Hardware Acceleration with OpenVINO](#hardware-acceleration-with-openvino)
@@ -38,7 +39,7 @@ The GUI features a clean tabbed interface with four main sections:
 #### **⚙️ Settings Tab**
 - Automatically detects available models from `barpath/models`
 - Select a model from the available options
-- Choose lift type: **none** (kinematics only) or **clean** (with technique critique)
+- Choose lift type: **none** (kinematics only), **clean** (power clean analysis), or **snatch** (snatch analysis)
 - Models appear as buttons once detected
 
 #### **▶️ Analyze Tab**
@@ -82,9 +83,9 @@ Optional Arguments:
   
   --lift_type {clean,snatch,none}
                             Type of lift to analyze
-                            'clean'  - Power clean technique critique
-                            'snatch' - Snatch technique critique
-                            'none'   - Skip critique (default)
+                            'clean'  - Power clean: phase detection, power calculation, technique critique
+                            'snatch' - Snatch: phase detection, power calculation, technique critique
+                            'none'   - Kinematics only, no lift-specific analysis (default)
   
   --no-video                Skip video rendering (faster)
   
@@ -241,6 +242,199 @@ The BARPATH system analyzes weightlifting videos in two complementary ways:
 - ❌ Insufficient world landmark data
 - ❌ Unrealistic shoulder width (< 0.3m or > 0.6m)
 
+### Lift Analysis Features
+
+When `lift_type` is set to `"clean"` or `"snatch"`, BARPATH provides advanced lift-specific analysis including automatic phase detection, power output calculation, and technique critique.
+
+#### Phase Detection
+
+**Purpose:** Automatically identifies the key phases of Olympic weightlifting movements for precise timing analysis and technique evaluation.
+
+**Supported Lift Types:**
+- **Clean**: First Pull → Second Pull → Third Pull (Turnover) → Recovery
+- **Snatch**: First Pull → Second Pull → Third Pull (Turnover) → Recovery
+
+**How It Works:**
+
+1. **Phase Boundaries Detection** (Step 2: `2_analyze_data.py`)
+   - **t0 (Lift Start)**: Bar begins moving upward from floor
+     - Detected when bar rises above baseline by 2% of frame height
+     - Baseline calculated from first 30 frames
+   
+   - **t1 (End of First Pull)**: Bar passes knee height
+     - Bar Y-coordinate reaches knee Y-coordinate
+     - Uses average of left and right knee positions
+   
+   - **t2 (End of Second Pull)**: Maximum hip extension
+     - Hip reaches highest position (minimum Y-coordinate)
+     - Searched within window from t1 to bar peak height
+   
+   - **t3 (Bottom of Catch)**: Deepest point of receiving position
+     - Hip reaches lowest position (maximum Y-coordinate)
+     - Occurs after turnover begins
+   
+   - **t4 (Peak Bar Height)**: Maximum bar elevation
+     - Bar reaches minimum Y-coordinate (highest point in frame)
+     - Marks completion of lift
+
+2. **Phase Assignment** (Step 2 & Step 5)
+   - Each frame is assigned a phase number (0-3)
+   - Phase changes marked in `phase_change` column
+   - Used for color-coding graphs and video overlay
+
+3. **Visual Representation**
+   - **Bar Path Graphs**: Color-coded by phase
+     - 🔴 Red: Phase 0 (First Pull)
+     - 🟠 Orange: Phase 1 (Second Pull)
+     - 🟢 Green: Phase 2 (Third Pull/Turnover)
+     - 🟣 Magenta: Phase 3 (Recovery)
+   - **Video Overlay**: Shows current phase number and phase-colored trajectory
+
+**Output in analysis.md:**
+```markdown
+## Phase Timing
+- **First Pull:**  0.24s
+- **Second Pull:** 0.38s
+- **Third Pull:**  0.66s
+- **Recovery:**    1.66s
+- **Total Time:**  2.93s
+```
+
+#### Maximum Specific Power Calculation
+
+**Purpose:** Measures peak explosive power output during the pull and turnover phases (first pull through third pull), converted to real-world units (mW/kg) for meaningful comparison.
+
+**What is Specific Power?**
+- Specific power = Power-to-mass ratio = (Force × Velocity) / Mass
+- Simplified: Acceleration × Velocity
+- Units: W/kg (Watts per kilogram of body weight)
+- Represents explosive strength independent of body weight
+
+**How It Works:**
+
+1. **Pixel-Based Calculation** (Step 2: `2_analyze_data.py`)
+   - Calculates: `specific_power = acceleration × velocity`
+   - From smoothed kinematics: `accel_y_smooth × vel_y_smooth`
+   - Initial units: px²/s³ (pixel-squared per second-cubed)
+
+2. **Real-World Conversion** (Step 2: `2_analyze_data.py`)
+   - Uses barbell endcap as reference (standard 50mm diameter)
+   - Extracts endcap width from YOLO bounding boxes
+   - Calculates median width across all frames (robust to outliers)
+   - Computes conversion factor: `px_to_m = 0.05m / median_width_px`
+   - Converts power: `power_W/kg = power_px × (px_to_m)²`
+
+3. **Phase-Specific Analysis**
+   - Extracts power data between t1 (end of first pull) and t3 (end of third pull)
+   - Finds maximum absolute value across the entire pulling and turnover phase
+   - Reports both pixel and real-world values
+
+**Console Output During Step 2:**
+```
+--- Maximum Specific Power Analysis ---
+Endcap detection: median width = 127.3 px
+Pixel-to-meter conversion: 1 px = 0.393 mm
+Maximum specific power: 15234.56 px²/s³ = 23.52 W/kg
+Peak power output (t1→t3): 23.52 W/kg
+```
+
+**Output in analysis.md (when endcap detected):**
+```markdown
+## Maximum Specific Power
+- **Peak Power (t1→t3):** 23.52 W/kg
+  *(Raw: 15234.56 px²/s³)*
+```
+
+**Output in analysis.md (when endcap NOT detected):**
+```markdown
+## Maximum Specific Power
+- **Peak Power (t1→t3):** 15234.56 px²/s³
+  *(Note: Real-world conversion unavailable - endcap not detected)*
+```
+
+**Interpreting Results:**
+- **Elite lifters**: 50-70 W/kg
+- **National level**: 35-50 W/kg
+- **Recreational**: 20-35 W/kg
+
+**Requirements for Conversion:**
+- ✅ Barbell endcap consistently detected
+- ✅ Good video quality and contrast
+- ✅ Endcap visible throughout lift
+- ❌ Fails if endcap not detected → shows pixel units only
+
+#### Technique Critique
+
+**Purpose:** Provides automated feedback on common technique faults specific to each lift type.
+
+**Supported Lift Types:**
+- **Clean**: Power clean technique analysis
+- **Snatch**: Snatch technique analysis
+
+**How It Works:**
+
+The critique system analyzes kinematic patterns during each phase and compares them against optimal technique thresholds calibrated from world-class reference lifts.
+
+**Thresholds Calibration:**
+- All thresholds have been extensively tested against world record lifts
+- Reference lifts include: Liao Hui, Lu Xiaojun, Szymon Kołecki, Olivia Reeves
+- Thresholds are intentionally permissive to avoid false positives on good technique
+- Only flags genuinely problematic movement patterns
+
+**Clean-Specific Checks:**
+
+*First Pull (t0 → t1):*
+- Bar drifting away from body (horizontal displacement > 10% of frame height)
+- Knees caving inward (knee width decreases > 6% of frame height)
+
+*Second Pull (t1 → t2):*
+- Hitching in second pull (hips rise while bar moves backward)
+
+*Third Pull/Turnover (t2 → t3):*
+- Delayed knee flexion after extension (knees don't bend within 5° after t2)
+
+**Snatch-Specific Checks:**
+
+*First Pull (t0 → t1):*
+- Bar drifting away from body (horizontal displacement > 10% of frame height)
+- Knees caving inward (knee width decreases > 6% of frame height)
+
+*Third Pull/Turnover (t2 → t3):*
+- Delayed knee flexion after extension (knees don't bend within 5° after t2)
+
+**Note on Disabled Checks:**
+The following checks have been disabled after testing with world-class lifts:
+- Hitching (tipping forward) in first pull - natural in optimal technique
+- Arms bending early - acceptable pattern in elite lifters
+- Negative acceleration/slowing down - normal during phase transitions
+- Pressing out the catch - difficult to distinguish from stabilization
+- Walking forward in recovery - normal position adjustment
+
+**Output in analysis.md:**
+```markdown
+## Critique
+- First Pull: The bar is drifting away in the first pull
+- Second Pull: You are hitching in the second pull
+```
+
+Or if no faults detected:
+```markdown
+## Critique
+No major faults detected based on configured checks.
+```
+
+**Limitations:**
+- 2D analysis cannot detect front-back movements
+- Camera angle affects accuracy
+- Some checks disabled to prevent false positives
+- Not a replacement for coach feedback
+
+**Best Used For:**
+- Quick self-assessment after training
+- Identifying major technical issues
+- Tracking consistency across attempts
+- Supplementing coach analysis with data
+
 ---
 
 ## Batch Processing and Hardware Acceleration
@@ -366,7 +560,7 @@ After running the pipeline, you'll find these files in the output directory:
 | `raw_data.pkl` | Serialized tracking data (pose landmarks, barbell detections, stabilization) | Step 1 |
 | `final_analysis.csv` | Processed data with kinematics, angles, barbell positions | Step 2 |
 | `output.mp4` | Annotated video with skeleton overlay and bar path | Step 4 |
-| `analysis.md` | Technique critique report | Step 5 |
+| `analysis.md` | Lift analysis report: phase timing, peak power, technique critique | Step 5 (clean/snatch only) |
 
 ### Graph Files
 
@@ -376,7 +570,7 @@ Located in `graphs/` subdirectory (generated in Step 3):
 
 - **`barbell_xy_stable_path.png`** & **`barbell_xy_smooth_path.png`** (unstabilized and smoothed versions)
   - 2D bar path diagram showing barbell trajectory
-  - **Colored by lift phase** (when `lift_type == "clean"`):
+  - **Colored by lift phase** (when `lift_type == "clean"` or `"snatch"`):
     - 🔴 **Red**: Phase 0 (First Pull)
     - 🟠 **Orange**: Phase 1 (Second Pull)
     - 🟢 **Green**: Phase 2 (Third Pull / Turnover)
@@ -406,7 +600,7 @@ Located in `graphs/` subdirectory (generated in Step 3):
   - **Uses same horizontal scale as `barbell_xy_stable_path.png`** for direct comparison
   - Shows true lateral displacement if camera were perpendicular
   - Displays detected camera angle (reference frame)
-  - **Colored by lift phase** (same color scheme as bar path graphs):
+  - **Colored by lift phase** (when `lift_type == "clean"` or `"snatch"`):
     - 🔴 **Red**: Phase 0 (First Pull)
     - 🟠 **Orange**: Phase 1 (Second Pull)
     - 🟢 **Green**: Phase 2 (Third Pull / Turnover)
@@ -425,8 +619,8 @@ Located in `graphs/` subdirectory (generated in Step 3):
 #### Kinematics
 - `vel_y_smooth` - Vertical velocity (px/s)
 - `accel_y_smooth` - Vertical acceleration (px/s²)
-- `specific_power_y_smooth` - Power-to-mass ratio proxy
-- `bar_phase` - Lift phase number (0 = First Pull, 1 = Second Pull, 2 = Third Pull, 3 = Recovery) for clean; velocity-based (-1 = down, 0 = transitional, 1 = up) for other lifts
+- `specific_power_y_smooth` - Power-to-mass ratio proxy (px²/s³, converts to W/kg with endcap reference)
+- `bar_phase` - Lift phase number: 0-3 for clean/snatch (0=First Pull, 1=Second Pull, 2=Third Pull, 3=Recovery); velocity-based for other lifts
 
 #### Stabilization
 - `shake_dx`, `shake_dy` - Per-frame camera motion (pixels)
@@ -450,7 +644,7 @@ Located in `graphs/` subdirectory (generated in Step 3):
 The output video (`output.mp4`) includes:
 
 - **Skeleton overlay**: Person's joints and connections (when `lift_type != "none"`)
-- **Bar path**: Barbell trajectory **colored by lift phase** (when `lift_type == "clean"`):
+- **Bar path**: Barbell trajectory **colored by lift phase** (when `lift_type == "clean"` or `"snatch"`):
   - 🔴 **Red**: Phase 0 (First Pull)
   - 🟠 **Orange**: Phase 1 (Second Pull)
   - 🟢 **Green**: Phase 2 (Third Pull / Turnover)

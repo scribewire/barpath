@@ -93,16 +93,17 @@ def identify_classics_phases(
     # idxmax on a boolean Series gives the first index with True
     t0_frame: int = int(mask_started.idxmax())  # type: ignore
 
-    # 2) End of First Pull (t1): bar at/above knees (bar_y <= knee_y_avg_px).
+    # 2) End of First Pull (t1): bar at/above knees (bar_y <= knee_y_lowest_px).
     df_post_t0 = df.loc[t0_frame:]
     if df_post_t0.empty:
         return None
 
-    # Knee y columns are normalized; convert to pixels (same as original logic).
-    knee_y_avg_px = (
-        (df_post_t0["left_knee_y"] + df_post_t0["right_knee_y"]) / 2.0 * frame_height
-    )
-    mask_at_knees = df_post_t0["barbell_y_stable"] <= knee_y_avg_px
+    # Knee y columns are normalized; convert to pixels.
+    # Use the lowest Y (highest in frame) between left and right knees.
+    left_knee_px = df_post_t0["left_knee_y"] * frame_height
+    right_knee_px = df_post_t0["right_knee_y"] * frame_height
+    knee_y_lowest_px = pd.concat([left_knee_px, right_knee_px], axis=1).min(axis=1)
+    mask_at_knees = df_post_t0["barbell_y_stable"] <= knee_y_lowest_px
     if not bool(mask_at_knees.any()):
         return None
     t1_frame: int = int(mask_at_knees.idxmax())  # type: ignore
