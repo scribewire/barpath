@@ -1,6 +1,6 @@
 # BARPATH Usage Guide
 
-A comprehensive guide to using the BARPATH system for AI-powered weightlifting technique analysis.
+A comprehensive guide to using the BARPATH system for AI-powered weightlifting technique analysis. 
 
 ## Table of Contents
 
