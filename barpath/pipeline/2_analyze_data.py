@@ -9,34 +9,54 @@ import pandas as pd
 from pandas import Series
 from scipy.signal import savgol_filter
 from step2_helpers import calculate_perspective_correction
-from step5_helpers.classics_phase_detection import identify_classics_phases
-from step5_helpers.clean import compute_bar_phase_from_clean_phases
-from step5_helpers.snatch import compute_bar_phase_from_snatch_phases
-from utils import calculate_angle
+from utils import calculate_angle, calculate_lifter_angle
+
+# ---------------------------------------------------------------------------
+# Helper: safe Savitzky-Golay smoother
+# ---------------------------------------------------------------------------
 
 
-# --- Step 2: Data Analysis Function ---
-def calculate_pixel_to_meter_conversion(df, endcap_width_m=0.05):
+def _savgol_smooth(series: pd.Series, window: int = 11, poly: int = 3) -> pd.Series:  # type: ignore[type-arg]
+    """
+    Apply Savitzky-Golay smoothing to *series* after forward/back-filling NaNs.
+
+    The window is automatically clamped to be odd and ≤ len(series).  Returns
+    the original series unchanged when there are too few points to smooth.
+    """
+    filled = series.interpolate(method="linear").bfill().ffill()
+    n = len(filled)
+    # Clamp window: must be odd, >= poly+1, <= n
+    w = min(window, n if n % 2 == 1 else n - 1)
+    w = max(w, poly + 2 if (poly + 2) % 2 == 1 else poly + 3)
+    if n < w or w < poly + 1:
+        return filled
+    return pd.Series(savgol_filter(filled, w, poly), index=series.index)
+
+
+# ---------------------------------------------------------------------------
+# Pixel-to-meter conversion
+# ---------------------------------------------------------------------------
+
+
+def calculate_pixel_to_meter_conversion(df, endcap_width_m: float = 0.05):
     """
     Calculate pixel-to-meter conversion factor based on barbell endcap width.
 
     Args:
         df: DataFrame with barbell_box data
-        endcap_width_m: Real-world width of barbell endcap in meters (default 0.05m = 50mm)
+        endcap_width_m: Real-world width of barbell endcap in metres (default 0.05 m = 50 mm)
 
     Returns:
-        float: Pixels to meters conversion factor, or None if cannot calculate
+        float | None: Pixels-to-metres factor, or None if it cannot be calculated.
     """
     if "barbell_box" not in df.columns:
         return None
 
     try:
-        # Extract barbell boxes and calculate widths
         widths = []
         for box in df["barbell_box"]:
             if isinstance(box, (list, tuple)) and len(box) >= 4:
                 x1, y1, x2, y2 = box[:4]
-                # Endcap width is the horizontal extent of the bounding box
                 width_px = abs(float(x2) - float(x1))
                 if width_px > 0:
                     widths.append(width_px)
@@ -44,30 +64,32 @@ def calculate_pixel_to_meter_conversion(df, endcap_width_m=0.05):
         if not widths:
             return None
 
-        # Use median width to be robust against outliers
         median_width_px = float(np.median(widths))
         px_to_m = endcap_width_m / median_width_px
 
         print(f"Endcap detection: median width = {median_width_px:.1f} px")
         print(f"Pixel-to-meter conversion: 1 px = {px_to_m * 1000:.3f} mm")
-
         return px_to_m
     except Exception as e:
         print(f"Warning: Could not calculate pixel-to-meter conversion: {e}")
         return None
 
 
+# ---------------------------------------------------------------------------
+# Maximum specific power
+# ---------------------------------------------------------------------------
+
+
 def calculate_max_specific_power(df, phases):
     """
-    Calculate maximum specific power between end of first pull (t1) and end of third pull (t3).
+    Calculate maximum specific power between t1 (end of pull) and t3 (end of pull-under).
 
     Args:
         df: DataFrame with calculated kinematics
-        phases: ClassicsPhases dict with t0, t1, t2, t3, t4 frame indices
+        phases: dict with 't1' and 't3' frame indices (ClassicsPhases)
 
     Returns:
-        dict: Dictionary with 'max_power_px' and optionally 'max_power_real' (W/kg),
-              or None if cannot calculate
+        dict with 'max_power_px' and optionally 'max_power_real' (W/kg), or None.
     """
     if phases is None or "t1" not in phases or "t3" not in phases:
         return None
@@ -79,27 +101,18 @@ def calculate_max_specific_power(df, phases):
         if "specific_power_y_smooth" not in df.columns:
             return None
 
-        # Extract specific power data between t1 and t3
         power_segment = df.loc[t1:t3, "specific_power_y_smooth"]
-
         if power_segment.empty:
             return None
 
-        # Get maximum absolute specific power in pixel units
         max_power_px = float(power_segment.abs().max())
-
         if np.isnan(max_power_px):
             return None
 
-        # Calculate pixel-to-meter conversion
         px_to_m = calculate_pixel_to_meter_conversion(df)
-
         result: dict[str, Optional[float]] = {"max_power_px": max_power_px}
 
         if px_to_m is not None:
-            # Convert from px²/s³ to m²/s³ (which equals W/kg)
-            # specific_power = acceleration × velocity
-            # (px/s²) × (px/s) × (m/px)² = m²/s³ = W/kg
             max_power_real = max_power_px * (px_to_m**2)
             result["max_power_real"] = max_power_real
             print(
@@ -117,14 +130,110 @@ def calculate_max_specific_power(df, phases):
         return None
 
 
+# ---------------------------------------------------------------------------
+# New 3-phase detection: pull / pull-under / recovery
+# ---------------------------------------------------------------------------
+
+
+def _detect_three_phases(df: pd.DataFrame, fps: float) -> pd.Series:
+    """
+    Assign one of three kinematic bar phases to every frame.
+
+    Phase labels (integer):
+      0 – Pull         : barbell moving upward AND lifter's hips have not yet
+                         begun dropping after the bar started moving.
+      1 – Pull-under   : hips are actively descending under the bar.
+                         Starts when hips begin to drop (after bar is rising);
+                         ends when hips stop descending.
+      2 – Recovery     : from when hips stop descending until bar reaches
+                         peak height.
+
+    Detection is purely kinematic, using smoothed signals already present on
+    *df*:
+      - ``vel_y_smooth``  : bar vertical velocity (positive = upward, px/s)
+      - ``hip_y_avg``     : average hip Y pixel coordinate (larger = lower in frame)
+
+    All three phases are guaranteed to be present.  If detection fails at any
+    step the function falls back gracefully by extending the previous phase.
+    """
+    phase = pd.Series(0, index=df.index, dtype="int64", name="bar_phase")
+
+    if "vel_y_smooth" not in df.columns or "hip_y_avg" not in df.columns:
+        return phase
+
+    vel = df["vel_y_smooth"].fillna(0)
+    hip_y = df["hip_y_avg"]
+
+    # ----- Step 1: find when bar first moves upward (start of Pull) ----------
+    # Use a small threshold to ignore noise
+    vel_threshold = max(10.0, float(vel.abs().max()) * 0.05)
+    bar_moving_up = vel > vel_threshold
+
+    if not bool(bar_moving_up.any()):
+        # Bar never moves upward – keep everything as phase 0
+        return phase
+
+    pull_start_idx = int(bar_moving_up.idxmax())  # type: ignore[arg-type]
+
+    # ----- Step 2: find when hips begin to drop AFTER the bar starts rising --
+    # "Hips dropping" means hip_y_avg increasing (Y grows downward).
+    # We look for the first sustained increase in hip_y after pull_start.
+    hip_after_pull = hip_y.loc[pull_start_idx:]
+
+    # Smooth hip_y so transient noise doesn't trigger a false phase boundary
+    hip_smooth = _savgol_smooth(hip_after_pull, window=9, poly=3)
+
+    # Hip velocity (positive = hips moving down in frame = dropping)
+    hip_vel = hip_smooth.diff().fillna(0)
+
+    hip_drop_threshold = (
+        float(hip_smooth.std()) * 0.1 if float(hip_smooth.std()) > 0 else 0.5
+    )
+    hips_dropping = hip_vel > hip_drop_threshold
+
+    pull_under_start_idx: int | None = None
+    if bool(hips_dropping.any()):
+        pull_under_start_idx = int(hips_dropping.idxmax())  # type: ignore[arg-type]
+
+    # ----- Step 3: find when hips stop descending (end of Pull-under) --------
+    recovery_start_idx: int | None = None
+    if pull_under_start_idx is not None:
+        hip_after_pu = hip_y.loc[pull_under_start_idx:]
+        hip_smooth_pu = _savgol_smooth(hip_after_pu, window=9, poly=3)
+        hip_vel_pu = hip_smooth_pu.diff().fillna(0)
+
+        # Hips stop dropping when hip_vel goes negative or near zero
+        hips_stopped = hip_vel_pu <= hip_drop_threshold * 0.5
+
+        if bool(hips_stopped.any()):
+            recovery_start_idx = int(hips_stopped.idxmax())  # type: ignore[arg-type]
+
+    # ----- Assign phases ------------------------------------------------------
+    # Phase 0 (Pull): pull_start_idx → pull_under_start_idx
+    # Phase 1 (Pull-under): pull_under_start_idx → recovery_start_idx
+    # Phase 2 (Recovery): recovery_start_idx → end
+
+    if pull_under_start_idx is not None:
+        phase.loc[df.index >= pull_under_start_idx] = 1
+    if recovery_start_idx is not None:
+        phase.loc[df.index >= recovery_start_idx] = 2
+
+    # Frames before pull_start_idx stay at 0 (pre-lift / beginning of Pull)
+
+    return phase
+
+
+# ---------------------------------------------------------------------------
+# Step 2 main function
+# ---------------------------------------------------------------------------
+
+
 def step_2_analyze_data(input_data, output_path):
     print("--- Step 2: Analyzing Data ---")
 
-    # Unpack the input data
     metadata = input_data.get("metadata", {})
     df_list = input_data.get("data", [])
 
-    # Lift type may be provided by Step 1 via metadata
     lift_type = str(metadata.get("lift_type", "none")).lower()
 
     if not df_list:
@@ -133,9 +242,7 @@ def step_2_analyze_data(input_data, output_path):
 
     df = pd.DataFrame(df_list)
 
-    # --- Memory Management ---
-    # The raw list of dicts can be huge. Now that we have a DataFrame,
-    # we can free the raw list to save memory during analysis.
+    # Free the raw list now that we have a DataFrame
     del df_list
     if "data" in input_data:
         del input_data["data"]
@@ -148,10 +255,7 @@ def step_2_analyze_data(input_data, output_path):
     df = df.set_index("frame").sort_index()
 
     frame_gaps = df.index.to_series().diff()
-
-    # Cast the result to a Series explicitly
     frame_gaps_numeric = cast(Series, pd.to_numeric(frame_gaps, errors="coerce"))
-
     if (frame_gaps_numeric.fillna(0) > 1).any():
         print(f"Warning: Detected {(frame_gaps_numeric > 1).sum()} gaps.")
 
@@ -163,7 +267,9 @@ def step_2_analyze_data(input_data, output_path):
     df["frame_width"] = frame_width
     df["frame_height"] = frame_height
 
-    # --- Unpack Landmark Data ---
+    # -----------------------------------------------------------------------
+    # Unpack raw landmark data into per-joint columns
+    # -----------------------------------------------------------------------
     LANDMARKS_TO_TRACK = {
         "left_shoulder",
         "right_shoulder",
@@ -181,9 +287,8 @@ def step_2_analyze_data(input_data, output_path):
 
     for name in LANDMARKS_TO_TRACK:
         df[name] = df["landmarks"].apply(
-            lambda x: x.get(name) if isinstance(x, dict) else None
+            lambda x, _n=name: x.get(_n) if isinstance(x, dict) else None
         )
-
         df[f"{name}_x"] = df[name].apply(
             lambda x: x[0] if (x is not None and len(x) >= 4 and x[3] > 0.1) else np.nan
         )
@@ -197,14 +302,19 @@ def step_2_analyze_data(input_data, output_path):
             lambda x: x[3] if (x is not None and len(x) >= 4) else np.nan
         )
 
-    # --- Calculate Angles ---
-    def get_pixel_pos(row, name):
+    # -----------------------------------------------------------------------
+    # Compute pixel-space joint positions (needed for angles and hip_y_avg)
+    # -----------------------------------------------------------------------
+    def get_pixel_pos(row, name: str) -> np.ndarray:
         x_norm = row.get(f"{name}_x")
         y_norm = row.get(f"{name}_y")
         if pd.isna(x_norm) or pd.isna(y_norm):
             return np.array([np.nan, np.nan])
         return np.array([x_norm * frame_width, y_norm * frame_height])
 
+    # -----------------------------------------------------------------------
+    # Calculate joint angles (from smoothed joint positions)
+    # -----------------------------------------------------------------------
     df["left_knee_angle"] = df.apply(
         lambda row: calculate_angle(
             get_pixel_pos(row, "left_hip"),
@@ -241,9 +351,21 @@ def step_2_analyze_data(input_data, output_path):
         axis=1,
     )
 
+    # -----------------------------------------------------------------------
+    # Lifter angle – tracked per-frame, raw MediaPipe output
+    # -----------------------------------------------------------------------
+    df["lifter_angle"] = df["landmarks"].apply(
+        lambda x: calculate_lifter_angle(x) if isinstance(x, dict) else np.nan
+    )
+
+    # -----------------------------------------------------------------------
+    # Hip average (pixel space) – used for phase detection
+    # -----------------------------------------------------------------------
     df["hip_y_avg"] = df[["left_hip_y", "right_hip_y"]].mean(axis=1) * frame_height
 
-    # --- Calculate Stabilized Coordinates ---
+    # -----------------------------------------------------------------------
+    # Barbell stabilised coordinates
+    # -----------------------------------------------------------------------
     df["total_shake_x"] = df["shake_dx"].cumsum()
     df["total_shake_y"] = df["shake_dy"].cumsum()
 
@@ -264,163 +386,156 @@ def step_2_analyze_data(input_data, output_path):
     df["barbell_x_stable"] = df["barbell_x_raw"] - df["total_shake_x"]
     df["barbell_y_stable"] = df["barbell_y_raw"] - df["total_shake_y"]
 
-    # --- Smooth Position Data ---
-    # Apply Savitzky-Golay filter to stabilized position to remove jitter
+    # -----------------------------------------------------------------------
+    # Smooth barbell position
+    # -----------------------------------------------------------------------
     x_filled = df["barbell_x_stable"].interpolate(method="linear").bfill().ffill()
     y_filled = df["barbell_y_stable"].interpolate(method="linear").bfill().ffill()
 
-    pos_window = min(9, len(x_filled) // 2 * 2 + 1)  # Must be odd
+    pos_window = min(11, len(x_filled) // 2 * 2 + 1)
     if pos_window >= 5 and len(x_filled) >= pos_window:
-        print(f"Applying position smoothing with window {pos_window}...")
+        print(f"Applying barbell position smoothing with window {pos_window}...")
         df["barbell_x_smooth"] = savgol_filter(x_filled, pos_window, 3)
         df["barbell_y_smooth"] = savgol_filter(y_filled, pos_window, 3)
     else:
-        print("Warning: Not enough data to smooth position. Using unsmoothed values.")
+        print(
+            "Warning: Not enough data to smooth barbell position. Using unsmoothed values."
+        )
         df["barbell_x_smooth"] = df["barbell_x_stable"]
         df["barbell_y_smooth"] = df["barbell_y_stable"]
 
-    # --- NEW: Truncate data at beginning - discard frames before bar passes knee ---
-    # Calculate average knee position
+    # -----------------------------------------------------------------------
+    # Truncate: discard frames before bar passes knee (keep 1 s before)
+    # -----------------------------------------------------------------------
     df["knee_y_avg"] = df[["left_knee_y", "right_knee_y"]].mean(axis=1) * frame_height
 
-    # Find when bar passes knee (bar Y > knee Y, since Y=0 is top)
     if bool(df["barbell_y_smooth"].notna().any()) and bool(
         df["knee_y_avg"].notna().any()
     ):
-        # Create a boolean mask where bar is above (lower Y value than) knee
         bar_above_knee = df["barbell_y_smooth"] < df["knee_y_avg"]
-
-        # Find the first frame where bar is above knee
         frames_above_knee = df[bar_above_knee].index.values
 
         if len(frames_above_knee) > 0:
-            # Extract scalar values from pandas Index
             knee_pass_frame = int(frames_above_knee[0])
-
-            # Calculate frame offset for 1 second before knee pass
             frames_before = int(fps)
             first_frame = int(df.index.values[0])
-
             start_frame = max(first_frame, knee_pass_frame - frames_before)
 
             print(
                 f"Bar passes knee at frame {knee_pass_frame}. "
                 f"Keeping data from frame {start_frame} onwards (1s before knee pass)."
             )
-
-            # Truncate data before start_frame
             df = df.loc[start_frame:].copy()
         else:
             print("Warning: Bar never detected above knee. Keeping all data at start.")
     else:
         print("Warning: Cannot determine knee pass frame. Keeping all data at start.")
 
-    # --- NEW: Truncate data at maximum height ---
-    # Note: Y=0 is top, so max height is min Y value
+    # -----------------------------------------------------------------------
+    # Truncate at peak barbell height
+    # -----------------------------------------------------------------------
     if bool(df["barbell_y_smooth"].notna().any()):
-        # Find the index (frame) where the bar reaches its highest point (min Y)
         peak_height_idx = df["barbell_y_smooth"].idxmin()
         print(
             f"Peak height detected at frame {peak_height_idx}. Truncating data after this point."
         )
-
-        # Slice the DataFrame to keep only data up to the peak
-        # We use .loc which includes the endpoint
         df = df.loc[:peak_height_idx].copy()
     else:
         print("Warning: No barbell Y data found. Cannot truncate at peak height.")
 
-    # --- Calculate Kinematics ---
+    # -----------------------------------------------------------------------
+    # Kinematics: time, velocity, acceleration, specific power
+    # -----------------------------------------------------------------------
     if df.index.is_monotonic_increasing:
         df["time_s"] = (df.index - df.index[0]) / fps
     else:
         print("Warning: Frame indices are not monotonic. Using sequential time.")
         df["time_s"] = np.arange(len(df)) / fps
 
-    df["dt"] = df["time_s"].diff()
-    df["dt"] = df["dt"].fillna(1 / fps)
+    df["dt"] = df["time_s"].diff().fillna(1 / fps)
 
-    # Calculate velocity from smoothed position
+    # Velocity from smoothed barbell position (positive = upward because we invert Y)
     df["vel_y_px_s"] = (df["barbell_y_smooth"].diff() / df["dt"]) * -1
 
-    # --- Calculate Bar Path Phases ---
-    # First, always create vel_y_smooth (needed for acceleration later)
-    # 1. Interpolate and fill NaNs to create a continuous velocity signal for smoothing
+    # Smooth velocity
     vel_filled = df["vel_y_px_s"].interpolate(method="linear").fillna(0)
-
-    # 2. Smooth the velocity to remove noise. Window must be odd and less than data length.
-    window_length = min(15, len(vel_filled) // 2 * 2 + 1)  # Must be odd
-    if window_length >= 5:
-        print(f"Applying Savitzky-Golay smoothing with window {window_length}...")
-        df["vel_y_smooth"] = savgol_filter(vel_filled, window_length, 3)
+    vel_window = min(15, len(vel_filled) // 2 * 2 + 1)
+    if vel_window >= 5:
+        print(f"Applying Savitzky-Golay velocity smoothing with window {vel_window}...")
+        df["vel_y_smooth"] = savgol_filter(vel_filled, vel_window, 3)
     else:
-        print("Warning: Not enough data to smooth velocity. Phases may be noisy.")
+        print("Warning: Not enough data to smooth velocity.")
         df["vel_y_smooth"] = vel_filled
 
-    # Now determine phases based on lift type
-    # Clean/Snatch: use lift-specific phase logic from Step 5 helpers (t0..t4), then map to bar_phase
-    # Other lift types: use kinematic (velocity) zero-crossing phase detection
+    # Smoothed acceleration and specific power
+    df["accel_y_smooth"] = df["vel_y_smooth"].diff() / df["dt"]
+    df["specific_power_y_smooth"] = df["accel_y_smooth"] * df["vel_y_smooth"]
+
+    # -----------------------------------------------------------------------
+    # Bar path phase detection
+    # -----------------------------------------------------------------------
+    # For clean/snatch lifts we attempt the classics-aware 3-phase mapping
+    # (pull → pull-under → recovery).  For all other lift types we fall back
+    # to the kinematic 3-phase detector that uses barbell velocity and hip
+    # position only.
     phases = None
-    if lift_type == "clean":
+
+    if lift_type in ("clean", "snatch"):
+        # Lazy import to keep the module self-contained
+        from step5_helpers.classics_phase_detection import (
+            identify_classics_phases,  # type: ignore
+        )
+
         phases = identify_classics_phases(df)
-        if phases:
-            df["bar_phase"] = compute_bar_phase_from_clean_phases(df, phases)
-            df["phase_change"] = df["bar_phase"].diff().fillna(0).ne(0)
-        else:
+
+    if phases is not None:
+        # Map classics phase boundaries (t0-t4) to the 3 new phases:
+        #   Pull        : t0 → t1   (bar off floor to hip extension / end of second pull)
+        #   Pull-under  : t1 → t3   (turnover: hips rise then drop to catch)
+        #   Recovery    : t3 → t4   (stand up to peak bar height)
+        #
+        # t1 = end of first pull (bar at knee)
+        # t2 = end of second pull / hip extension peak
+        # t3 = bottom of catch / lowest hip position
+        # t4 = peak bar height
+        #
+        # We deliberately merge the old "second pull" and "third pull" into
+        # "pull" (t0→t2 is the entire upward drive), then split at t2 for
+        # pull-under and t3 for recovery.
+        #
+        # Revised mapping that matches the new phase definitions:
+        #   Pull        : t0 → t2   (entire upward drive, bar moving up, hips rising)
+        #   Pull-under  : t2 → t3   (hips dropping under bar)
+        #   Recovery    : t3 → t4   (stand-up)
+        idx = df.index
+        bar_phase = pd.Series(0, index=idx, dtype="int64", name="bar_phase")
+
+        t2 = int(phases["t2"])
+        t3 = int(phases["t3"])
+
+        bar_phase.loc[idx >= t2] = 1  # Pull-under begins at hip extension peak
+        bar_phase.loc[idx >= t3] = 2  # Recovery begins when hips stop dropping
+
+        df["bar_phase"] = bar_phase
+        df["phase_change"] = df["bar_phase"].diff().fillna(0).ne(0)
+
+        print(
+            f"Classics phase mapping → Pull:[t0→t2], Pull-under:[t2→t3], Recovery:[t3→t4] "
+            f"(t2={t2}, t3={t3})"
+        )
+    else:
+        # Kinematic 3-phase fallback for non-classics lifts or when detection fails
+        if lift_type in ("clean", "snatch"):
             print(
-                "Warning: Could not identify clean phases for bar_phase. Falling back to velocity-based phase detection."
+                "Warning: Could not identify classics phases. "
+                "Falling back to kinematic 3-phase detection."
             )
-            lift_type = "none"
-    elif lift_type == "snatch":
-        phases = identify_classics_phases(df)
-        if phases:
-            df["bar_phase"] = compute_bar_phase_from_snatch_phases(df, phases)
-            df["phase_change"] = df["bar_phase"].diff().fillna(0).ne(0)
-        else:
-            print(
-                "Warning: Could not identify snatch phases for bar_phase. Falling back to velocity-based phase detection."
-            )
-            lift_type = "none"
+        df["bar_phase"] = _detect_three_phases(df, fps)
+        df["phase_change"] = df["bar_phase"].diff().fillna(0).ne(0)
 
-    if lift_type not in ("clean", "snatch"):
-        # 3. Define a velocity threshold to ignore minor jitters (5% of peak, or 10px/s)
-        vel_threshold = max(10, df["vel_y_smooth"].abs().max() * 0.05)
-        print(f"Using velocity threshold of {vel_threshold:.2f} px/s for phase change.")
-
-        # 4. Detect phases based on zero-crossings (actual direction changes)
-        # Find where velocity changes sign
-        vel_array = np.asarray(df["vel_y_smooth"], dtype=np.float64)
-        vel_safe = np.nan_to_num(vel_array, nan=0.0)
-        vel_signs = np.sign(vel_safe)
-        sign_changes_diff = np.diff(vel_signs)
-        zero_cross_mask = sign_changes_diff != 0
-        zero_cross_indices = np.where(zero_cross_mask)[0] + 1  # +1 to adjust for diff
-
-        # 5. Create phase change detection array
-        phase_changes = np.zeros(len(df), dtype=bool)
-
-        # 6. Validate each zero crossing: only mark as phase change if threshold is exceeded nearby
-        for zc_idx in zero_cross_indices:
-            if zc_idx < len(vel_array):
-                # Check magnitude in window around zero crossing
-                window_start = max(0, zc_idx - 2)
-                window_end = min(len(vel_array), zc_idx + 3)
-                max_vel_magnitude = np.nanmax(
-                    np.abs(vel_array[window_start:window_end])
-                )
-
-                # Valid phase change: zero crossing with sufficient magnitude
-                if max_vel_magnitude > vel_threshold:
-                    phase_changes[zc_idx] = True
-
-        # 7. Assign phase numbers based on zero-crossing changes
-        df["phase_change"] = phase_changes
-        df["bar_phase"] = np.cumsum(phase_changes).astype(int)
-
-    # --- Calculate Perspective Correction (if world landmarks available) ---
-    # This happens after barbell_x_stable and barbell_y_stable are calculated
-
-    # Check if world_landmarks column exists and has data
+    # -----------------------------------------------------------------------
+    # Perspective correction (requires world landmarks)
+    # -----------------------------------------------------------------------
     has_world_landmarks = "world_landmarks" in df.columns and bool(
         df["world_landmarks"].notna().any()
     )
@@ -429,32 +544,26 @@ def step_2_analyze_data(input_data, output_path):
         print("Calculating perspective-corrected bar path...")
         df = calculate_perspective_correction(df, frame_width, frame_height)
 
-        # Report statistics and quality checks
-        valid_frames = df["barbell_x_corrected_px"].notna().sum()
-        if valid_frames > 10:  # Need minimum frames for meaningful analysis
+        valid_frames = df["barbell_x_corrected_cm"].notna().sum()
+        if valid_frames > 10:
             print(
                 f"  Perspective correction calculated for {valid_frames}/{len(df)} frames"
             )
-
-            # Calculate displacement statistics
-            corrected_range = (
-                df["barbell_x_corrected_px"].max() - df["barbell_x_corrected_px"].min()
+            corrected_x_range = (
+                df["barbell_x_corrected_cm"].max() - df["barbell_x_corrected_cm"].min()
             )
-            uncorrected_range = (
-                df["barbell_x_smooth"].max() - df["barbell_x_smooth"].min()
+            corrected_y_range = (
+                df["barbell_y_corrected_cm"].max() - df["barbell_y_corrected_cm"].min()
             )
             print(
-                f"  Horizontal displacement: {uncorrected_range:.1f} px (uncorrected) -> {corrected_range:.1f} px (corrected)"
+                f"  Corrected bar path range: "
+                f"horizontal = {corrected_x_range:.1f} cm, vertical = {corrected_y_range:.1f} cm"
             )
-            avg_yaw = df["camera_yaw_deg"].mean()
-            avg_yaw_val = float(avg_yaw) if not bool(pd.isna(avg_yaw)) else None
-            if avg_yaw_val is not None:
-                print(f"  Reference camera yaw: {avg_yaw_val:.1f}°")
-
-            avg_factor = df["lateral_correction_factor"].mean()
-            factor_val = float(avg_factor) if not bool(pd.isna(avg_factor)) else None
-            if factor_val is not None:
-                print(f"  Lateral correction factor: {factor_val:.3f}x")
+            avg_yaw = df["camera_yaw_deg"].dropna()
+            if len(avg_yaw) > 0:
+                avg_yaw_val = float(avg_yaw.iloc[0])
+                if not pd.isna(avg_yaw_val):
+                    print(f"  Estimated camera yaw: {avg_yaw_val:.1f}°")
         elif valid_frames > 0:
             print(
                 f"  Warning: Only {valid_frames} frames with perspective correction (need >10)"
@@ -462,35 +571,39 @@ def step_2_analyze_data(input_data, output_path):
     else:
         print("Skipping perspective correction (no world landmarks available)")
 
-    # Y-Acceleration (px/s^2)
-    # df['accel_y_px_s2'] = df['vel_y_px_s'].diff() / df['dt'] # OLD
+    # -----------------------------------------------------------------------
+    # Maximum specific power (classics lifts only)
+    # -----------------------------------------------------------------------
+    if phases is not None and lift_type in ("clean", "snatch"):
+        print("\n--- Maximum Specific Power Analysis ---")
+        px_to_m_factor = calculate_pixel_to_meter_conversion(df)
+        if px_to_m_factor is not None:
+            df["px_to_m_conversion"] = px_to_m_factor
 
-    # NEW: Smoothed Acceleration
-    df["accel_y_smooth"] = df["vel_y_smooth"].diff() / df["dt"]
+        max_power_result = calculate_max_specific_power(df, phases)
+        if max_power_result is not None:
+            if max_power_result.get("max_power_real") is not None:
+                print(
+                    f"Peak power output (pull→pull-under): {max_power_result['max_power_real']:.2f} W/kg"
+                )
+            else:
+                print(
+                    f"Peak power output (pull→pull-under): {max_power_result['max_power_px']:.2f} px²/s³ "
+                    "(endcap detection failed)"
+                )
 
-    # Y-Jerk (px/s^3) - REMOVED
-    # df['jerk_y_px_s3'] = df['accel_y_px_s2'].diff() / df['dt']
-
-    # "Specific Power" (Power-to-Mass ratio, proxy)
-    # df['specific_power_y'] = df['accel_y_px_s2'] * df['vel_y_px_s'] # OLD
-
-    # NEW: Smoothed Specific Power
-    df["specific_power_y_smooth"] = df["accel_y_smooth"] * df["vel_y_smooth"]
-
-    # --- Preserve landmarks as string for video rendering ---
+    # -----------------------------------------------------------------------
+    # Preserve landmark string for video rendering
+    # -----------------------------------------------------------------------
     df["landmarks_str"] = df["landmarks"].apply(
         lambda x: str(x) if isinstance(x, dict) else "{}"
     )
 
     def box_to_str(x):
-        """Convert box coordinates to clean string format."""
         if isinstance(x, (list, tuple)):
             values = []
             for v in x:
-                if hasattr(v, "item"):  # It's a tensor
-                    values.append(v.item())
-                else:
-                    values.append(float(v))
+                values.append(v.item() if hasattr(v, "item") else float(v))
             return ",".join(f"{v:.2f}" for v in values)
         return ""
 
@@ -499,52 +612,68 @@ def step_2_analyze_data(input_data, output_path):
     else:
         df["barbell_box_str"] = ""
 
-    # --- Calculate Maximum Specific Power (before dropping barbell_box) ---
-    # Also save conversion factor to CSV for use in Step 5
-    if phases is not None and lift_type in ("clean", "snatch"):
-        print("\n--- Maximum Specific Power Analysis ---")
-        # Calculate and store the conversion factor
-        px_to_m_factor = calculate_pixel_to_meter_conversion(df)
-        if px_to_m_factor is not None:
-            df["px_to_m_conversion"] = px_to_m_factor
+    # -----------------------------------------------------------------------
+    # Drop raw / intermediate columns — only smoothed data goes to CSV
+    # -----------------------------------------------------------------------
+    cols_to_drop: list[str] = []
 
-        max_power_result = calculate_max_specific_power(df, phases)
-        if max_power_result is not None and "max_power_real" in max_power_result:
-            if max_power_result["max_power_real"] is not None:
-                print(
-                    f"Peak power output (t1→t3): {max_power_result['max_power_real']:.2f} W/kg"
-                )
-            else:
-                print(
-                    f"Peak power output (t1→t3): {max_power_result['max_power_px']:.2f} px²/s³ (endcap detection failed)"
-                )
+    # Raw landmark dict columns
+    cols_to_drop.append("landmarks")
 
-    # --- Clean up and Save ---
-    # Drop raw data columns that are no longer needed
-    cols_to_drop = ["landmarks", "shake_dx", "shake_dy"] + list(LANDMARKS_TO_TRACK)
+    # Shake components (cumulative totals are kept)
+    cols_to_drop.extend(["shake_dx", "shake_dy"])
+
+    # Per-joint tuple column (the raw x/y/z columns are kept in the CSV)
+    for name in LANDMARKS_TO_TRACK:
+        cols_to_drop.append(name)  # tuple column — x/y/z/vis columns are kept
+
+    # Barbell raw / unstabilised position
     if "barbell_center" in df.columns:
         cols_to_drop.append("barbell_center")
     if "barbell_box" in df.columns:
         cols_to_drop.append("barbell_box")
+    cols_to_drop.extend(["barbell_x_raw", "barbell_y_raw"])
 
-    # Also drop world landmark intermediate columns (keep only final results)
-    world_landmark_cols = [col for col in df.columns if "world" in col]
-    cols_to_drop.extend(world_landmark_cols)
+    # World landmark intermediate columns (keep only final perspective results)
+    world_cols = [c for c in df.columns if "world" in c]
+    cols_to_drop.extend(world_cols)
 
-    cols_to_drop = [col for col in cols_to_drop if col in df.columns]
+    # Velocity from raw (unsmoothed) position
+    if "vel_y_px_s" in df.columns:
+        cols_to_drop.append("vel_y_px_s")
+
+    # Remove duplicates and only drop columns that actually exist
+    cols_to_drop = list(dict.fromkeys(cols_to_drop))
+    cols_to_drop = [c for c in cols_to_drop if c in df.columns]
+
     df = df.drop(columns=cols_to_drop)
 
     df.to_csv(output_path)
-    print(f"Analysis complete. Enriched data saved to '{output_path}'")
+    print(f"\nAnalysis complete. Enriched data saved to '{output_path}'")
     print(f"Saved {len(df)} frames with {len(df.columns)} columns")
 
     barbell_tracked = df["barbell_y_stable"].notna().sum()
     print(
-        f"Barbell tracked in {barbell_tracked}/{len(df)} frames ({100 * barbell_tracked / len(df):.1f}%)"
+        f"Barbell tracked in {barbell_tracked}/{len(df)} frames "
+        f"({100 * barbell_tracked / len(df):.1f}%)"
     )
 
+    # Phase summary
+    if "bar_phase" in df.columns:
+        phase_names = {0: "Pull", 1: "Pull-under", 2: "Recovery"}
+        counts = df["bar_phase"].value_counts().sort_index()
+        print("Phase breakdown:")
+        for pid, count in counts.items():
+            pid_int = int(pid)  # type: ignore[arg-type]  # value_counts keys are ints at runtime
+            label = phase_names.get(pid_int, f"Phase {pid_int}")
+            print(f"  {label}: {count} frames ({100 * count / len(df):.1f}%)")
 
-# --- Main Execution ---
+
+# ---------------------------------------------------------------------------
+# Main (standalone CLI)
+# ---------------------------------------------------------------------------
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Step 2: Analyze raw data and save to CSV."

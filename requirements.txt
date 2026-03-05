@@ -1,7 +1,8 @@
 # Core Computer Vision and ML Libraries
 opencv-python>=4.8.0
 mediapipe>=0.10.0
-ultralytics>=8.0.0
+ultralytics>=8.3.0  # YOLO26 NMS-free architecture requires >= 8.3
+torch>=2.0.0
 torchvision>=0.15.0  # PyTorch vision utilities
 
 # Data Processing and Analysis
@@ -13,7 +14,7 @@ scipy>=1.10.0
 matplotlib>=3.7.0
 
 # Utilities
-rich>=13.0.0  # Progress bars in cli
+rich>=13.0.0  # Progress bars and formatted output in CLI
 
 # Low-level drawing support required by some GUI backends
 pycairo>=1.17.0
@@ -22,4 +23,4 @@ pycairo>=1.17.0
 toga>=0.4.7
 
 # See requirements-hardware.txt for optional hardware-accelerated backends
-# (onnxruntime variants, openvino, etc.)
+# (onnxruntime variants, openvino, tensorrt, etc.)
