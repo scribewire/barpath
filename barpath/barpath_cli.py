@@ -96,21 +96,24 @@ def print_rich_help(console, parser):
     # Examples
     console.print("[bold]Examples:[/bold]")
     example_text = """
-[dim]# 1. Quick analysis with clean lift (CPU, no video)[/dim]
-python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type clean --no-video
+    [dim]# 1. Quick analysis with clean lift using YOLO26 (no video output)[/dim]
+    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type clean --no-video
 
-[dim]# 2. Full analysis with snatch (CPU, output video)[/dim]
-python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --lift_type snatch --output_video out.mp4
+    [dim]# 2. Full clean analysis with video output (YOLO26)[/dim]
+    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type clean --output_video out.mp4
 
-[dim]# 3. OpenVINO model (Intel CPU optimization)[/dim]
-python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo_openvino_export --lift_type none --no-video
+    [dim]# 3. Snatch analysis — reports Pull / Pull-under / Recovery phases[/dim]
+    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type snatch --output_video out.mp4
 
-[dim]# 4. Batch processing multiple videos[/dim]
-python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 vid3.mp4 --model yolo.pt --lift_type clean --no-video
+    [dim]# 4. OpenVINO model (Intel CPU optimization, YOLO26 export)[/dim]
+    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26_openvino_export --lift_type none --no-video
 
-[dim]# 5. Custom output directory[/dim]
-python barpath/barpath_cli.py --input_video lift.mp4 --model yolo.pt --output_dir my_results/
-"""
+    [dim]# 5. Batch processing multiple videos[/dim]
+    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 vid3.mp4 --model models/yolo26n.pt --lift_type clean --no-video
+
+    [dim]# 6. Custom output directory[/dim]
+    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --output_dir my_results/
+    """
     console.print(
         Panel(example_text.strip(), title="Sample Commands", border_style="green")
     )
@@ -145,7 +148,7 @@ def main():
     parser.add_argument(
         "--model",
         required=True,
-        help="Path to the trained YOLO model (e.g., 'models/best.pt', 'models/best.onnx', 'models/best.engine', or an OpenVINO export directory)",
+        help="Path to the trained YOLO model (e.g., 'models/yolo26n.pt', 'models/best.onnx', 'models/best.engine', or an OpenVINO export directory). YOLO26 NMS-free models are fully supported.",
     )
     parser.add_argument(
         "--output_video",
@@ -401,6 +404,9 @@ def main():
                 )
                 console.print(
                     f"  • Analysis CSV:    [cyan]{os.path.join(args.output_dir, 'final_analysis.csv')}[/cyan]"
+                )
+                console.print(
+                    "  • Phases:          [cyan]Pull → Pull-under → Recovery[/cyan]"
                 )
                 if not args.no_video:
                     console.print(

@@ -1,5 +1,7 @@
 import argparse
 import pickle
+import queue
+import threading
 import time
 from pathlib import Path
 
@@ -30,6 +32,12 @@ LANDMARKS_TO_TRACK = LANDMARK_NAMES
 # Convert string names to MediaPipe PoseLandmark objects
 LANDMARK_ENUMS = get_landmark_enums(LANDMARKS_TO_TRACK)
 
+# Producer-consumer queue sentinel
+_QUEUE_DONE = object()
+
+# Queue size: buffer up to N decoded frames ahead of inference
+_DECODE_QUEUE_SIZE = 8
+
 
 def _get_model_path(model_path: Path) -> tuple[str, bool]:
     """
@@ -41,6 +49,8 @@ def _get_model_path(model_path: Path) -> tuple[str, bool]:
     Notes:
     - TensorRT `.engine` models are treated as regular model files (not OpenVINO).
       Ultralytics will select the TensorRT backend automatically when given an `.engine` path.
+    - YOLO26 uses an NMS-free end-to-end architecture; no `iou` threshold is needed
+      during inference since NMS is baked into the model head.
 
     Returns:
         tuple: (model_path_str, is_openvino)
@@ -73,7 +83,53 @@ def _get_model_path(model_path: Path) -> tuple[str, bool]:
         raise ValueError(f"Model path does not exist: {model_path}")
 
 
-# --- Step 1: Data Collection Function ---
+def _is_yolo26_model(model_path_str: str) -> bool:
+    """
+    Heuristic check: return True if the model path looks like a YOLO26 model.
+
+    YOLO26 uses an NMS-free architecture (end-to-end), so we should NOT pass
+    `iou` threshold arguments during inference (the parameter is ignored/unsupported).
+    We detect YOLO26 by checking for 'yolo26' or 'yolov26' in the path string
+    (case-insensitive). If the model is already loaded, callers can also check
+    `model.task` or the architecture name.
+    """
+    lower = model_path_str.lower()
+    return "yolo26" in lower or "yolov26" in lower
+
+
+# ---------------------------------------------------------------------------
+# Producer: reads frames from disk and puts (frame_count, frame) onto a queue
+# ---------------------------------------------------------------------------
+
+
+def _frame_producer(
+    video_path: str,
+    out_queue: "queue.Queue[object]",
+    total_frames: int,
+) -> None:
+    """
+    Decode frames from *video_path* and push them onto *out_queue*.
+
+    Each item is a ``(frame_count, frame_bgr)`` tuple.  Pushes the sentinel
+    ``_QUEUE_DONE`` when the video is exhausted or an error occurs.
+    """
+    cap = cv2.VideoCapture(video_path)
+    try:
+        for frame_count in range(total_frames):
+            success, frame = cap.read()
+            if not success:
+                break
+            out_queue.put((frame_count, frame))
+    finally:
+        cap.release()
+        out_queue.put(_QUEUE_DONE)
+
+
+# ---------------------------------------------------------------------------
+# Step 1 main function
+# ---------------------------------------------------------------------------
+
+
 def step_1_collect_data(
     video_path,
     model_path,
@@ -81,34 +137,43 @@ def step_1_collect_data(
     lift_type="none",
 ):
     print("--- Step 1: Collecting Raw Data ---")
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+
+    # -----------------------------------------------------------------------
+    # Open video once to read metadata, then close it.  The actual frame
+    # decoding is done by the background producer thread.
+    # -----------------------------------------------------------------------
+    _probe = cv2.VideoCapture(video_path)
+    if not _probe.isOpened():
         raise FileNotFoundError(f"Could not open video file {video_path}")
 
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_width = int(_probe.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(_probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = _probe.get(cv2.CAP_PROP_FPS)
+    total_frames = int(_probe.get(cv2.CAP_PROP_FRAME_COUNT))
+    _probe.release()
 
     if total_frames == 0:
-        cap.release()
         raise ValueError(f"Video file {video_path} has no frames.")
 
+    # -----------------------------------------------------------------------
     # Initialize MediaPipe Pose
+    # -----------------------------------------------------------------------
     mp_pose_solution = mp.solutions.pose  # type: ignore
     pose = None
     if lift_type != "none":
         pose = mp_pose_solution.Pose(
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
-            enable_segmentation=True,  # Enable segmentation for stabilization
-            model_complexity=1,  # Balance between accuracy and performance
+            enable_segmentation=True,
+            model_complexity=2,
         )
 
     # Initialize stabilization parameters
     stab_params = StabilizationParams()
 
-    # Initialize YOLO Model
+    # -----------------------------------------------------------------------
+    # Initialize YOLO Model (YOLO26 NMS-free architecture)
+    # -----------------------------------------------------------------------
     try:
         model_path_obj = Path(model_path)
         model_path_str, is_openvino = _get_model_path(model_path_obj)
@@ -119,15 +184,23 @@ def step_1_collect_data(
         )
         if is_tensorrt_engine:
             print(
-                "Detected TensorRT engine model (.engine). Ultralytics will use the TensorRT backend automatically."
+                "Detected TensorRT engine model (.engine). "
+                "Ultralytics will use the TensorRT backend automatically."
             )
 
+        # YOLO26 is NMS-free: the model head outputs final detections directly.
+        # We do NOT pass iou= during inference; conf= is still valid.
         yolo_model = YOLO(model_path_str, task="detect")
 
-        # Determine device for inference
-        # - For TensorRT `.engine`, Ultralytics runs TensorRT (GPU); do not force a device override.
-        # - For OpenVINO exports, prefer Intel GPU when available.
-        # - Otherwise, prefer CUDA when available; fall back to CPU.
+        # Detect whether this is a YOLO26 model so we can adjust inference call.
+        nms_free = _is_yolo26_model(model_path_str)
+        if nms_free:
+            print(
+                "YOLO26 NMS-free architecture detected. "
+                "Skipping iou threshold argument during inference."
+            )
+
+        # Determine inference device
         if is_tensorrt_engine:
             yolo_device = None
         elif is_openvino and detect_intel_gpu():
@@ -143,32 +216,56 @@ def step_1_collect_data(
             else:
                 print("Using CPU for inference")
     except Exception as e:
-        cap.release()
         if pose:
             pose.close()
         raise RuntimeError(f"Failed to load model: {e}")
 
+    # -----------------------------------------------------------------------
+    # Start producer thread (I/O-bound: frame decoding runs on a background thread
+    # so the main thread is never idle waiting for disk reads)
+    # -----------------------------------------------------------------------
+    frame_queue: "queue.Queue[object]" = queue.Queue(maxsize=_DECODE_QUEUE_SIZE)
+    producer_thread = threading.Thread(
+        target=_frame_producer,
+        args=(video_path, frame_queue, total_frames),
+        daemon=True,
+    )
+    producer_thread.start()
+
+    # -----------------------------------------------------------------------
     # Stabilization state
+    # -----------------------------------------------------------------------
     prev_gray = None
-    prev_background_features = None  # Features from previous frame
+    prev_background_features = None
 
-    raw_data_list = []
+    raw_data_list: list[dict] = []
 
-    # State variable for tracking-by-proximity
+    # Tracking state
     last_known_barbell_center = None
-    # Performance tracking for FPS display
+
+    # Performance tracking
     last_iter_timestamp = time.perf_counter()
-    smoothed_fps = None
+    smoothed_fps: float | None = None
     fps_smoothing = 0.2
 
-    # Loop through frames and yield progress
-    for frame_count in range(total_frames):
-        success, frame = cap.read()
-        if not success:
+    # -----------------------------------------------------------------------
+    # Main processing loop — consumer side of the producer-consumer pipeline.
+    # The main thread performs all CPU-bound work: YOLO inference, MediaPipe
+    # pose estimation, optical-flow stabilization, and data aggregation.
+    # -----------------------------------------------------------------------
+    frames_processed = 0
+
+    while True:
+        # Block until a frame is available (the producer does the disk I/O)
+        item = frame_queue.get()
+
+        if item is _QUEUE_DONE:
             break
 
-        # Initialize all keys for this frame with None
-        frame_data = {
+        frame_count, frame = item  # type: ignore[misc]
+
+        # Initialize all keys for this frame with None / zero
+        frame_data: dict = {
             "frame": frame_count,
             "landmarks": None,
             "world_landmarks": None,
@@ -181,45 +278,44 @@ def step_1_collect_data(
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Run MediaPipe and YOLO
+        # --- MediaPipe Pose ---
         results_pose = None
         if pose:
             results_pose = pose.process(frame_rgb)
 
-        # Run YOLO inference
-        if yolo_device is None:
-            # TensorRT `.engine` path: let Ultralytics select the TensorRT backend without a device override.
-            results_yolo = yolo_model(frame, verbose=False, conf=0.25)
-        else:
-            results_yolo = yolo_model(
-                frame, verbose=False, conf=0.25, device=yolo_device
-            )
+        # --- YOLO Inference (YOLO26 NMS-free) ---
+        # YOLO26's end-to-end head already suppresses overlapping boxes, so we
+        # only pass `conf` (minimum confidence).  The `iou` parameter used by
+        # traditional NMS-based YOLO models is intentionally omitted here.
+        _infer_kwargs: dict = {"verbose": False, "conf": 0.25}
+        if yolo_device is not None:
+            _infer_kwargs["device"] = yolo_device
 
-        # 1. Process MediaPipe Data
+        results_yolo = yolo_model(frame, **_infer_kwargs)
+
+        # --- Process MediaPipe ---
         landmarks_data, world_landmarks_data, segmentation_mask = None, None, None
         if results_pose is not None:
-            # Use helper to extract both landmark types and segmentation mask
             landmarks_data, world_landmarks_data, segmentation_mask = (
                 process_pose_results(results_pose, LANDMARK_ENUMS)
             )
-
             frame_data["landmarks"] = landmarks_data
             frame_data["world_landmarks"] = world_landmarks_data
 
-        # 2. Process YOLO Data
+        # --- Process YOLO detections ---
         best_endcap = None
-        detected_endcaps = []
+        detected_endcaps: list[dict] = []
 
         if results_yolo:
             for r in results_yolo:
+                # YOLO26 NMS-free: r.boxes contains the final post-processed detections.
+                # The boxes API is identical to previous YOLO versions, so the rest of
+                # the detection pipeline is unchanged.
                 for box in r.boxes:
                     cls_id = int(box.cls[0])
 
-                    # YOLO convention: class 0 is the target object (barbell endcap)
-                    # For models trained on single-class datasets, all detections will be class 0
-                    is_match = cls_id == 0
-
-                    if is_match:
+                    # Class 0 = barbell endcap (single-class dataset convention)
+                    if cls_id == 0:
                         coords = box.xyxy[0].cpu().numpy()
                         x1, y1, x2, y2 = coords
 
@@ -235,7 +331,7 @@ def step_1_collect_data(
 
         if detected_endcaps:
             if last_known_barbell_center is None:
-                # --- INITIAL DETECTION ---
+                # --- Initial detection: anchor to feet or frame centre ---
                 feet_pos_px = None
                 if results_pose and results_pose.pose_landmarks:
                     feet_pos_px = get_ankle_positions(
@@ -246,7 +342,6 @@ def step_1_collect_data(
                     )
 
                 if feet_pos_px is not None:
-                    # Logic 1: Use feet position
                     best_endcap = min(
                         detected_endcaps,
                         key=lambda e: np.linalg.norm(
@@ -257,17 +352,16 @@ def step_1_collect_data(
                         f"[Info] Barbell initially detected at frame {frame_count} (near feet)."
                     )
                 else:
-                    # Logic 2: Fallback to center of frame
                     best_endcap = min(
                         detected_endcaps,
                         key=lambda e: abs(e["center"][0] - (frame_width / 2)),
                     )
                     print(
-                        f"[Info] Barbell initially detected at frame {frame_count} (near center). No feet visible."
+                        f"[Info] Barbell initially detected at frame {frame_count} "
+                        f"(near center). No feet visible."
                     )
-
             else:
-                # --- TRACKING ---
+                # --- Tracking by proximity to last known position ---
                 best_endcap = min(
                     detected_endcaps,
                     key=lambda e: np.linalg.norm(
@@ -279,49 +373,42 @@ def step_1_collect_data(
             frame_data["barbell_center"] = best_endcap["center"]
             frame_data["barbell_box"] = best_endcap["box"]
 
-        # 3. Process Stabilization Data with Global Motion Model
+        # --- Stabilization via Lucas-Kanade optical flow on background features ---
         shake_dx, shake_dy = 0.0, 0.0
 
-        # Create background mask for feature detection (exclude person and bar)
         background_mask = None
         if segmentation_mask is not None:
             background_mask = create_background_mask(segmentation_mask)
 
-        # Detect or track background features
         curr_background_features = None
 
         if prev_gray is not None and prev_background_features is not None:
-            # Track features from previous frame using Lucas-Kanade
-            curr_features, status, err = track_features(
+            curr_features, status, _err = track_features(
                 prev_gray, gray, prev_background_features, stab_params
             )
-
             if curr_features is not None and status is not None:
-                # Estimate motion from tracked features
                 shake_dx, shake_dy, curr_background_features = estimate_motion(
                     prev_background_features, curr_features, status, stab_params
                 )
 
-        # Detect new features if we don't have enough or this is the first frame
         if curr_background_features is None or len(curr_background_features) < 50:
-            # Detect new features in background regions
             new_features = detect_features(gray, background_mask, stab_params)
             if new_features is not None:
                 curr_background_features = update_features(
                     curr_background_features, new_features, min_features=50
                 )
 
-        # Store stabilization data
         frame_data["shake_dx"] = shake_dx
         frame_data["shake_dy"] = shake_dy
 
         # Update state for next iteration
         prev_background_features = curr_background_features
-
-        raw_data_list.append(frame_data)
         prev_gray = gray
 
-        # Yield progress update with FPS measurement
+        raw_data_list.append(frame_data)
+        frames_processed += 1
+
+        # --- Yield progress ---
         now_ts = time.perf_counter()
         frame_duration = max(now_ts - last_iter_timestamp, 1e-6)
         inst_fps = 1.0 / frame_duration
@@ -333,18 +420,20 @@ def step_1_collect_data(
             )
         last_iter_timestamp = now_ts
 
-        progress_fraction = (frame_count + 1) / total_frames
+        progress_fraction = (frames_processed) / total_frames
         yield (
             "step1",
             progress_fraction,
-            f"Collecting data: frame {frame_count + 1}/{total_frames} ({smoothed_fps:.1f} FPS)",
+            f"Collecting data: frame {frames_processed}/{total_frames} ({smoothed_fps:.1f} FPS)",
         )
 
-    cap.release()
+    # Wait for producer to finish (should already be done at this point)
+    producer_thread.join(timeout=5)
+
     if pose:
         pose.close()
 
-    # --- Save data to pickle file ---
+    # --- Save to pickle ---
     output_data = {
         "metadata": {
             "frame_width": frame_width,
@@ -374,7 +463,10 @@ def main():
     parser.add_argument(
         "--model",
         required=True,
-        help="Path to the trained YOLO model (e.g., best.pt, best.onnx, or an OpenVINO export directory)",
+        help=(
+            "Path to the trained YOLO model "
+            "(e.g., best.pt, best.onnx, yolo26n.pt, or an OpenVINO export directory)"
+        ),
     )
     parser.add_argument(
         "--output",
@@ -384,7 +476,10 @@ def main():
     parser.add_argument(
         "--lift_type",
         default="none",
-        help="Type of lift (e.g., 'clean', 'snatch', 'none'). If 'none', pose estimation is skipped.",
+        help=(
+            "Type of lift (e.g., 'clean', 'snatch', 'none'). "
+            "If 'none', pose estimation is skipped."
+        ),
     )
 
     args = parser.parse_args()
@@ -400,21 +495,19 @@ def main():
         print(f"Error: Model path not found at {args.model}")
         return
 
-    # Validate model path
     try:
-        _get_model_path(model_path)  # Returns tuple but we just validate here
+        _get_model_path(model_path)
     except ValueError as e:
         print(f"Error: {e}")
         return
 
-    # Consume the generator to run the function
     for _ in step_1_collect_data(
         args.input,
         args.model,
         args.output,
         args.lift_type,
     ):
-        pass  # Progress updates ignored when run standalone
+        pass
 
 
 if __name__ == "__main__":

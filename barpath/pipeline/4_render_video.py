@@ -16,21 +16,25 @@ from utils import (
 )
 
 # --- Constants ---
-# NEW: Updated legend colors (using COLOR_SCHEME from utils)
+# ---------------------------------------------------------------------------
+# Phase colors — BGR order (OpenCV).
+# Must match the hex values used in 3_generate_graphs.py:
+#   Pull        #e02020  → (32,  32, 224)
+#   Pull-under  #f07800  → (0,  120, 240)
+#   Recovery    #18a020  → (32, 160,  24)
+# ---------------------------------------------------------------------------
 LEGEND_COLORS = {
     "Barbell Box": COLOR_SCHEME["Barbell Box"],
-    "First Pull": (0, 0, 255),  # Red
-    "Second Pull": (0, 165, 255),  # Orange
-    "Third Pull": (0, 255, 0),  # Green
-    "Recovery": (255, 0, 255),  # Magenta
+    "Pull": (32, 32, 224),  # BGR for #e02020 — vivid red
+    "Pull-under": (0, 120, 240),  # BGR for #f07800 — vivid orange
+    "Recovery": (32, 160, 24),  # BGR for #18a020 — vivid green
 }
 
-# BGR color map for phases (matching clean lift phases)
+# Integer-keyed BGR lookup used when drawing per-segment bar path lines
 PHASE_COLORS_BGR = {
-    0: (0, 0, 255),  # Phase 0 (First Pull): Red
-    1: (0, 165, 255),  # Phase 1 (Second Pull): Orange
-    2: (0, 255, 0),  # Phase 2 (Third Pull): Green
-    3: (255, 0, 255),  # Phase 3 (Recovery): Magenta
+    0: (32, 32, 224),  # Phase 0 — Pull        (vivid red)
+    1: (0, 120, 240),  # Phase 1 — Pull-under  (vivid orange)
+    2: (32, 160, 24),  # Phase 2 — Recovery    (vivid green)
 }
 
 # Skeleton connections to draw

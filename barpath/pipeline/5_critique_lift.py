@@ -7,6 +7,16 @@ from step5_helpers.classics_phase_detection import identify_classics_phases
 from step5_helpers.clean import check_clean_faults
 from step5_helpers.snatch import check_snatch_faults
 
+# ---------------------------------------------------------------------------
+# Phase name mapping for the new 3-phase system
+# ---------------------------------------------------------------------------
+# The classics phase detector still returns t0–t4.  We re-map those
+# boundaries to the three user-visible phase names:
+#   Pull        : t0 → t2   (full upward drive)
+#   Pull-under  : t2 → t3   (hips drop under bar)
+#   Recovery    : t3 → t4   (stand-up to peak bar height)
+PHASE_NAMES = {0: "Pull", 1: "Pull-under", 2: "Recovery"}
+
 
 def calculate_max_specific_power(df, phases):
     """
@@ -64,7 +74,7 @@ def write_analysis_md(critiques, phases, df, lift_type, output_path="analysis.md
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(f"# Analysis Report: {lift_type.capitalize()}\n\n")
 
-            # Calculate and display maximum specific power before phase timing
+            # --- Maximum Specific Power ---
             max_power_result = calculate_max_specific_power(df, phases)
             if max_power_result is not None:
                 f.write("## Maximum Specific Power\n")
@@ -72,44 +82,57 @@ def write_analysis_md(critiques, phases, df, lift_type, output_path="analysis.md
                 max_power_real = max_power_result.get("max_power_real")
 
                 if max_power_real is not None:
-                    f.write(f"- **Peak Power (t1→t3):** {max_power_real:.2f} W/kg\n")
+                    f.write(
+                        f"- **Peak Power (Pull → Pull-under):** {max_power_real:.2f} W/kg\n"
+                    )
                     f.write(f"  *(Raw: {max_power_px:.2f} px²/s³)*\n\n")
                 else:
-                    f.write(f"- **Peak Power (t1→t3):** {max_power_px:.2f} px²/s³\n")
+                    f.write(
+                        f"- **Peak Power (Pull → Pull-under):** {max_power_px:.2f} px²/s³\n"
+                    )
                     f.write(
                         "  *(Note: Real-world conversion unavailable - endcap not detected)*\n\n"
                     )
 
+            # --- Phase Timing ---
+            # New 3-phase mapping from classics boundaries:
+            #   Pull        : t0 → t2
+            #   Pull-under  : t2 → t3
+            #   Recovery    : t3 → t4
             f.write("## Phase Timing\n")
             if phases:
 
                 def get_duration(start_idx, end_idx):
-                    return df.loc[end_idx, "time_s"] - df.loc[start_idx, "time_s"]
+                    try:
+                        return float(
+                            df.loc[end_idx, "time_s"] - df.loc[start_idx, "time_s"]
+                        )
+                    except KeyError:
+                        return float("nan")
 
-                f.write(
-                    f"- **First Pull:**  {get_duration(phases['t0'], phases['t1']):.2f}s\n"
-                )
-                f.write(
-                    f"- **Second Pull:** {get_duration(phases['t1'], phases['t2']):.2f}s\n"
-                )
-                f.write(
-                    f"- **Third Pull:**  {get_duration(phases['t2'], phases['t3']):.2f}s\n"
-                )
-                f.write(
-                    f"- **Recovery:**    {get_duration(phases['t3'], phases['t4']):.2f}s\n"
-                )
-                f.write(
-                    f"- **Total Time:**  {get_duration(phases['t0'], phases['t4']):.2f}s\n"
-                )
+                pull_dur = get_duration(phases["t0"], phases["t2"])
+                pull_under_dur = get_duration(phases["t2"], phases["t3"])
+                recovery_dur = get_duration(phases["t3"], phases["t4"])
+                total_dur = get_duration(phases["t0"], phases["t4"])
+
+                f.write(f"- **Pull:**        {pull_dur:.2f}s\n")
+                f.write("  *(bar off floor → hip extension peak)*\n")
+                f.write(f"- **Pull-under:**  {pull_under_dur:.2f}s\n")
+                f.write("  *(hip extension peak → lowest hip position / catch)*\n")
+                f.write(f"- **Recovery:**    {recovery_dur:.2f}s\n")
+                f.write("  *(catch → peak bar height)*\n")
+                f.write(f"- **Total Time:**  {total_dur:.2f}s\n")
             else:
                 f.write("Could not identify phases.\n")
 
+            # --- Critique ---
             f.write("\n## Critique\n")
             if not critiques:
                 f.write("No major faults detected based on configured checks.\n")
             else:
                 for c in critiques:
                     f.write(f"- {c}\n")
+
         print(f"Analysis report saved to '{output_path}'")
     except Exception as e:
         print(f"Error writing analysis.md: {e}")
@@ -130,9 +153,12 @@ def critique_lift(df, lift_type="clean", output_dir="."):
         output_path = os.path.join(output_dir, "analysis.md")
         write_analysis_md(critiques, phases, df, lift_type, output_path)
 
-        # Return formatted strings for CLI output
+        # Return formatted strings for CLI / GUI log output.
+        # The report uses the new 3-phase naming (Pull / Pull-under / Recovery).
         results = []
-        results.append(f"Phases identified. See {output_path} for details.")
+        results.append(
+            f"Phases identified (Pull / Pull-under / Recovery). See {output_path} for details."
+        )
         if critiques:
             results.extend(critiques)
         else:

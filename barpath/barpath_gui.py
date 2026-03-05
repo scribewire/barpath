@@ -18,7 +18,9 @@ Implementation notes:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -68,6 +70,18 @@ class BarpathTogaApp(toga.App):
         self._is_running: bool = False
         self._pipeline_task: Optional[asyncio.Task[Any]] = None
         self._cancel_event = threading.Event()
+
+        # Thread-safe queue used to ferry progress messages from the
+        # background pipeline thread to the main (Toga/asyncio) thread.
+        # Items are (step_name, progress_value, message) tuples, or the
+        # sentinel string "_DONE_" / "_ERROR_:<msg>" to signal completion.
+        self._progress_queue: queue.Queue[Any] = queue.Queue()
+
+        # Executor that runs the blocking pipeline on a real OS thread so
+        # the Toga event loop is never stalled by CPU / I/O work.
+        self._thread_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="barpath-pipeline"
+        )
 
         # Supported video extensions for OpenFileDialog (Toga expects list of extensions)
         self.video_extensions = [
@@ -315,20 +329,22 @@ class BarpathTogaApp(toga.App):
         )
         content.add(config_title)
 
-        # Model selector (horizontal buttons)
+        # Model selector (dropdown)
         content.add(
             toga.Label(
                 "Select Model", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))
             )
         )
 
-        self.model_button_row = toga.Box(
-            style=Pack(direction="row", flex=0, margin_bottom=6)
+        self.model_dropdown = toga.Selection(
+            items=[],
+            on_change=self._on_model_dropdown_change,
+            style=Pack(flex=1, margin_bottom=4),
         )
-        content.add(self.model_button_row)
+        content.add(self.model_dropdown)
 
         self.model_hint_label = toga.Label(
-            "Models are loaded from `barpath/models` if present. Add models there to see buttons here.",
+            "Models are loaded from barpath/models. Supports .pt, .onnx, .engine and OpenVINO directories.",
             style=Pack(font_size=9, color="#5B6472", margin_bottom=10),
         )
         content.add(self.model_hint_label)
@@ -583,77 +599,46 @@ class BarpathTogaApp(toga.App):
             self.selected_model = None
 
     def _refresh_settings_buttons(self) -> None:
-        """Update selection visuals in-place to reduce flashing (avoid clear/rebuild)."""
-        # Keep a stable set of buttons after first build
-        if not hasattr(self, "_model_buttons"):
-            self._model_buttons = {}  # type: ignore[attr-defined]
+        """Rebuild the model dropdown items and sync lift button styles."""
         if not hasattr(self, "_lift_buttons"):
             self._lift_buttons = {}  # type: ignore[attr-defined]
 
-        # --- Model buttons ---
-        # If empty, show a single placeholder (mounted once)
+        # --- Model dropdown ---
+        # Detach the change handler while we touch .items so that Toga's
+        # internal reset of the widget value (to index 0) does not fire
+        # _on_model_dropdown_change and clobber self.selected_model.
         if not self.model_files:
-            if not hasattr(self, "_no_models_label"):
-                self._no_models_label = toga.Label(  # type: ignore[attr-defined]
-                    "(No models found)",
-                    style=Pack(color="#5B6472", margin=6),
-                )
-                self.model_button_row.add(self._no_models_label)  # type: ignore[attr-defined]
-            # Remove any existing model buttons (if any were previously rendered)
-            for btn in list(self._model_buttons.values()):  # type: ignore[attr-defined]
-                if btn in self.model_button_row.children:
-                    self.model_button_row.remove(btn)
-            self._model_buttons.clear()  # type: ignore[attr-defined]
+            self.model_dropdown.on_change = None
+            self.model_dropdown.items = ["(No models found)"]
+            self.model_dropdown.on_change = self._on_model_dropdown_change
+            self.model_dropdown.enabled = False
         else:
-            # Remove placeholder label if present
-            if (
-                hasattr(self, "_no_models_label")
-                and self._no_models_label in self.model_button_row.children
-            ):  # type: ignore[attr-defined]
-                self.model_button_row.remove(self._no_models_label)  # type: ignore[attr-defined]
-
-            desired = [p.name for p in self.model_files]
-
-            # Remove buttons that are no longer needed
-            for name in list(self._model_buttons.keys()):  # type: ignore[attr-defined]
-                if name not in desired:
-                    btn = self._model_buttons.pop(name)  # type: ignore[attr-defined]
-                    if btn in self.model_button_row.children:
-                        self.model_button_row.remove(btn)
-
-            # Add missing buttons
-            for model_path in self.model_files:
-                name = model_path.name
-                if name not in self._model_buttons:  # type: ignore[attr-defined]
-                    btn = toga.Button(
-                        name,
-                        on_press=lambda w, mp=model_path: self._set_selected_model(mp),
-                        style=self._pill_style(selected=False),
-                    )
-                    self._model_buttons[name] = btn  # type: ignore[attr-defined]
-                    self.model_button_row.add(btn)
-
-            # Update styles in place (no rebuild)
-            for model_path in self.model_files:
-                name = model_path.name
-                btn = self._model_buttons.get(name)  # type: ignore[attr-defined]
-                if btn is not None:
-                    btn.style.update(
-                        **self._pill_style_dict(
-                            selected=(self.selected_model == model_path)
-                        )
-                    )
+            names = [p.name for p in self.model_files]
+            last_names = getattr(self, "_last_model_dropdown_names", None)
+            if last_names != names:
+                # Only reassign items when the list has actually changed, and
+                # mute the handler for the duration to avoid the selection reset.
+                self.model_dropdown.on_change = None
+                self.model_dropdown.items = names
+                self.model_dropdown.on_change = self._on_model_dropdown_change
+                self._last_model_dropdown_names = names
+            self.model_dropdown.enabled = True
+            # Sync dropdown to currently selected model
+            if self.selected_model is not None:
+                try:
+                    self.model_dropdown.value = self.selected_model.name
+                except Exception:
+                    pass
 
         # --- Lift buttons ---
         for lift in ("none", "clean", "snatch"):
-            key = lift
-            if key not in self._lift_buttons:  # type: ignore[attr-defined]
+            if lift not in self._lift_buttons:  # type: ignore[attr-defined]
                 btn = toga.Button(
                     lift.capitalize(),
                     on_press=lambda w, lt=lift: self._set_lift_type(lt),
                     style=self._pill_style(selected=False),
                 )
-                self._lift_buttons[key] = btn  # type: ignore[attr-defined]
+                self._lift_buttons[lift] = btn  # type: ignore[attr-defined]
                 self.lift_button_row.add(btn)
 
         for lift in ("none", "clean", "snatch"):
@@ -713,6 +698,14 @@ class BarpathTogaApp(toga.App):
                 self.analysis_webview.set_content(root_url="", content=doc)
             except Exception:
                 pass
+
+    def _on_model_dropdown_change(self, widget: Any) -> None:
+        """Called when the user picks an entry in the model dropdown."""
+        selected_name = widget.value
+        match = next((p for p in self.model_files if p.name == selected_name), None)
+        if match is not None:
+            self.selected_model = match
+            self._log(f"[green]✓[/green] Selected model: [cyan]{match.name}[/cyan]")
 
     def _set_selected_model(self, model_path: Path) -> None:
         self.selected_model = model_path
@@ -867,6 +860,7 @@ class BarpathTogaApp(toga.App):
     # ----------------------------
 
     def on_run_analysis(self, widget: toga.Widget) -> None:
+        """Button handler — validates inputs then kicks off the async watcher task."""
         if self._is_running:
             return
 
@@ -898,31 +892,66 @@ class BarpathTogaApp(toga.App):
         self.progress_label.text = "Starting pipeline..."
         self._cancel_event.clear()
 
+        # Drain any leftover messages from a previous run
+        while not self._progress_queue.empty():
+            try:
+                self._progress_queue.get_nowait()
+            except queue.Empty:
+                break
+
         # Switch to Analyze tab
         self._select_tab("analyze")
 
-        # Kick off background task
-        self._pipeline_task = asyncio.create_task(self._run_pipeline_async())
+        # 1. Submit the blocking pipeline work to the background thread pool.
+        #    The worker function drains the run_pipeline generator and pushes
+        #    every (step, progress, message) tuple onto _progress_queue.
+        #    It never touches Toga widgets directly.
+        input_videos_snapshot = list(self.input_videos)
+        selected_model_snapshot = selected_model
+        encode_video_snapshot = self.encode_video
+        lift_type_snapshot = self.lift_type
 
-    async def _run_pipeline_async(self) -> None:
+        self._thread_executor.submit(
+            self._pipeline_worker,
+            input_videos_snapshot,
+            selected_model_snapshot,
+            encode_video_snapshot,
+            lift_type_snapshot,
+        )
+
+        # 2. Kick off the lightweight async watcher that reads _progress_queue
+        #    and updates the Toga UI on the main thread.
+        self._pipeline_task = asyncio.create_task(self._progress_watcher_async())
+
+    # ------------------------------------------------------------------
+    # Background pipeline worker (runs on a real OS thread — NOT the
+    # Toga/asyncio main thread).  It must NOT call any Toga API.
+    # ------------------------------------------------------------------
+
+    def _pipeline_worker(
+        self,
+        input_videos: List[Path],
+        selected_model: Path,
+        encode_video: bool,
+        lift_type: str,
+    ) -> None:
+        """
+        Execute the full barpath pipeline for every queued video.
+
+        Progress tuples are pushed onto ``self._progress_queue``.  When all
+        videos are finished (or on error/cancellation) a sentinel string is
+        pushed to wake up the async watcher on the main thread.
+        """
+        run_pipeline = _get_run_pipeline()
+        is_batch = len(input_videos) > 1
+        total_videos = len(input_videos)
+
         try:
-            run_pipeline = _get_run_pipeline()
-            selected_model = self._resolve_selected_model()
-            if selected_model is None:
-                raise RuntimeError("No model selected")
-
-            is_batch = len(self.input_videos) > 1
-            total_videos = len(self.input_videos)
-
-            for video_idx, input_video in enumerate(self.input_videos, 1):
+            for video_idx, input_video in enumerate(input_videos, 1):
                 if self._cancel_event.is_set():
                     break
 
-                self._log(
-                    f"[bold cyan]Processing video {video_idx}/{total_videos}[/bold cyan]: [dim]{input_video.name}[/dim]"
-                )
-
-                # video-specific output dir
+                # Build per-video output paths
                 out_base = self._effective_output_dir()
                 if is_batch:
                     video_output_dir = out_base / input_video.stem
@@ -931,25 +960,128 @@ class BarpathTogaApp(toga.App):
                     video_output_dir = out_base
                     video_output_dir.mkdir(parents=True, exist_ok=True)
 
-                # output video path (kept consistent with previous GUI behavior)
                 output_video_path = (
-                    video_output_dir / "output.mp4" if self.encode_video else None
+                    video_output_dir / "output.mp4" if encode_video else None
                 )
 
-                # Consume generator updates
+                # Push a banner message for this video
+                self._progress_queue.put(
+                    (
+                        "_banner_",
+                        None,
+                        f"[bold cyan]Processing video {video_idx}/{total_videos}[/bold cyan]: "
+                        f"[dim]{input_video.name}[/dim]",
+                    )
+                )
+
+                # Drain the pipeline generator — the heavy lifting is here
                 for step_name, progress_value, message in run_pipeline(
                     input_video=str(input_video),
                     model_path=str(selected_model),
-                    output_video=str(output_video_path) if output_video_path else None,
-                    lift_type=self.lift_type,
+                    output_video=(
+                        str(output_video_path) if output_video_path else None
+                    ),
+                    lift_type=lift_type,
                     output_dir=str(video_output_dir),
-                    encode_video=self.encode_video,
-                    technique_analysis=(self.lift_type != "none"),
+                    encode_video=encode_video,
+                    technique_analysis=(lift_type != "none"),
                     cancel_event=self._cancel_event,
                 ):
-                    # Throttle frame spam
+                    self._progress_queue.put((step_name, progress_value, message))
+
+                # Signal completion of this individual video
+                self._progress_queue.put(
+                    (
+                        "_video_done_",
+                        None,
+                        f"[green]✓[/green] Completed: [dim]{input_video.name}[/dim]",
+                    )
+                )
+
+            # All videos processed (or cancelled)
+            if self._cancel_event.is_set():
+                self._progress_queue.put("_CANCELLED_")
+            else:
+                self._progress_queue.put("_DONE_")
+
+        except InterruptedError:
+            self._progress_queue.put("_CANCELLED_")
+        except Exception as exc:
+            import traceback
+
+            tb = traceback.format_exc()
+            self._progress_queue.put(f"_ERROR_:{exc}\n{tb}")
+
+    # ------------------------------------------------------------------
+    # Async watcher (runs on the main Toga/asyncio thread).
+    # It only reads from _progress_queue and updates UI widgets.
+    # ------------------------------------------------------------------
+
+    async def _progress_watcher_async(self) -> None:
+        """
+        Poll ``_progress_queue`` and update the Toga UI accordingly.
+
+        This coroutine yields control back to the event loop between batches
+        so that the GUI remains fully responsive (repaints, clicks, etc.)
+        while the pipeline runs on a background thread.
+        """
+        is_batch = len(self.input_videos) > 1
+        total_videos = len(self.input_videos)
+        # We track the video index here by counting _video_done_ sentinels
+        videos_done = 0
+
+        try:
+            while True:
+                # Drain all currently-available messages in one go, then yield.
+                # This batches rapid frame-by-frame updates while still
+                # keeping the GUI responsive.
+                processed_any = False
+                while True:
+                    try:
+                        item = self._progress_queue.get_nowait()
+                    except queue.Empty:
+                        break
+
+                    processed_any = True
+
+                    # --- Sentinel strings ---
+                    if isinstance(item, str):
+                        if item == "_DONE_":
+                            await self._on_pipeline_done(is_batch)
+                            return
+                        elif item == "_CANCELLED_":
+                            self._log(
+                                "[yellow]![/yellow] Cancellation requested; stopping."
+                            )
+                            self.progress_label.text = "Cancelled"
+                            self.progress_bar.value = 0
+                            return
+                        elif item.startswith("_ERROR_:"):
+                            error_body = item[len("_ERROR_:") :]
+                            first_line = error_body.split("\n")[0]
+                            self._log(
+                                f"\n[bold red]ERROR[/bold red] Pipeline failed: {first_line}"
+                            )
+                            self._log(error_body)
+                            self.progress_label.text = f"Error: {first_line}"
+                            return
+                        continue
+
+                    # --- Progress tuples ---
+                    step_name, progress_value, message = item
+
+                    if step_name == "_banner_":
+                        self._log(message)
+                        continue
+
+                    if step_name == "_video_done_":
+                        self._log(message)
+                        self._log("")
+                        videos_done += 1
+                        continue
+
+                    # Throttle per-frame log spam (only log non-frame messages)
                     if "frame" not in str(message).lower() or progress_value is None:
-                        # Rich-ish formatting similar to CLI
                         if progress_value is not None:
                             self._log(f"[dim]{step_name}[/dim] {message}")
                         else:
@@ -957,71 +1089,56 @@ class BarpathTogaApp(toga.App):
                                 f"[green]✓[/green] [dim]{step_name}[/dim] {message}"
                             )
 
+                    # Update progress bar with overall progress across all videos
                     if progress_value is not None:
-                        # overall progress across all videos
-                        video_progress = (video_idx - 1) / max(total_videos, 1)
+                        video_progress = videos_done / max(total_videos, 1)
                         step_progress = float(progress_value) / max(total_videos, 1)
                         overall_progress = video_progress + step_progress
-
                         self.progress_bar.value = int(overall_progress * 100)
                         self.progress_label.text = (
-                            f"[{video_idx}/{total_videos}] {message}"
+                            f"[{videos_done + 1}/{total_videos}] {message}"
                         )
                     else:
                         self.progress_label.text = (
-                            f"[{video_idx}/{total_videos}] ✓ {message}"
+                            f"[{videos_done + 1}/{total_videos}] ✓ {message}"
                         )
 
-                    await asyncio.sleep(0.01)
+                # Yield to the Toga event loop so the GUI can repaint / handle
+                # user input.  Use a short sleep when there was work to do, a
+                # slightly longer one when the queue was empty to avoid busy-
+                # waiting while the background thread is doing heavy work.
+                await asyncio.sleep(0.02 if processed_any else 0.1)
 
-                self._log(f"[green]✓[/green] Completed: [dim]{input_video.name}[/dim]")
-                self._log("")
-
-            if self._cancel_event.is_set():
-                self._log("[yellow]![/yellow] Cancellation requested; stopping.")
-                self.progress_label.text = "Cancelled"
-                self.progress_bar.value = 0
-                return
-
-            self._log("[bold green]✓ All Videos Complete![/bold green]")
-            self.progress_bar.value = 100
-            self.progress_label.text = "Analysis complete!"
-
-            # Enable view analysis if report exists (last video if batch)
-            if is_batch and self.input_videos:
-                last_video = self.input_videos[-1]
-                analysis_path = (
-                    self._effective_output_dir() / last_video.stem / "analysis.md"
-                )
-            else:
-                analysis_path = self._effective_output_dir() / "analysis.md"
-
-            if analysis_path.exists():
-                self._log(
-                    f"[green]✓[/green] Found report: [cyan]{analysis_path}[/cyan]"
-                )
-                # Refresh the analysis tab
-                self._render_analysis()
-            else:
-                self._log(
-                    f"[yellow]![/yellow] No analysis report found at: [dim]{analysis_path}[/dim]"
-                )
-
-        except InterruptedError:
-            self._log("\n[yellow]![/yellow] Pipeline cancelled.")
-            self.progress_label.text = "Cancelled"
-            self.progress_bar.value = 0
-        except Exception as e:
-            self._log(f"\n[bold red]ERROR[/bold red] Pipeline failed: {e}")
-            import traceback
-
-            self._log(traceback.format_exc())
-            self.progress_label.text = f"Error: {e}"
+        except asyncio.CancelledError:
+            # Task was cancelled externally (e.g. app shutdown)
+            pass
         finally:
             self._is_running = False
             self.run_button.enabled = True
             self.cancel_button.enabled = False
             self._pipeline_task = None
+
+    async def _on_pipeline_done(self, is_batch: bool) -> None:
+        """Handle successful pipeline completion: update UI and show report."""
+        self._log("[bold green]✓ All Videos Complete![/bold green]")
+        self.progress_bar.value = 100
+        self.progress_label.text = "Analysis complete!"
+
+        if is_batch and self.input_videos:
+            last_video = self.input_videos[-1]
+            analysis_path = (
+                self._effective_output_dir() / last_video.stem / "analysis.md"
+            )
+        else:
+            analysis_path = self._effective_output_dir() / "analysis.md"
+
+        if analysis_path.exists():
+            self._log(f"[green]✓[/green] Found report: [cyan]{analysis_path}[/cyan]")
+            self._render_analysis()
+        else:
+            self._log(
+                f"[yellow]![/yellow] No analysis report found at: [dim]{analysis_path}[/dim]"
+            )
 
     def on_cancel_analysis(self, widget: toga.Widget) -> None:
         if self._is_running:

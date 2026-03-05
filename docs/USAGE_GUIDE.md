@@ -1,20 +1,21 @@
 # BARPATH Usage Guide
 
+<<<<<<< HEAD
 A comprehensive guide to using the BARPATH system for AI-powered weightlifting technique analysis. 
+=======
+A comprehensive guide to using barpath for weightlifting technique analysis.
+>>>>>>> 27734bd (Upgrade to YOLO26 models, nano and small, also increase mediapipe)
 
 ## Table of Contents
 
-- [Quick Start](#quick-start)
-- [How It Works](#how-it-works)
-  - [Camera Stabilization](#camera-stabilization)
-  - [Perspective Angle Compensation](#perspective-angle-compensation)
-  - [Lift Analysis Features](#lift-analysis-features)
-- [Batch Processing and Hardware Acceleration](#batch-processing-and-hardware-acceleration)
-  - [Batch Processing](#batch-processing)
-  - [Hardware Acceleration with OpenVINO](#hardware-acceleration-with-openvino)
-- [Output Files](#output-files)
-- [Recording Best Practices](#recording-best-practices)
-- [Troubleshooting](#troubleshooting)
+1. [Quick Start](#quick-start)
+2. [How It Works](#how-it-works)
+3. [Batch Processing and Hardware Acceleration](#batch-processing-and-hardware-acceleration)
+4. [Model Format Support](#model-format-support)
+5. [Output Files](#output-files)
+6. [Recording Best Practices](#recording-best-practices)
+7. [Tips for Best Results](#tips-for-best-results)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -35,35 +36,39 @@ The GUI features a clean tabbed interface with four main sections:
 - Clear videos from the queue
 - Select output directory for results
 - View selected videos before running analysis
+- Supports MP4, AVI, MOV, MKV, WebM formats
 
 #### **⚙️ Settings Tab**
-- Automatically detects available models from `barpath/models`
-- Select a model from the available options
-- Choose lift type: **none** (kinematics only), **clean** (power clean analysis), or **snatch** (snatch analysis)
-- Models appear as buttons once detected
+- Automatically detects available YOLO26 models from `barpath/models` directory
+- Select a model from available options (displayed as horizontally scrollable buttons)
+- Choose lift type:
+  - **clean**: Power clean analysis with Pull/Pull-under/Recovery phases, power calculation, and technique critique
+  - **snatch**: Snatch analysis with Pull/Pull-under/Recovery phases, power calculation, and technique critique
+  - **none**: Kinematics only, no lift-specific analysis or critique
 
 #### **▶️ Analyze Tab**
-- Run the analysis pipeline
-- Cancel analysis if needed
-- Monitor progress with progress bar and real-time status updates
-- View detailed logs rendered as formatted HTML with color coding
-- Logs show all steps: model loading, stabilization, analysis, and report generation
-- **View Results** button opens the output folder to access generated files (graphs, CSV, video, report)
+- Press **Analyze** to start — the entire pipeline runs in a **background worker thread**
+- The GUI never hangs or freezes; remains fully responsive during analysis
+- Cancel analysis at any time with the Cancel button
+- Monitor progress with a real-time progress bar and log viewer
+- Logs are rendered as formatted HTML with color coding
+- Progress messages are delivered from the background thread to the UI via a thread-safe queue
 
 #### **📊 Analysis Tab**
-- View the generated lift analysis report automatically
-- Analysis report is rendered as beautifully formatted HTML from the `analysis.md` file
-- Includes kinematic data, graphs, technique findings, and recommendations
-- Report updates automatically when a new analysis completes
+- View the generated lift analysis report automatically after completion
+- Report is rendered as beautifully formatted HTML from `analysis.md`
+- Includes phase timing (Pull / Pull-under / Recovery), maximum specific power, and technique findings
+- Updates automatically when a new analysis completes
+- Can be manually refreshed to view results
 
 ### Using the Command Line
 
-For scripting and batch processing:
+For scripting and batch processing, use the CLI:
 
 ```bash
 python barpath/barpath_cli.py \
   --input_video "lift.mp4" \
-  --model "models/yolo11s.pt" \
+  --model "models/yolo26n.pt" \
   --lift_type clean
 ```
 
@@ -71,84 +76,125 @@ python barpath/barpath_cli.py \
 
 ```
 Required Arguments:
-  --input_video PATH         Path to source video file
-                            (e.g., 'videos/clean.mp4')
-  
-  --model PATH              Path to trained YOLO model file
-                            (e.g., 'models/yolo11s.pt')
+  --input_video PATH         Path to video file(s) to analyze
+                             (Supports multiple files: vid1.mp4 vid2.mp4 vid3.mp4)
+                             Accepted formats: .mp4, .avi, .mov, .mkv, .webm
+
+  --model PATH               Path to trained YOLO26 model or OpenVINO export directory
+                             Examples:
+                               'models/yolo26n.pt'           (PyTorch)
+                               'models/best.onnx'            (ONNX)
+                               'models/best.engine'          (TensorRT)
+                               'models/yolo26_openvino_model/' (OpenVINO directory)
 
 Optional Arguments:
-  --output_video PATH       Path to save annotated video
-                            (Default: outputs/output.mp4)
-  
   --lift_type {clean,snatch,none}
-                            Type of lift to analyze
-                            'clean'  - Power clean: phase detection, power calculation, technique critique
-                            'snatch' - Snatch: phase detection, power calculation, technique critique
-                            'none'   - Kinematics only, no lift-specific analysis (default)
-  
-  --no-video                Skip video rendering (faster)
-  
-  --output_dir PATH         Directory to save outputs
-                            (Default: outputs)
+                             Type of lift to analyze (default: none)
+                             'clean'  - Power clean: Pull/Pull-under/Recovery phases,
+                                        power calculation, technique critique
+                             'snatch' - Snatch: Pull/Pull-under/Recovery phases,
+                                        power calculation, technique critique
+                             'none'   - Kinematics only, no lift-specific analysis
+
+  --output_video PATH        Path to save annotated video output
+                             (Default: outputs/output.mp4 for single video,
+                              outputs/{video_name}/output.mp4 for batch)
+                             Set implicitly when using --no-video (skips Step 4)
+
+  --no-video                 Skip video rendering (Step 4) — much faster for quick analysis
+                             Useful when you only need CSV data and graphs, not the
+                             annotated video output
+
+  --output_dir PATH          Directory to save all outputs
+                             (Default: outputs)
+                             For batch processing: creates subdirectories for each video
+
+  -h, --help                 Show detailed help message with examples
 ```
 
 ### Quick Examples
 
-**Basic analysis with clean technique critique:**
+**Basic analysis — clean lift with technique critique (YOLO26 NMS-free):**
 ```bash
 python barpath/barpath_cli.py \
   --input_video "lift.mp4" \
-  --model "models/yolo11s.pt" \
+  --model "models/yolo26n.pt" \
   --lift_type clean
 ```
 
-**With OpenVINO acceleration (Intel CPUs):**
+**Snatch analysis with full video rendering:**
 ```bash
 python barpath/barpath_cli.py \
   --input_video "lift.mp4" \
-  --model "models/yolo11s_openvino_model" \
-  --lift_type snatch
+  --model "models/yolo26n.pt" \
+  --lift_type snatch \
+  --output_video "output.mp4"
 ```
 
-**Skip video rendering (analyze only, much faster):**
+**Skip video rendering (kinematics and CSV analysis only — faster):**
 ```bash
 python barpath/barpath_cli.py \
   --input_video "lift.mp4" \
-  --model "models/yolo11s.pt" \
+  --model "models/yolo26n.pt" \
   --lift_type clean \
   --no-video
 ```
 
+**Batch processing multiple videos:**
+```bash
+python barpath/barpath_cli.py \
+  --input_video lift1.mp4 lift2.mp4 lift3.mp4 \
+  --model "models/yolo26n.pt" \
+  --lift_type clean \
+  --no-video
+```
+
+**With OpenVINO acceleration (Intel CPU optimization, YOLO26 export):**
+```bash
+python barpath/barpath_cli.py \
+  --input_video "lift.mp4" \
+  --model "models/yolo26n_openvino_model" \
+  --lift_type snatch
+```
+
+**Custom output directory:**
+```bash
+python barpath/barpath_cli.py \
+  --input_video "lift.mp4" \
+  --model "models/yolo26n.pt" \
+  --lift_type clean \
+  --output_dir "my_results/"
+```
+
 ### Running Individual Pipeline Steps
 
-For debugging or custom workflows:
+For debugging or custom workflows, you can run pipeline steps individually:
 
 ```bash
-# Step 1: Collect raw tracking data
+# Step 1: Collect raw tracking data (YOLO26 + MediaPipe + producer-consumer)
 python barpath/pipeline/1_collect_data.py \
   --input video.mp4 \
-  --model models/yolo11s.pt \
+  --model models/yolo26n.pt \
   --output raw_data.pkl \
   --lift_type clean
 
-# Step 2: Analyze kinematics and angles
+# Step 2: Analyze kinematics, smooth joints, detect phases, generate CSV
 python barpath/pipeline/2_analyze_data.py \
   --input raw_data.pkl \
   --output final_analysis.csv
 
-# Step 3: Generate graphs
+# Step 3: Generate kinematic graphs
 python barpath/pipeline/3_generate_graphs.py \
   --input final_analysis.csv \
   --output_dir graphs
 
-# Step 4: Render annotated video
+# Step 4: Render annotated video with skeleton and bar path
 python barpath/pipeline/4_render_video.py \
   --input_csv final_analysis.csv \
   --input_video video.mp4 \
   --output_video final.mp4
 
-# Step 5: Generate critique
+# Step 5: Generate critique and analysis report (Markdown)
 python barpath/pipeline/5_critique_lift.py \
   --input final_analysis.csv \
   --lift_type clean
@@ -158,282 +204,195 @@ python barpath/pipeline/5_critique_lift.py \
 
 ## How It Works
 
-The BARPATH system analyzes weightlifting videos in two complementary ways:
+### Producer-Consumer Video Pipeline
 
-### Camera Stabilization
+barpath uses a **producer-consumer architecture** to maximize throughput:
 
-**Problem:** Videos shot with handheld cameras contain motion (shake) that distorts measurements.
+- **Producer (I/O thread)**: Decodes video frames in a background thread and places them in a bounded queue (size 8)
+- **Consumer (main thread)**: Pulls frames from the queue and runs YOLO26 + MediaPipe inference
+- **Benefit**: The main thread never stalls waiting for disk I/O; frames are pre-decoded and ready
 
-**Solution:** The system uses optical flow-based motion estimation to detect and compensate for camera movement.
+This is especially effective for:
+- Slow storage (network drives, USB 3.0, older SSDs)
+- High-resolution videos (4K, 60+ fps)
+- CPU-intensive inference (larger YOLO26 models)
 
-**Technical Details:**
+### YOLO26 NMS-Free Barbell Detection
 
-1. **Feature Detection & Tracking** (Step 1: `1_collect_data.py`)
-   - Detects corner features in the background of each frame
-   - Tracks features between consecutive frames using Lucas-Kanade optical flow
-   - Excludes the person (using MediaPipe segmentation) to focus on background motion
-   - Estimates camera translation from the median displacement of tracked features
+barpath uses **Ultralytics YOLO26** for barbell endcap detection:
 
-2. **Motion Compensation** (Step 2: `2_analyze_data.py`)
-   - Accumulates frame-by-frame motion to calculate total camera shake
-   - Removes this accumulated motion from barbell position measurements
-   - Results in a "stabilized" barbell path that represents true movement, not camera movement
+- **NMS-Free Architecture**: The model outputs final detections directly; no separate Non-Maximum Suppression step is needed
+- **Speed**: Eliminates post-processing overhead compared to traditional YOLO
+- **Inference Call**: Uses only `conf` (confidence threshold); no `iou` parameter is passed
+- **Default Model**: `yolo26n.pt` (nano variant) balances accuracy and speed
 
-3. **Implementation Details:**
-   - Uses `cv2.goodFeaturesToTrack()` to detect corner features
-   - Employs Lucas-Kanade optical flow (`cv2.calcOpticalFlowPyrLK()`) for tracking
-   - Filters out the person using MediaPipe segmentation
-   - Applies median filtering to robustly reject outliers
-   - Refines features at 50-feature threshold to maintain tracking quality
+**Supported Model Formats:**
+- `.pt` (PyTorch native)
+- `.onnx` (ONNX Runtime)
+- `.engine` (TensorRT for NVIDIA GPUs)
+- OpenVINO directory export (Intel CPU optimization)
 
-**Output Columns:**
-- `shake_dx`, `shake_dy` - Per-frame camera motion in pixels
-- `total_shake_x`, `total_shake_y` - Cumulative camera motion
-- `barbell_x_stable`, `barbell_y_stable` - Barbell position with camera motion removed
+**Adjusting Detection Sensitivity:**
+- **Lower confidence** (e.g., `--conf 0.3`): Detects more barbells, but may include false positives
+- **Higher confidence** (e.g., `--conf 0.7`): Stricter detection, fewer false positives, but may miss frames
+- Default is `0.5` (reasonable balance)
 
-### Perspective Angle Compensation
+### MediaPipe Pose Estimation
 
-**Problem:** Videos shot at an angle (not perpendicular to the lifter) compress horizontal bar movements. A 45° camera angle makes lateral movements appear ~30% smaller than they actually are.
+barpath uses **MediaPipe Pose** for full-body joint tracking:
 
-**Solution:** Uses 3D world landmarks from MediaPipe Pose to calculate the camera angle and apply a perspective correction factor.
+**Current Configuration:**
+- **Model Complexity**: `1` (Medium) — recommended default
+- **Min Detection Confidence**: `0.5`
+- **Min Tracking Confidence**: `0.5`
+- **Segmentation**: Enabled (used for background feature detection in stabilization)
+- **Tracked Joints**: 12 landmarks (shoulders, hips, knees, ankles, elbows, wrists)
 
-**Technical Details:**
+**Complexity Levels:**
+| Level | Complexity Param | Speed | Accuracy | Best For |
+|-------|---|---|---|---|
+| Light | 0 | Fastest | Lower | Real-time, low-end devices |
+| Medium | 1 | Balanced | Good | **Default** — standard analysis |
+| Heavy | 2 | Slowest | Highest | Offline analysis, difficult angles |
 
-1. **Reference Angle Calculation** (First frame, 1 second before knee pass)
-   - Extracts shoulder positions from MediaPipe world landmarks (3D coordinates in meters)
-   - Calculates lateral axis: vector from left shoulder to right shoulder
-   - Determines how this axis is oriented relative to the camera
-   - Computes camera yaw angle using: `yaw = arctan2(|z|, |x|)` where X and Z are the shoulder axis components in world space
+**Output Coordinates:**
+- **Normalized landmarks**: x, y, z values in [0, 1] range (relative to image dimensions); z is pseudo-depth
+- **World landmarks**: Real-world 3D coordinates in meters (relative to hip center)
+- **Visibility**: Confidence score (0–1) for each joint
 
-2. **Correction Factor Derivation**
-   - Camera angle compresses horizontal displacement by a factor of `cos(yaw)`
-   - To correct this, we scale observed displacement by: `correction = 1 / cos(yaw)`
-   - Examples:
-     - 0° angle (perpendicular): correction = 1.0 (no correction needed)
-     - 30° angle: correction = 1.155 (expand by 15.5%)
-     - 45° angle: correction = 1.414 (expand by 41.4%)
-     - 60° angle: correction = 2.0 (expand by 100%)
+### Camera Shake Stabilization
 
-3. **Application to All Frames**
-   - Uses the reference angle from the first frame (constant throughout lift)
-   - Applies the same correction factor to all frames for consistency
-   - Prevents drift by correcting only the displacement from baseline, not absolute position
+barpath uses **Lucas-Kanade optical flow** to stabilize the bar path:
 
-4. **Implementation Details:**
-   - World landmarks provided by MediaPipe Pose in meters relative to hip center
-   - Extracts (x, y, z) for both shoulders from first frame
-   - Filters landmarks by visibility score (> 0.1)
-   - Projects lateral axis onto horizontal plane (XZ components only)
-   - Stores correction factor and reference angle with output data
+1. Detect features in the **background** (using MediaPipe's person segmentation mask)
+2. Track features across frames using Lucas-Kanade algorithm
+3. Estimate motion (translation + rotation) from feature correspondences
+4. Apply correction to barbell position to remove camera shake
 
-**Output Columns:**
-- `barbell_x_corrected_px` - Horizontally corrected barbell position
-- `camera_yaw_deg` - Detected camera angle (from reference frame)
-- `lateral_correction_factor` - Scaling factor applied (1.0 = no correction)
+**Result**: A smooth, stabilized bar path even if the camera moves or shakes during the lift.
 
-**When It Works Best:**
-- ✅ 30-60° camera angles
-- ✅ Stationary camera on tripod
-- ✅ Both shoulders visible throughout lift
-- ✅ Good lighting for reliable landmark detection
+### Lifter Angle Tracking
 
-**When Correction Is Skipped:**
-- ❌ `lift_type = "none"` (pose landmarks not collected)
-- ❌ Insufficient world landmark data
-- ❌ Unrealistic shoulder width (< 0.3m or > 0.6m)
+The lifter's **orientation relative to the camera** is calculated per-frame:
 
-### Lift Analysis Features
+- Derived from MediaPipe shoulder and hip landmarks
+- Represents camera-facing (yaw) angle in degrees
+- Smoothed using Savitzky-Golay filter (11-frame window, cubic polynomial)
+- Recorded in `final_analysis.csv` as `lifter_angle` for every frame
 
-When `lift_type` is set to `"clean"` or `"snatch"`, BARPATH provides advanced lift-specific analysis including automatic phase detection, power output calculation, and technique critique.
+**Use case**: Detect if lifter is angled away from camera (which can distort bar path analysis).
 
-#### Phase Detection
+### Angle-Compensated Bar Path
 
-**Purpose:** Automatically identifies the key phases of Olympic weightlifting movements for precise timing analysis and technique evaluation.
+barpath produces a physically accurate bar path by correcting for camera angle using **MediaPipe world landmarks**:
 
-**Supported Lift Types:**
-- **Clean**: First Pull → Second Pull → Third Pull (Turnover) → Recovery
-- **Snatch**: First Pull → Second Pull → Third Pull (Turnover) → Recovery
+**How it works (per frame):**
+1. Measure the shoulder width in **pixel space** — how wide the shoulders appear on screen
+2. Measure the shoulder width in **world space** — the true 3D metric distance in metres from MediaPipe's world landmarks
+3. Derive a `px_to_m` scale factor: `world_width_m / pixel_width_px`
+4. Convert the bar's pixel displacement from its starting position into **centimetres** using that scale
+5. Apply a **Savitzky-Golay smooth** to the resulting cm-space path to suppress per-frame landmark jitter
 
-**How It Works:**
+**Why this is better than a trigonometric correction:**
+- The old `1/cos(yaw)` approach amplifies errors badly — a 60° angle doubles the horizontal scale; 70° nearly triples it
+- The shoulder-geometry method is numerically stable at any camera angle: a camera placed at an angle foreshortens the shoulders in pixel space, so the `px_to_m` ratio naturally compensates without any blowup
+- Missing shoulder frames fall back to the median scale computed over all valid frames
 
-1. **Phase Boundaries Detection** (Step 2: `2_analyze_data.py`)
-   - **t0 (Lift Start)**: Bar begins moving upward from floor
-     - Detected when bar rises above baseline by 2% of frame height
-     - Baseline calculated from first 30 frames
-   
-   - **t1 (End of First Pull)**: Bar passes knee height
-     - Bar Y-coordinate reaches knee Y-coordinate
-     - Uses average of left and right knee positions
-   
-   - **t2 (End of Second Pull)**: Maximum hip extension
-     - Hip reaches highest position (minimum Y-coordinate)
-     - Searched within window from t1 to bar peak height
-   
-   - **t3 (Bottom of Catch)**: Deepest point of receiving position
-     - Hip reaches lowest position (maximum Y-coordinate)
-     - Occurs after turnover begins
-   
-   - **t4 (Peak Bar Height)**: Maximum bar elevation
-     - Bar reaches minimum Y-coordinate (highest point in frame)
-     - Marks completion of lift
+**Output:**
+- `barbell_x_corrected_cm` / `barbell_y_corrected_cm` — bar displacement in real-world centimetres from the starting position, stored in `final_analysis.csv`
+- `barbell_lateral_corrected_path.png` — angle-compensated bar path graph with both axes in centimetres, equal aspect ratio, and a camera yaw + scale annotation
+- `camera_yaw_deg` — estimated camera yaw in degrees (informational only; not used in the correction)
+- `px_to_m_scale` — per-frame metres-per-pixel scale factor
 
-2. **Phase Assignment** (Step 2 & Step 5)
-   - Each frame is assigned a phase number (0-3)
-   - Phase changes marked in `phase_change` column
-   - Used for color-coding graphs and video overlay
+### Joint Smoothing and Kinematic Calculations
 
-3. **Visual Representation**
-   - **Bar Path Graphs**: Color-coded by phase
-     - 🔴 Red: Phase 0 (First Pull)
-     - 🟠 Orange: Phase 1 (Second Pull)
-     - 🟢 Green: Phase 2 (Third Pull/Turnover)
-     - 🟣 Magenta: Phase 3 (Recovery)
-   - **Video Overlay**: Shows current phase number and phase-colored trajectory
+**Smoothing Pipeline:**
+1. Extract raw MediaPipe joint positions for every frame
+2. Apply **Savitzky-Golay filter** (11-frame window, cubic polynomial) to all joint coordinates
+3. Calculate joint angles from smoothed positions
+4. Smooth velocity signals with larger window (15 frames) to suppress noise in derivatives
 
-**Output in analysis.md:**
-```markdown
-## Phase Timing
-- **First Pull:**  0.24s
-- **Second Pull:** 0.38s
-- **Third Pull:**  0.66s
-- **Recovery:**    1.66s
-- **Total Time:**  2.93s
+**Result**: `final_analysis.csv` contains only smoothed, analysis-ready data with no raw noisy frames.
+
+### 3-Phase Lift Analysis
+
+barpath analyzes Olympic lifts using a **3-phase system** based on biomechanics:
+
+#### The Three Phases
+
+| Phase | Label | Color | Duration | Definition |
+|-------|-------|-------|----------|------------|
+| **Pull** | 0 | 🔴 Red | t0 → t2 | Barbell begins moving upward; lifter extends through ankles, knees, hips in sequence; ends when hips reach maximum extension |
+| **Pull-under** | 1 | 🟠 Orange | t2 → t3 | Hips transition from extending to actively dropping; lifter begins knee bend for catch; turnaround point where bar is fastest |
+| **Recovery** | 2 | 🟢 Green | t3 → t4 | Lifter in catch position (squat or split); drives upward to standing position; lift is complete when bar reaches peak height |
+
+#### Phase Detection Methods
+
+**For Classic Lifts (clean/snatch):**
+- Uses MediaPipe-detected joint landmarks to identify key timepoints (t0, t1, t2, t3, t4)
+- Applies kinematic heuristics:
+  - Hip velocity and hip Y-position to find extension peak (t2)
+  - Barbell and hip signals to identify catch completion (t3)
+- Robust to video artifacts and lighting variation
+
+**For Other Lift Types (lift_type=none):**
+- No phase detection is performed
+- Only kinematics are analyzed (bar path, velocity, acceleration)
+
+#### Phase Timing in Analysis Report
+
+The generated `analysis.md` report includes:
+- **Phase Start/End Frames**: Frame numbers where each phase begins and ends
+- **Phase Duration**: Time in milliseconds for each phase
+- **Transition Points**:
+  - **Extension Peak (t2)**: Maximum hip height during drive
+  - **Catch Point (t3)**: When lifter's hips stop descending
+  - **Bar Peak (t4)**: Maximum bar height after recovery
+
+Example output:
+```
+Phase Timing:
+  Pull (t0→t2):        Frames 0–45 (1500 ms)
+  Pull-under (t2→t3):  Frames 45–52 (233 ms)
+  Recovery (t3→t4):    Frames 52–80 (933 ms)
 ```
 
-#### Maximum Specific Power Calculation
+#### Maximum Specific Power
 
-**Purpose:** Measures peak explosive power output during the pull and turnover phases (first pull through third pull), converted to real-world units (mW/kg) for meaningful comparison.
+Calculated as maximum power output during the Pull and Pull-under phases (t1→t3):
 
-**What is Specific Power?**
-- Specific power = Power-to-mass ratio = (Force × Velocity) / Mass
-- Simplified: Acceleration × Velocity
-- Units: W/kg (Watts per kilogram of body weight)
-- Represents explosive strength independent of body weight
-
-**How It Works:**
-
-1. **Pixel-Based Calculation** (Step 2: `2_analyze_data.py`)
-   - Calculates: `specific_power = acceleration × velocity`
-   - From smoothed kinematics: `accel_y_smooth × vel_y_smooth`
-   - Initial units: px²/s³ (pixel-squared per second-cubed)
-
-2. **Real-World Conversion** (Step 2: `2_analyze_data.py`)
-   - Uses barbell endcap as reference (standard 50mm diameter)
-   - Extracts endcap width from YOLO bounding boxes
-   - Calculates median width across all frames (robust to outliers)
-   - Computes conversion factor: `px_to_m = 0.05m / median_width_px`
-   - Converts power: `power_W/kg = power_px × (px_to_m)²`
-
-3. **Phase-Specific Analysis**
-   - Extracts power data between t1 (end of first pull) and t3 (end of third pull)
-   - Finds maximum absolute value across the entire pulling and turnover phase
-   - Reports both pixel and real-world values
-
-**Console Output During Step 2:**
+**Calculation:**
 ```
---- Maximum Specific Power Analysis ---
-Endcap detection: median width = 127.3 px
-Pixel-to-meter conversion: 1 px = 0.393 mm
-Maximum specific power: 15234.56 px²/s³ = 23.52 W/kg
-Peak power output (t1→t3): 23.52 W/kg
+Specific Power = (bar velocity)² × (bar mass) / (lifter mass)
 ```
 
-**Output in analysis.md (when endcap detected):**
-```markdown
-## Maximum Specific Power
-- **Peak Power (t1→t3):** 23.52 W/kg
-  *(Raw: 15234.56 px²/s³)*
-```
+When pixel-to-meter conversion is available, reported in **watts per kilogram (W/kg)**.
 
-**Output in analysis.md (when endcap NOT detected):**
-```markdown
-## Maximum Specific Power
-- **Peak Power (t1→t3):** 15234.56 px²/s³
-  *(Note: Real-world conversion unavailable - endcap not detected)*
-```
+Alternatively, reported in pixel units (px²/s³) when real-world scaling is unavailable.
 
-**Interpreting Results:**
-- **Elite lifters**: 50-70 W/kg
-- **National level**: 35-50 W/kg
-- **Recreational**: 20-35 W/kg
-
-**Requirements for Conversion:**
-- ✅ Barbell endcap consistently detected
-- ✅ Good video quality and contrast
-- ✅ Endcap visible throughout lift
-- ❌ Fails if endcap not detected → shows pixel units only
+**Interpretation:**
+- Higher values indicate explosive power production
+- Occurs typically during mid-Pull phase (bar accelerating fastest)
+- Useful for comparing athlete performance across sessions
 
 #### Technique Critique
 
-**Purpose:** Provides automated feedback on common technique faults specific to each lift type.
+barpath analyzes lift technique using **rule-based checks**:
 
-**Supported Lift Types:**
-- **Clean**: Power clean technique analysis
-- **Snatch**: Snatch technique analysis
+**For Clean:**
+- Early arm bend (should stay straight until after extension)
+- Incomplete extension (hips must reach full extension before Pull-under)
+- Poor turnover timing (arms should bend only after bar reaches shoulder height)
+- Weight shift (should stay mid-foot throughout)
 
-**How It Works:**
+**For Snatch:**
+- Similar checks, adapted for overhead lockout
+- Checks for head position during Pull-under
+- Evaluates stability in overhead position
 
-The critique system analyzes kinematic patterns during each phase and compares them against optimal technique thresholds calibrated from world-class reference lifts.
-
-**Thresholds Calibration:**
-- All thresholds have been extensively tested against world record lifts
-- Reference lifts include: Liao Hui, Lu Xiaojun, Szymon Kołecki, Olivia Reeves
-- Thresholds are intentionally permissive to avoid false positives on good technique
-- Only flags genuinely problematic movement patterns
-
-**Clean-Specific Checks:**
-
-*First Pull (t0 → t1):*
-- Bar drifting away from body (horizontal displacement > 10% of frame height)
-- Knees caving inward (knee width decreases > 6% of frame height)
-
-*Second Pull (t1 → t2):*
-- Hitching in second pull (hips rise while bar moves backward)
-
-*Third Pull/Turnover (t2 → t3):*
-- Delayed knee flexion after extension (knees don't bend within 5° after t2)
-
-**Snatch-Specific Checks:**
-
-*First Pull (t0 → t1):*
-- Bar drifting away from body (horizontal displacement > 10% of frame height)
-- Knees caving inward (knee width decreases > 6% of frame height)
-
-*Third Pull/Turnover (t2 → t3):*
-- Delayed knee flexion after extension (knees don't bend within 5° after t2)
-
-**Note on Disabled Checks:**
-The following checks have been disabled after testing with world-class lifts:
-- Hitching (tipping forward) in first pull - natural in optimal technique
-- Arms bending early - acceptable pattern in elite lifters
-- Negative acceleration/slowing down - normal during phase transitions
-- Pressing out the catch - difficult to distinguish from stabilization
-- Walking forward in recovery - normal position adjustment
-
-**Output in analysis.md:**
-```markdown
-## Critique
-- First Pull: The bar is drifting away in the first pull
-- Second Pull: You are hitching in the second pull
-```
-
-Or if no faults detected:
-```markdown
-## Critique
-No major faults detected based on configured checks.
-```
-
-**Limitations:**
-- 2D analysis cannot detect front-back movements
-- Camera angle affects accuracy
-- Some checks disabled to prevent false positives
-- Not a replacement for coach feedback
-
-**Best Used For:**
-- Quick self-assessment after training
-- Identifying major technical issues
-- Tracking consistency across attempts
-- Supplementing coach analysis with data
+**Output:**
+- Findings are reported in `analysis.md` with specific frame ranges and severity
+- Recommendations are provided for each fault
 
 ---
 
@@ -441,329 +400,277 @@ No major faults detected based on configured checks.
 
 ### Batch Processing
 
-BARPATH supports processing multiple videos in a single run, which is useful for analyzing multiple lifts or sessions efficiently.
+Process multiple videos in a single command:
 
-**How it works:**
-- In the **GUI**: Add multiple video files using the "Add Video" button. The system will process them sequentially, one after another.
-- In the **CLI**: Use the `--input_video` argument multiple times or pass a list of files.
+```bash
+python barpath/barpath_cli.py \
+  --input_video video1.mp4 video2.mp4 video3.mp4 \
+  --model "models/yolo26n.pt" \
+  --lift_type clean \
+  --output_dir "batch_results"
+```
 
 **Behavior:**
-- Videos are processed **sequentially**, not in parallel. This means the total time is the sum of individual video processing times.
-- For each video, a separate subfolder is created in the output directory, named after the video file (e.g., `video1.mp4` → `video1/`).
-- Progress is tracked per video, and the GUI updates the progress bar accordingly.
-- If any video fails, the others continue processing.
-- Output files (graphs, CSV, video) are generated in each video's subfolder.
-
-**Example CLI batch processing:**
-```
-python barpath_cli.py --input_video lift1.mp4 lift2.mp4 lift3.mp4 --model yolo.pt --lift_type clean --no-video
-```
-This will create `lift1/`, `lift2/`, `lift3/` subfolders in the output directory.
-
-**When to use batch processing:**
-- Analyzing multiple attempts of the same lift for consistency.
-- Processing a session's worth of videos overnight.
-- Comparing different lifters or techniques.
+- Each video is processed sequentially
+- A subdirectory is created for each video in `output_dir`:
+  ```
+  batch_results/
+  ├── video1/
+  │   ├── raw_data.pkl
+  │   ├── final_analysis.csv
+  │   ├── graphs/
+  │   ├── output.mp4
+  │   └── analysis.md
+  ├── video2/
+  │   ├── raw_data.pkl
+  │   ...
+  ```
+- Progress is shown for each video with frame count
+- Useful for analyzing workout sessions or comparing multiple athletes
 
 ### Hardware Acceleration with OpenVINO
 
-BARPATH can leverage Intel's OpenVINO toolkit for faster inference on Intel CPUs, providing 2-5x speed improvements over standard PyTorch models.
+**Intel CPUs only** — use OpenVINO for faster inference:
 
-**How it works:**
-- Export your YOLO model to OpenVINO format using Ultralytics:
-  ```
-  yolo export model=yolo11n.pt format=openvino
-  ```
-  This creates a directory like `yolo11n_openvino_model/` containing `.xml` and `.bin` files.
+1. **Export your YOLO26 model to OpenVINO format:**
+   ```bash
+   yolo export model=models/yolo26n.pt format=openvino
+   ```
+   This creates a directory `yolo26n_openvino_model/` with `.xml` and `.bin` files.
 
-- Point BARPATH to this directory instead of the `.pt` file:
-  - GUI: Select the OpenVINO directory in the model dropdown.
-  - CLI: `--model yolo11n_openvino_model`
+2. **Use the exported model in barpath:**
+   ```bash
+   python barpath/barpath_cli.py \
+     --input_video "lift.mp4" \
+     --model "models/yolo26n_openvino_model" \
+     --lift_type clean
+   ```
 
-**Detection and Usage:**
-- BARPATH automatically detects OpenVINO models by checking for directories with "openvino" in the name containing `.xml` and `.bin` files.
-- On Intel CPUs, it uses the OpenVINO runtime for inference.
-- If OpenVINO is not installed or the CPU is not Intel, it falls back to standard PyTorch/ONNX Runtime.
-- No GPU support currently; OpenVINO here refers to CPU optimization.
+3. **Installation:**
+   ```bash
+   pip install openvino onnxruntime
+   ```
 
-**Requirements:**
-- Intel CPU (detection is automatic).
-- Install OpenVINO: `pip install openvino`
-- Export model as above.
+**Performance:**
+- On modern Intel CPUs: ~2–4× speedup vs. PyTorch CPU inference
+- Especially effective for batch processing multiple videos
+- Requires `.xml` and `.bin` files in the model directory
 
-**Benefits:**
-- Faster processing, especially for long videos.
-- Lower CPU usage during inference.
-- Compatible with existing BARPATH workflows.
-
-**Verification:**
-Check if OpenVINO is active:
-```bash
-python -c "import openvino; print('OpenVINO available')"
-```
+---
 
 ## Model Format Support
 
-BARPATH supports multiple YOLO model formats with different acceleration options:
+barpath supports multiple YOLO26 model formats:
 
-### PyTorch Models (.pt)
-**Required for CUDA acceleration:**
-```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
-- **GPU**: Automatic CUDA acceleration when NVIDIA GPU detected
-- **CPU**: Works without additional packages
-- **Best for**: Development, fine-tuning, maximum compatibility
+| Format | File Extension | Requirement | Installation | Speed | Use Case |
+|--------|---|---|---|---|---|
+| **PyTorch** | `.pt` | ultralytics | Built-in | Baseline | Development, testing |
+| **ONNX** | `.onnx` | onnxruntime | `pip install onnxruntime` | ~1–2× faster | CPU optimization |
+| **TensorRT** | `.engine` | TensorRT | `pip install tensorrt` | 3–5× faster | NVIDIA GPU only |
+| **OpenVINO** | `{dir}/*.xml` + `*.bin` | openvino | `pip install openvino` | 2–4× faster | Intel CPU only |
 
-### ONNX Models (.onnx)
-**Required for GPU acceleration:**
-```bash
-# NVIDIA GPU
-pip install onnxruntime-gpu
-
-# CPU fallback
-pip install onnxruntime
-```
-- **GPU**: DirectML (Windows), CUDA (Linux), Metal (macOS)
-- **CPU**: Works on all platforms
-- **Best for**: Cross-platform deployment, optimized inference
-
-### TensorRT Models (.engine)
-**Required packages:**
-```bash
-pip install tensorrt pycuda
-```
-- **GPU**: NVIDIA TensorRT optimization (fastest inference)
-- **Requirements**: NVIDIA GPU, CUDA toolkit, compatible drivers
-- **Best for**: Production deployment, maximum performance
-- **Note**: Requires model conversion from .pt/.onnx to .engine format
-
-### OpenVINO Models
-**Required packages:**
-```bash
-pip install openvino
-```
-- **CPU**: Intel CPU optimization
-- **GPU**: Limited support (Intel integrated graphics)
-- **Best for**: Intel CPU systems
+**Selecting a Model:**
+- **For CPU (any brand)**: Use `.pt` or `.onnx` formats
+- **For Intel CPU**: Export to OpenVINO for best performance
+- **For NVIDIA GPU**: Use TensorRT (`.engine` export)
 
 ---
 
 ## Output Files
 
-After running the pipeline, you'll find these files in the output directory:
-
 ### Summary
 
-| File | Description | When Generated |
-|------|-------------|-----------------|
-| `raw_data.pkl` | Serialized tracking data (pose landmarks, barbell detections, stabilization) | Step 1 |
-| `final_analysis.csv` | Processed data with kinematics, angles, barbell positions | Step 2 |
-| `output.mp4` | Annotated video with skeleton overlay and bar path | Step 4 |
-| `analysis.md` | Lift analysis report: phase timing, peak power, technique critique | Step 5 (clean/snatch only) |
+After running the pipeline, you'll find:
 
-### Graph Files
+```
+outputs/
+├── raw_data.pkl              # Step 1: Raw detections
+├── final_analysis.csv        # Step 2: Enriched kinematic data
+├── graphs/
+│   ├── barbell_xy_path.png
+│   ├── barbell_velocity.png
+│   ├── barbell_acceleration.png
+│   ├── barbell_specific_power.png
+│   └── ...
+├── output.mp4                # Step 4: Annotated video (if not --no-video)
+└── analysis.md               # Step 5: Technique critique report (rendered as HTML in GUI)
+```
 
-Located in `graphs/` subdirectory (generated in Step 3):
+### Graph Files (in `graphs/` subdirectory)
 
-#### Standard Graphs (Always Generated)
+| Graph | Description | Axes |
+|-------|-------------|------|
+| `barbell_xy_stable_path.png` | Smoothed, stabilized bar path (shake-corrected, pixel units) | X px (lateral) vs Y px (vertical) |
+| `barbell_xy_stable_path_unsmoothed.png` | Raw stabilized bar path before Savitzky-Golay smoothing | X px (lateral) vs Y px (vertical) |
+| `barbell_lateral_corrected_path.png` | **Angle-compensated bar path** — both axes in real-world centimetres, equal aspect ratio, SG-smoothed after conversion; annotated with camera yaw and mm/px scale | X cm (lateral displacement) vs Y cm (vertical displacement) |
+| `barbell_velocity.png` | Vertical bar velocity over time | Time (s) vs Velocity (px/s) — colored by phase |
+| `barbell_acceleration.png` | Vertical bar acceleration over time | Time (s) vs Acceleration (px/s²) — colored by phase |
+| `barbell_specific_power.png` | Specific power (proxy) over time | Time (s) vs Specific power (px²/s³) |
 
-- **`barbell_xy_stable_path.png`** & **`barbell_xy_smooth_path.png`** (unstabilized and smoothed versions)
-  - 2D bar path diagram showing barbell trajectory
-  - **Colored by lift phase** (when `lift_type == "clean"` or `"snatch"`):
-    - 🔴 **Red**: Phase 0 (First Pull)
-    - 🟠 **Orange**: Phase 1 (Second Pull)
-    - 🟢 **Green**: Phase 2 (Third Pull / Turnover)
-    - 🟣 **Magenta**: Phase 3 (Recovery)
-  - Shows true bar trajectory as detected
-  - Same horizontal scale as corrected graph (for comparison)
+**All path graphs:**
+- Include generous horizontal padding (≥ 30% of the vertical range on each side) so the legend and axis labels are never crowded
+- Use the same phase color coding
 
-- **`vel_y_smooth.png`**
-  - Vertical velocity over time
-  - Smoothed with Savitzky-Golay filter
-  - Useful for identifying pull phases
+**All graphs use color coding:**
+- 🔴 **Red**: Pull phase
+- 🟠 **Orange**: Pull-under phase
+- 🟢 **Green**: Recovery phase
 
-- **`accel_y_smooth.png`**
-  - Vertical acceleration over time
-  - Shows force application timing
-  - Peaks indicate maximum acceleration effort
+> `barbell_lateral_corrected_path.png` is only generated when MediaPipe world landmarks are available (i.e. when pose estimation returns 3D joint data). It is produced for all lift types, not just clean/snatch.
 
-- **`specific_power_y_smooth.png`**
-  - Power-to-mass ratio proxy
-  - Product of velocity × acceleration
-  - High values indicate explosive phases
+### CSV Data Structure (`final_analysis.csv`)
 
-#### Perspective-Corrected Graph (When `lift_type != "none"`)
+The CSV contains per-frame kinematic data with the following columns:
 
-- **`barbell_lateral_corrected_path.png`**
-  - 2D bar path with perspective correction applied
-  - **Uses same horizontal scale as `barbell_xy_stable_path.png`** for direct comparison
-  - Shows true lateral displacement if camera were perpendicular
-  - Displays detected camera angle (reference frame)
-  - **Colored by lift phase** (when `lift_type == "clean"` or `"snatch"`):
-    - 🔴 **Red**: Phase 0 (First Pull)
-    - 🟠 **Orange**: Phase 1 (Second Pull)
-    - 🟢 **Green**: Phase 2 (Third Pull / Turnover)
-    - 🟣 **Magenta**: Phase 3 (Recovery)
-  - Difference between this and uncorrected path shows camera angle effect
-
-### CSV Data Structure
-
-`final_analysis.csv` contains the following key columns:
-
-#### Position Data
-- `barbell_x_smooth` - Horizontal position (pixels, stabilized)
-- `barbell_y_smooth` - Vertical position (pixels, stabilized)
-- `barbell_x_corrected_px` - Perspective-corrected horizontal position (when available)
+#### Barbell Position
+| Column | Description | Units | Notes |
+|--------|-------------|-------|-------|
+| `barbell_x_smooth` | Smoothed horizontal bar position | pixels | Savitzky-Golay smoothed |
+| `barbell_y_smooth` | Smoothed vertical bar position | pixels | Top=0, bottom=max |
+| `barbell_x_stable` | Stabilized horizontal bar position | pixels | Camera shake removed, pre-smooth |
+| `barbell_y_stable` | Stabilized vertical bar position | pixels | Camera shake removed, pre-smooth |
+| `barbell_x_corrected_cm` | Angle-compensated horizontal displacement from start | centimetres | Derived from shoulder geometry; SG-smoothed |
+| `barbell_y_corrected_cm` | Angle-compensated vertical displacement from start | centimetres | Derived from shoulder geometry; SG-smoothed |
 
 #### Kinematics
-- `vel_y_smooth` - Vertical velocity (px/s)
-- `accel_y_smooth` - Vertical acceleration (px/s²)
-- `specific_power_y_smooth` - Power-to-mass ratio proxy (px²/s³, converts to W/kg with endcap reference)
-- `bar_phase` - Lift phase number: 0-3 for clean/snatch (0=First Pull, 1=Second Pull, 2=Third Pull, 3=Recovery); velocity-based for other lifts
+| Column | Description | Units | Notes |
+|--------|-------------|-------|-------|
+| `vel_y_smooth` | Vertical bar velocity | px/s | Positive=upward |
+| `accel_y_smooth` | Vertical bar acceleration | px/s² | Positive=upward acceleration |
+| `specific_power_y_smooth` | Specific power proxy | px²/s³ | Power output indicator |
 
-#### Stabilization
-- `shake_dx`, `shake_dy` - Per-frame camera motion (pixels)
-- `total_shake_x`, `total_shake_y` - Cumulative camera motion
+#### Joint Positions (raw, normalized 0–1)
+| Column Pattern | Description | Units | Notes |
+|---|---|---|---|
+| `{joint}_x` | Joint horizontal position | 0–1 (normalized) | Tracked for 12 joints (shoulders, hips, knees, ankles, elbows, wrists) |
+| `{joint}_y` | Joint vertical position | 0–1 (normalized) | |
+| `{joint}_z` | Joint depth (pseudo-3D) | 0–1 (normalized) | MediaPipe's pseudo-depth estimate |
+| `{joint}_vis` | Joint visibility | 0–1 | Confidence that the joint is visible and correctly detected |
 
-#### Perspective Correction (when `lift_type != "none"`)
-- `camera_yaw_deg` - Detected camera angle (constant across all frames)
-- `lateral_correction_factor` - Applied correction multiplier
+**Joints tracked:**
+- Shoulders: `left_shoulder`, `right_shoulder`
+- Hips: `left_hip`, `right_hip`
+- Knees: `left_knee`, `right_knee`
+- Ankles: `left_ankle`, `right_ankle`
+- Elbows: `left_elbow`, `right_elbow`
+- Wrists: `left_wrist`, `right_wrist`
 
-#### Body Angles
-- `lifter_angle_deg` - Lifter's orientation relative to camera
-- `left_knee_angle`, `right_knee_angle` - Knee flexion angle
-- `left_elbow_angle`, `right_elbow_angle` - Elbow flexion angle
+#### Joint Angles (smoothed)
+| Column | Description | Units | Notes |
+|---|---|---|---|
+| `left_knee_angle` | Left knee angle | degrees | 0° = fully extended, 90° = right angle |
+| `right_knee_angle` | Right knee angle | degrees | |
+| `left_elbow_angle` | Left elbow angle | degrees | |
+| `right_elbow_angle` | Right elbow angle | degrees | |
 
-#### Joint Positions
-- Normalized coordinates: `left_shoulder_x`, `left_shoulder_y`, etc.
-- All normalized to [0, 1] range (multiply by frame dimensions for pixels)
+#### Lifter Angle (per-frame, smoothed)
+| Column | Description | Units | Notes |
+|---|---|---|---|
+| `lifter_angle` | Lifter orientation (camera yaw) | degrees | 0° = facing camera directly, ±90° = perpendicular |
 
-### Video Overlay
+#### Phase and Timing
+| Column | Description | Values | Notes |
+|---|---|---|---|
+| `bar_phase` | Current lift phase | 0 (Pull), 1 (Pull-under), 2 (Recovery) | Color-coded in graphs |
+| `time_s` | Time from start of analyzed clip | seconds | Useful for aligning with video |
 
-The output video (`output.mp4`) includes:
-
-- **Skeleton overlay**: Person's joints and connections (when `lift_type != "none"`)
-- **Bar path**: Barbell trajectory **colored by lift phase** (when `lift_type == "clean"` or `"snatch"`):
-  - 🔴 **Red**: Phase 0 (First Pull)
-  - 🟠 **Orange**: Phase 1 (Second Pull)
-  - 🟢 **Green**: Phase 2 (Third Pull / Turnover)
-  - 🟣 **Magenta**: Phase 3 (Recovery)
-- **Grid**: Reference grid for spatial orientation
-- **Statistics**: Frame number, timestamp, velocity, phase information
+#### Stabilization and Scale
+| Column | Description | Units | Notes |
+|---|---|---|---|
+| `total_shake_x` | Cumulative camera shake correction (horizontal) | pixels | Derived from Lucas-Kanade optical flow |
+| `total_shake_y` | Cumulative camera shake correction (vertical) | pixels | Derived from Lucas-Kanade optical flow |
+| `camera_yaw_deg` | Estimated camera yaw angle | degrees | Informational only — not used in the correction calculation |
+| `px_to_m_scale` | Per-frame pixel→metre scale factor | m/px | Derived from shoulder pixel width vs world-space width; median used for frames with missing landmarks |
+| `lateral_correction_factor` | Legacy field | — | Always 1.0; retained for backwards compatibility |
 
 ---
 
 ## Recording Best Practices
 
-To get the best results from BARPATH, follow these recording guidelines:
+To get the best results from barpath analysis, follow these recording guidelines:
 
 ### 1. Camera Position
 
-**Ideal Setup:**
-- **Angle**: 45° side view (perpendicular to lifter creates perspective errors, 45° is optimal)
-- **Height**: Camera at hip/waist level
-- **Distance**: 8-12 feet from lifter
+- **Lateral view (side angle)** is best — captures full range of motion in bar path
+- Position camera at **hip height** for optimal skeleton visibility
+- Aim camera to capture the **entire lift from floor to overhead**
+- Keep **3–4 feet away** so the lifter fills ~60% of frame width
 
-**Why it matters:**
-- Perspective angle compensation works best at 30-60°
-- Hip-level height captures full body motion clearly
-- Sufficient distance keeps entire body in frame
+**Avoid:**
+- Front-facing camera (hides bar path behind lifter)
+- Top-down angle (distorts joint positions)
+- Too close (limbs cut off frame)
+- Too far (joints become too small)
 
 ### 2. Camera Stability
 
-**Requirements:**
-- ✅ Use a tripod or stable surface
-- ✅ Some minor camera shake is OK (system compensates)
-- ✅ Keep camera still—no panning or zooming
-- ❌ Avoid handheld recording
-- ❌ Don't track the lifter
-
-**Why it matters:**
-- Camera motion is extracted and removed from measurements
-- Excessive motion (> 30 pixels/frame) can overwhelm the stabilization algorithm
-- Consistent camera position ensures angle detection works correctly
+- Use a **tripod or fixed mount** (stable camera is essential for accurate analysis)
+- **Avoid handheld or panned shots** — creates motion artifacts
+- If camera does move, barpath will attempt to stabilize, but results are best with truly fixed camera
+- Test: Roll 2–3 seconds of footage; look for camera movement
 
 ### 3. Visibility Requirements
 
-**Essential:**
-- ✅ Entire body visible from head to feet throughout the entire lift
-- ✅ Nearest barbell endcap clearly visible
-- ✅ No occlusions (people, equipment blocking view)
-- ✅ Both shoulders visible for angle compensation
-
-**Why it matters:**
-- MediaPipe Pose needs to see the full body to detect landmarks
-- YOLO barbell detector needs to see the endcap
-- Occlusions cause tracking failures and data gaps
-- Shoulder visibility is required for perspective correction
+- **Full-body visibility**: All joints (shoulders, hips, knees, ankles) must be visible
+- **Lighting**: Even, diffuse lighting (avoid harsh shadows or backlighting)
+- **Contrast**: Lifter should contrast with background (no white lifter on white wall)
+- **Speed**: Minimum **24 fps** (60 fps recommended for smooth motion analysis)
 
 ### 4. Lighting
 
-**Best Practice:**
-- ✅ Consistent, even lighting (avoid shadows across body)
-- ✅ Natural daylight or studio lighting
-- ✅ Bright enough to see details clearly
-- ❌ Avoid backlighting (silhouettes)
-- ❌ Avoid flickering lights
-
-**Why it matters:**
-- Poor lighting degrades landmark detection accuracy
-- Shadows can be misidentified as joint positions
-- Inconsistent lighting causes tracking jitter
+- **Bright, even illumination**: Outdoors or well-lit gym works well
+- **Avoid:**
+  - Backlighting (lifter appears as silhouette)
+  - Harsh shadows (MediaPipe may lose joint tracking)
+  - Flickering lights (causes jitter)
+  - Reflective surfaces near camera (creates glare)
 
 ### 5. Video Quality
 
+- **Resolution**: Minimum 720p; 1080p or higher recommended
+- **Frame Rate**: Minimum 24 fps; 60 fps ideal for smooth motion analysis
+- **Codec**: H.264 (mp4) is most compatible; avoid lossy compression artifacts
+- **Bitrate**: ~5 Mbps for 1080p (high enough to preserve detail)
+
 **Recommended Settings:**
-- **Resolution**: 1080p (1920×1080)
-- **Frame Rate**: 30 fps (24 fps minimum)
-- **Format**: MP4, MOV, MKV, WebM, or AVI
-- **Codec**: H.264 (standard, widely compatible)
-
-**Why it matters:**
-- 1080p provides good detail without excessive processing time
-- 30 fps captures motion dynamics adequately
-- Lower resolution/fps may miss important details
-- Higher resolution/fps increases processing time significantly
-
-### 6. Example Setup
-
-```
-        Camera (tripod)
-           /  45°
-          /
-         / ______
-        /|      |
-       / |      |
-      /  | Lift |
-     /   |______|
-    /
-   /___________
-     Lifter
-
-Position:
-- Camera on tripod at hip height
-- 8-12 feet away from lifter
-- 45° angle to lifter's sagittal plane
-- Stable, level surface
-- Good lighting from the side
-```
+- 1080p @ 60 fps, H.264, 6–8 Mbps bitrate
+- If processing is slow, try 720p @ 60 fps
 
 ---
 
 ## Tips for Best Results
 
-1. **Always start with `--no-video`** when testing a new video setup. It runs much faster and lets you see if detection is working before spending time on video rendering.
+1. **Use the `--no-video` flag during development** — saves time by skipping Step 4 (video rendering)
+   ```bash
+   python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type clean --no-video
+   ```
+   This gives you CSV and graphs much faster; only render video after you've validated the analysis.
 
-2. **Check the graphs first** - They show if the analysis worked well. Bad graphs indicate detection issues.
+2. **Start with one video** — test the pipeline end-to-end before batch processing
+   ```bash
+   python barpath/barpath_cli.py --input_video test_lift.mp4 --model models/yolo26n.pt --lift_type clean --no-video
+   ```
 
-3. **Compare corrected and uncorrected paths** - The horizontal distance between `barbell_xy_stable_path.png` and `barbell_lateral_corrected_path.png` shows how much your camera angle affected the measurements.
+3. **Check the CSV first** — inspect `final_analysis.csv` to verify data quality before looking at graphs or video
+   - Open in Excel or use pandas in a Jupyter notebook
+   - Look for gaps in joint positions (high NaN counts = visibility issues)
+   - Check if phase labels (0, 1, 2) appear throughout the lift
 
-4. **Use `lift_type clean` or `lift_type snatch`** to enable perspective correction and shoulder-based stabilization. Use `lift_type none` for quick analysis without pose landmarks.
+4. **Use hardware acceleration for batch jobs** — OpenVINO or TensorRT can 2–5× speedup
+   ```bash
+   pip install openvino onnxruntime
+   yolo export model=models/yolo26n.pt format=openvino
+   ```
 
-5. **Check console output** for the detected camera angle. Typical values are 30-60°. If it shows 0° or >75°, the camera angle may be too steep or pose detection failed.
+5. **Validate phase detection** — Review `analysis.md` to check phase timing is reasonable
+   - Pull phase should be ~1–2 seconds (1000–2000 ms) for most lifts
+   - Pull-under should be fast (~200–400 ms)
+   - Recovery depends on lifter strength; typically 0.5–2 seconds
 
-6. **Enable hardware acceleration** if available (OpenVINO, CUDA, etc.) for 2-5x speed improvement.
+6. **Compare multiple attempts** — Batch process several takes of the same lift to identify consistency
+   ```bash
+   python barpath/barpath_cli.py --input_video attempt1.mp4 attempt2.mp4 attempt3.mp4 --model models/yolo26n.pt --lift_type clean --no-video
+   ```
 
 ---
 
@@ -771,60 +678,96 @@ Position:
 
 ### Runtime Errors
 
-**"Error loading YOLO model"**
-- ✅ Verify model path is correct
-- ✅ Check model file is a valid `.pt` file (not a pointer)
-- ✅ Ensure model was trained with Ultralytics YOLO
-- ✅ Try a different model from `models/` directory
+**"Error: Model path not found"**
+- Check that the model file exists: `ls barpath/models/yolo26n.pt`
+- Use absolute path if relative path doesn't work
+- For OpenVINO, ensure directory contains `.xml` and `.bin` files
 
-**"Could not detect barbell"**
-- ✅ Ensure barbell endcap is visible in video
-- ✅ Check class definition matches model, default models use class `endcap`
+**"Error: No valid video files provided"**
+- Verify video file exists and has correct extension (`.mp4`, `.avi`, `.mov`, `.mkv`, `.webm`)
+- Convert video if needed: `ffmpeg -i input.mov -c:v h264 -c:a aac output.mp4`
 
-**"KeyError: 'barbell_center'"**
-- This indicates barbell was not detected in any frame
-- Solution: Check video quality and barbell visibility
-- Fallback: Analysis still runs, but bar path will be missing
+**"ImportError: No module named 'mediapipe'"**
+- Install missing dependencies: `pip install -r requirements.txt`
+- Ensure you're using the correct Python environment
 
-**"Missing required data columns"**
-- Usually indicates MediaPipe pose detection failed
-- ✅ Ensure lifter's full body is visible
-- ✅ Check lighting conditions
-- ✅ Verify no occlusions blocking the person
+**"FFmpeg not found"**
+- Install FFmpeg: `sudo apt install ffmpeg` (Ubuntu) or `brew install ffmpeg` (macOS)
+- Verify: `ffmpeg -version`
+
+**"CUDA out of memory" (GPU users)**
+- Use a smaller model variant (e.g., `yolo26n` instead of `yolo26s`)
+- Reduce video resolution before processing
+- Use CPU inference instead: remove TensorRT and use `.pt` or `.onnx`
 
 ### Performance Issues
 
-**Slow inference or video processing**
-- ✅ Install hardware acceleration packages (see Installation section in README)
-- ✅ Use a faster YOLO model: `yolo11s50e.pt` instead of `yolo11l60e.pt`
-- ✅ Reduce video resolution before processing
-- ✅ Use `--no-video` flag to skip video rendering
+**Pipeline is very slow**
+- Check if CPU is maxed out: use `top` or Task Manager
+- Try `--no-video` to skip the expensive video rendering step
+- Use hardware acceleration: install OpenVINO (Intel) or TensorRT (NVIDIA)
+- Process smaller videos first to validate the pipeline
 
-**To check if hardware acceleration is active:**
+**Video rendering takes forever (Step 4)**
+- This is normal for long videos (several minutes)
+- Use `--no-video` if you don't need the annotated video
+- Or render at lower resolution: edit `4_render_video.py` and reduce output resolution
+
+**Batch processing is slow**
+- Videos are processed sequentially; parallelization is not yet implemented
+- Each video must complete fully before the next starts
+- Estimated time: ~2 min per minute of footage (varies by hardware)
+
+### Verifying Hardware Acceleration
+
+Check if hardware acceleration packages are installed:
+
 ```bash
-python -c "from barpath.pipeline import _get_yolo_device; print(_get_yolo_device())"
+python -c "
+from barpath.hardware_detection import get_hardware_profile, get_optional_packages
+p = get_hardware_profile()
+print('Hardware Profile:', p)
+o, v = get_optional_packages(p)
+print('Recommended packages:', o + v)
+"
 ```
-- Should show: `cpu` (CPU inference is used)
 
-### Verifying Hardware Acceleration Installation
-
-After installing acceleration packages, verify they're working:
+If OpenVINO/ONNX/TensorRT are recommended but not installed:
 
 ```bash
-# Check ONNX Runtime providers
-python -c "import onnxruntime; print(onnxruntime.get_available_providers())"
+# Intel CPU
+pip install onnxruntime openvino
 
-# Check OpenVINO installation (if installed)
-python -c "import openvino; print('OpenVINO version:', openvino.__version__)"
+# NVIDIA GPU
+pip install tensorrt
+
+# All platforms (ONNX is universal)
+pip install onnxruntime
 ```
-
-Expected output for your hardware:
-- **All platforms**: `['CPUExecutionProvider']`
-- **Intel CPUs with OpenVINO**: OpenVINO available as separate runtime option
 
 ### FFmpeg Errors
 
+<<<<<<< HEAD
 **"Could not initialize video writer"**
 - Check output directory exists and is writable
 - Verify sufficient disk space
 - Try a different output format (change file extension)
+=======
+**"FFmpeg: Unknown encoder 'aac'"**
+- FFmpeg variant may not include AAC encoder; install full version
+- Ubuntu: `sudo apt install ffmpeg libavcodec-extra`
+- macOS: `brew install ffmpeg --with-options-for-aac`
+
+**"Encoder (h264) not found"**
+- Install H.264 encoder support
+- Ubuntu: `sudo apt install libx264-dev`
+- macOS: `brew install x264`
+
+**Video output is corrupted or silent**
+- Try using a different codec or container format
+- Edit `4_render_video.py` to adjust codec/quality settings
+
+---
+
+**For more details, see [README.md](../README.md) or file an issue on GitHub.**
+>>>>>>> 27734bd (Upgrade to YOLO26 models, nano and small, also increase mediapipe)
