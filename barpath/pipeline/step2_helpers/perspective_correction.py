@@ -1,27 +1,66 @@
 """
 Perspective correction helpers for Step 2: Data Analysis.
 
-This module calculates perspective-corrected lateral bar displacement using
-MediaPipe world landmarks and camera angle estimation.
+This module converts the bar path from pixel space to real-world centimetres
+using MediaPipe shoulder geometry as a reference ruler.
 
-Approach
---------
-Rather than scaling observed pixel displacement by 1/cos(yaw) – which blows up
-badly at non-trivial camera angles – we work entirely in real-world units:
+How it works
+------------
+MediaPipe provides shoulder positions in both normalised image coordinates
+and metric world coordinates (metres, centred at the hip midpoint).
 
-1. Extract the shoulder vector in both pixel-space and world-space (metres).
-2. Use the ratio of world-space shoulder width to pixel-space shoulder width as
-   a px → metre scale factor (computed per-frame and averaged for stability).
-3. Project the observed pixel-space horizontal bar displacement onto the true
-   lateral axis using the world-space shoulder direction, converting the result
-   to centimetres.
-4. Store corrected positions as `barbell_x_corrected_cm` and
-   `barbell_y_corrected_cm` so that both axes of the path graph are in the same
-   physical unit and the aspect ratio is automatically believable.
+The ratio of the *world-space* shoulder width (metres) to the *pixel-space*
+projected shoulder width gives us a px→m scale factor:
 
-This is numerically stable for any camera angle because we never divide by
-cos(yaw); instead we use the shoulder geometry that MediaPipe already provides
-in metric units.
+    scale = world_shoulder_width_m / pixel_shoulder_width_px
+
+Under a standard pinhole camera model this is equivalent to Z / f_px
+(depth divided by focal length in pixels), which is the correct factor for
+converting any pixel displacement at that depth into a real-world displacement:
+
+    Δx_world  =  Δu_px  ×  scale   (same depth assumption)
+
+The same depth assumption is valid for the barbell because the bar stays
+close to the athlete's body and moves within roughly the same depth plane
+as the torso throughout the lift.
+
+Stability
+---------
+The raw per-frame scale can spike when the barbell occludes the shoulders
+(the bar passing the torso during the turnover phase).  Three successive
+steps guard against this:
+
+  1. IQR outlier rejection (Tukey fence, 1.5 × IQR) – spikes are nulled.
+  2. Linear interpolation across the resulting gaps, then bfill/ffill at
+     boundaries – the scale varies smoothly through occlusion windows.
+  3. Savitzky-Golay smoothing with a wide window – high-frequency MediaPipe
+     landmark jitter is suppressed.
+
+A *single stable scalar* (median of the smoothed scale over the first half of
+the Pull phase, or the full-series median as a fallback) is then used for the
+entire lift instead of a per-frame varying scale.  Using a per-frame rising
+scale on cumulative pixel displacement inflates the corrected path during the
+pull-under, because the pixel shoulder width shrinks as the shoulders rotate
+and the scale therefore rises by 10–20 %.  Applying that rising scale to the
+already-growing cumulative displacement overstates the lateral travel.  A
+single scalar avoids this entirely.
+
+Side-on shots: vertical reference scale
+-----------------------------------------
+When the camera yaw is within ±10° of a true side-on shot, both shoulders
+are almost coincident in the image.  The pixel shoulder *width* approaches
+zero and the shoulder-width-based scale blows up.  However, for a purely
+horizontal yaw rotation the vertical axis is not foreshortened at all, so
+the vertical distance between the shoulder midpoint and the hip midpoint is
+a perfectly reliable ruler.  We use that instead:
+
+    scale_side = world_hip_shoulder_vert_m / pixel_hip_shoulder_vert_px
+
+This produces valid barbell_x/y_corrected_cm columns for side-on shots in
+the same physical units as the angled-view corrected columns, which is
+essential for the superimposed comparison graph.  The yaw annotation in the
+output still records that this was a side-on shot so the caller can treat
+it differently if needed.
 """
 
 from typing import Optional, Tuple
@@ -31,12 +70,38 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Camera yaw angles within this half-range (degrees) are treated as
+# "side-on" – correction is skipped because the shoulder pixel width is
+# near-zero and world-Z estimates are unreliable.
+_SIDE_ANGLE_THRESHOLD_DEG = 10.0
+
+# IQR multiplier for Tukey-fence outlier rejection on the scale series.
+_IQR_MULTIPLIER = 1.5
+
+# Savitzky-Golay parameters for the scale series smoothing pass.
+_SCALE_SG_WINDOW = 31  # wide enough to span a full occlusion burst
+_SCALE_SG_POLY = 3
+
+# Savitzky-Golay parameters for the final cm-path smoothing pass.
+_PATH_SG_WINDOW = 25
+_PATH_SG_POLY = 3
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 
+def _make_odd(n: int) -> int:
+    """Return *n* if odd, else *n - 1* (SG window must be odd and >= poly+2)."""
+    return n if n % 2 == 1 else n - 1
+
+
 def _safe_get(df: pd.DataFrame, idx, col: str) -> Optional[float]:
-    """Return df.loc[idx, col] as a Python float, or None on any error."""
+    """Return ``df.loc[idx, col]`` as a Python float, or ``None`` on any error."""
     try:
         val = df.loc[idx, col]
         if pd.isna(val):
@@ -53,30 +118,31 @@ def _safe_get(df: pd.DataFrame, idx, col: str) -> Optional[float]:
 
 def unpack_world_landmarks(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Extract world landmark coordinates from the world_landmarks column.
-
-    Unpacks the nested dictionary of world landmarks into separate columns
-    for each body part's x/y/z coordinates (in metres, MediaPipe world space).
+    Unpack the ``world_landmarks`` dict column into per-joint
+    ``{name}_world_x/y/z`` columns for shoulders and hips.
 
     Args:
-        df: DataFrame with a 'world_landmarks' column whose values are dicts.
+        df: DataFrame with a ``world_landmarks`` column whose values are
+            dicts mapping joint names to ``[x, y, z, visibility]`` lists.
 
     Returns:
-        DataFrame with additional columns ``{name}_world_x/y/z`` for
-        left_shoulder, right_shoulder, left_hip, right_hip.
+        DataFrame with additional columns for ``left_shoulder``,
+        ``right_shoulder``, ``left_hip``, and ``right_hip``.
+        All four joints are needed: shoulders for the angled-view scale,
+        hips for the side-on vertical-reference scale.
     """
     LANDMARKS = ["left_shoulder", "right_shoulder", "left_hip", "right_hip"]
     for name in LANDMARKS:
-        df[f"{name}_world"] = df["world_landmarks"].apply(
+        col = df["world_landmarks"].apply(
             lambda x, _n=name: x.get(_n) if isinstance(x, dict) else None
         )
-        df[f"{name}_world_x"] = df[f"{name}_world"].apply(
+        df[f"{name}_world_x"] = col.apply(
             lambda x: x[0] if (x is not None and len(x) >= 4 and x[3] > 0.1) else np.nan
         )
-        df[f"{name}_world_y"] = df[f"{name}_world"].apply(
+        df[f"{name}_world_y"] = col.apply(
             lambda x: x[1] if (x is not None and len(x) >= 4 and x[3] > 0.1) else np.nan
         )
-        df[f"{name}_world_z"] = df[f"{name}_world"].apply(
+        df[f"{name}_world_z"] = col.apply(
             lambda x: x[2] if (x is not None and len(x) >= 4 and x[3] > 0.1) else np.nan
         )
     return df
@@ -86,20 +152,19 @@ def calculate_reference_camera_angle(
     df: pd.DataFrame, first_idx
 ) -> Tuple[Optional[float], float]:
     """
-    Calculate the reference camera yaw angle from the first frame.
+    Estimate the camera yaw angle from the shoulder world landmarks at the
+    first frame.
 
-    This is kept for informational / annotation purposes only.  The returned
-    ``correction_factor`` is **not** used to scale bar displacement any more;
-    the actual correction is done in :func:`apply_perspective_correction` using
-    real metric units.
+    Yaw is the angle between the shoulder line and the camera's depth (Z)
+    axis, computed from the world-space X and Z offsets of the two shoulders.
 
     Args:
-        df: DataFrame with unpacked world landmark coordinates.
-        first_idx: Index of the first frame to use as reference.
+        df: DataFrame with unpacked world landmark columns.
+        first_idx: Index of the first (reference) frame.
 
     Returns:
-        ``(camera_yaw_deg, 1.0)`` – the correction factor is always 1.0 here
-        because scaling is handled separately.
+        ``(camera_yaw_deg, 1.0)`` – the second element is a legacy API
+        placeholder; the correction factor is no longer used downstream.
     """
     reference_camera_yaw_deg: Optional[float] = None
 
@@ -112,13 +177,102 @@ def calculate_reference_camera_angle(
         if None not in (l_sh_x, l_sh_z, r_sh_x, r_sh_z):
             dx = float(r_sh_x) - float(l_sh_x)  # type: ignore[arg-type]
             dz = float(r_sh_z) - float(l_sh_z)  # type: ignore[arg-type]
-            # Yaw = angle of shoulder line w.r.t. the camera's Z axis
+            # Yaw = angle of the shoulder line relative to the camera Z axis.
             camera_yaw_rad = np.arctan2(abs(dx), abs(dz))
             reference_camera_yaw_deg = float(np.degrees(camera_yaw_rad))
     except Exception as exc:
         print(f"  Warning: Could not calculate reference camera angle: {exc}")
 
-    return reference_camera_yaw_deg, 1.0  # factor unused; kept for API compat
+    return reference_camera_yaw_deg, 1.0  # second value kept for API compat
+
+
+def _robust_smooth_scale(raw_scale: pd.Series) -> pd.Series:
+    """
+    Clean and smooth a per-frame px->m scale series.
+
+    Steps
+    -----
+    1. IQR outlier rejection: frames outside the Tukey fence
+       ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` are set to NaN.
+    2. Linear interpolation across the resulting gaps; bfill/ffill at
+       boundaries so the series has no NaN after this step.
+    3. Savitzky-Golay smoothing with a wide window to suppress MediaPipe's
+       high-frequency landmark jitter.
+
+    Parameters
+    ----------
+    raw_scale:
+        Per-frame scale values in metres-per-pixel.  NaN where the scale
+        could not be computed (e.g. shoulders not visible).
+
+    Returns
+    -------
+    pd.Series
+        Cleaned, interpolated, and smoothed scale with the same index as
+        the input.
+    """
+    valid = raw_scale.dropna()
+    if len(valid) == 0:
+        return raw_scale
+
+    # Step 1 -- IQR outlier rejection
+    q1 = float(valid.quantile(0.25))
+    q3 = float(valid.quantile(0.75))
+    iqr = q3 - q1
+
+    if iqr > 0:
+        lo = q1 - _IQR_MULTIPLIER * iqr
+        hi = q3 + _IQR_MULTIPLIER * iqr
+        outlier_mask = raw_scale.notna() & ((raw_scale < lo) | (raw_scale > hi))
+        n_out = int(outlier_mask.sum())
+        if n_out > 0:
+            print(
+                f"  Scale outlier rejection: removed {n_out} frames "
+                f"(fence [{lo * 1000:.3f}, {hi * 1000:.3f}] mm/px)"
+            )
+        cleaned = raw_scale.copy()
+        cleaned[outlier_mask] = np.nan
+    else:
+        # All valid values identical -- no outliers possible.
+        cleaned = raw_scale.copy()
+
+    # Step 2 -- Interpolate across gaps
+    interpolated = cleaned.interpolate(method="linear").bfill().ffill()
+
+    n_valid = int(interpolated.notna().sum())
+    if n_valid < 5:
+        # Too few points to smooth meaningfully.
+        return interpolated
+
+    # Step 3 -- Savitzky-Golay smoothing
+    win = _make_odd(min(_SCALE_SG_WINDOW, n_valid))
+    win = max(win, _SCALE_SG_POLY + 2)
+    if win % 2 == 0:
+        win -= 1
+
+    if n_valid >= win and win > _SCALE_SG_POLY:
+        smoothed = savgol_filter(interpolated.values.astype(float), win, _SCALE_SG_POLY)
+        # Clamp to a physically plausible range so SG ringing at boundaries
+        # cannot produce negative or absurdly large scale values.
+        med = float(np.median(valid.to_numpy(dtype=float)))
+        smoothed = np.clip(smoothed, med * 0.3, med * 3.0)
+        return pd.Series(smoothed, index=raw_scale.index)
+
+    return interpolated
+
+
+def _hip_shoulder_vertical_scale(raw_scale: pd.Series) -> pd.Series:
+    """
+    Identical pipeline to :func:`_robust_smooth_scale` – just re-uses it.
+
+    Kept as a named alias so call-sites are self-documenting.
+    """
+    return _robust_smooth_scale(raw_scale)
+
+
+# ---------------------------------------------------------------------------
+# Core correction
+# ---------------------------------------------------------------------------
 
 
 def apply_perspective_correction(
@@ -126,76 +280,117 @@ def apply_perspective_correction(
     reference_camera_yaw_deg: Optional[float],
     lateral_correction_factor: float,  # kept for API compat, ignored
     first_idx,
+    is_side_on: bool = False,
 ) -> pd.DataFrame:
     """
-    Convert the bar path to real-world centimetres using shoulder geometry.
+    Convert the bar path from pixel space to real-world centimetres.
 
-    Algorithm (per frame)
-    ---------------------
-    1. Measure shoulder width in pixel space (``Δx_px_shoulders``).
-    2. Measure shoulder width in world space (``Δ_m_shoulders``, metres).
-    3. Derive ``px_to_m = Δ_m_shoulders / Δx_px_shoulders``.
-    4. Convert the bar's pixel-space position offset from the first frame into
-       metres: ``Δbar_m = Δbar_px * px_to_m``.
-    5. Multiply by 100 to get centimetres → ``barbell_x_corrected_cm``.
-    6. Do the same for the vertical axis → ``barbell_y_corrected_cm``.
+    Algorithm
+    ---------
+    Two scale-derivation paths are tried in order:
 
-    Using the shoulder's *projected* pixel width (i.e. how wide the shoulders
-    appear on screen) automatically accounts for camera angle: a camera placed
-    at an angle foreshortens the shoulders in pixel space, so the ``px_to_m``
-    factor naturally compensates without any trigonometric blowup.
+    **Path A – shoulder-width scale** (used for angled-view shots):
 
-    Frames where the shoulder landmarks are not visible fall back to the median
-    scale factor computed over all valid frames.
+    1. For each frame compute:
+
+       - ``pixel_shoulder_width``  = horizontal pixel distance between the
+         two shoulder landmarks (normalised coords * frame_width).
+       - ``world_shoulder_width``  = Euclidean 3-D distance between the two
+         shoulder world landmarks (metres, from MediaPipe).
+       - ``raw_scale``  = world_shoulder_width / pixel_shoulder_width  (m/px).
+
+    **Path B – hip-to-shoulder vertical scale** (used for side-on shots, or
+    as a fallback when Path A yields too few valid frames):
+
+    1. For each frame compute the *vertical* pixel distance between the
+       shoulder midpoint and the hip midpoint, and compare it to the
+       world-space vertical distance between the same points.  Vertical
+       distances are not foreshortened by a horizontal-axis yaw rotation,
+       so this is reliable from any camera angle.
+
+    Whichever path runs, the resulting raw scale series is:
+
+    2. Cleaned with :func:`_robust_smooth_scale` (IQR rejection +
+       interpolation + SG smoothing) and stored in ``px_to_m_scale``.
+
+    3. Reduced to a **single stable scalar**:
+
+       - Preferred: median of the first half of the Pull phase (phase 0),
+         where the athlete is upright and landmarks are most reliable.
+       - Fallback: median of the entire smoothed scale series.
+
+       This single scalar is used for the whole lift.  Using a per-frame
+       rising scale on cumulative pixel displacement would inflate the path
+       during pull-under when the pixel shoulder width shrinks due to
+       shoulder rotation and partial occlusion.
+
+    4. Convert bar pixel displacements to centimetres::
+
+           barbell_x_corrected_cm = (barbell_x_smooth - origin_x_px) * scalar * 100
+           barbell_y_corrected_cm = (barbell_y_smooth - origin_y_px) * scalar * 100
+
+       The origin is the first valid barbell position.  Both axes use the
+       same scalar because yaw is a rotation about the vertical axis and
+       does not foreshorten the vertical axis.
+
+    5. Apply a final wide Savitzky-Golay pass on the cm-space coordinates
+       to absorb any residual jitter.
 
     Args:
-        df: DataFrame with barbell_x_smooth, barbell_y_smooth and unpacked
-            world landmark columns.
-        reference_camera_yaw_deg: Informational only; stored in the DataFrame
-            for annotation.
-        lateral_correction_factor: Legacy parameter, ignored.
-        first_idx: Index of the first frame (used as origin for displacement).
+        df: DataFrame with ``barbell_x_smooth``, ``barbell_y_smooth``, and
+            unpacked landmark / world-landmark columns.
+        reference_camera_yaw_deg: Informational; stored in the output.
+        lateral_correction_factor: Legacy parameter -- ignored.
+        first_idx: Index of the first frame (used as displacement origin).
+        is_side_on: When True, Path B (hip-shoulder vertical) is used
+            instead of Path A (shoulder width).
 
     Returns:
         DataFrame with additional columns:
             ``barbell_x_corrected_cm``, ``barbell_y_corrected_cm``,
             ``camera_yaw_deg``, ``lateral_correction_factor``,
-            ``px_to_m_scale`` (per-frame scale factor, metres per pixel).
+            ``px_to_m_scale``, ``scale_method``.
     """
-    # Initialise output columns
+    # Initialise output columns.
     df["barbell_x_corrected_cm"] = np.nan
     df["barbell_y_corrected_cm"] = np.nan
-    df["camera_yaw_deg"] = reference_camera_yaw_deg  # scalar broadcast
-    df["lateral_correction_factor"] = 1.0  # informational only now
+    df["camera_yaw_deg"] = reference_camera_yaw_deg
+    df["lateral_correction_factor"] = 1.0
     df["px_to_m_scale"] = np.nan
+    df["scale_method"] = "none"
 
     if "barbell_x_smooth" not in df.columns or "barbell_y_smooth" not in df.columns:
         print("  Warning: No barbell_x/y_smooth data. Skipping perspective correction.")
         return df
 
-    # ------------------------------------------------------------------
-    # Step 1 – Per-frame px→m scale from visible shoulder geometry
-    # ------------------------------------------------------------------
-    # We need both pixel-space shoulder positions and world-space shoulder width.
-    #
-    # Pixel-space shoulder separation uses the normalised landmark coords that
-    # were already unpacked into  {name}_x  (normalised 0-1) columns earlier
-    # in step_2_analyze_data.  We reconstruct pixels from those.
     frame_width = (
         int(df["frame_width"].iloc[0]) if "frame_width" in df.columns else 1920
     )
+    frame_height = (
+        int(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 1080
+    )
+
+    # ------------------------------------------------------------------
+    # Step 1 -- Per-frame raw px->m scale
+    #
+    # Path A: shoulder horizontal width  (reliable for angled-view shots)
+    # Path B: hip-to-shoulder vertical distance  (reliable for all angles,
+    #         and the only option when the camera is near-perpendicular and
+    #         the pixel shoulder width collapses to near-zero)
+    # ------------------------------------------------------------------
 
     def _shoulder_px_width(row) -> Optional[float]:
-        """Pixel-space horizontal distance between shoulders for one frame."""
+        """Horizontal pixel distance between shoulders for one frame."""
         lx = row.get("left_shoulder_x")
         rx = row.get("right_shoulder_x")
         if pd.isna(lx) or pd.isna(rx):
             return None
+        # Normalised coords (0-1) * frame_width -> pixels.
         px_sep = abs(float(rx) - float(lx)) * frame_width
-        return px_sep if px_sep > 2.0 else None  # ignore degenerate cases
+        return px_sep if px_sep > 2.0 else None  # ignore degenerate near-zero cases
 
     def _shoulder_world_width(row) -> Optional[float]:
-        """True 3-D shoulder width (metres) for one frame."""
+        """True 3-D Euclidean shoulder width in metres for one frame."""
         lx = row.get("left_shoulder_world_x")
         ly = row.get("left_shoulder_world_y")
         lz = row.get("left_shoulder_world_z")
@@ -209,39 +404,138 @@ def apply_perspective_correction(
         )
         return width_m if width_m >= 0.05 else None  # < 5 cm is noise
 
-    # Compute per-frame scale and store it
-    scale_values = []
-    for idx in df.index:
-        row = df.loc[idx]
-        px_w = _shoulder_px_width(row)
-        m_w = _shoulder_world_width(row)
-        if px_w is not None and m_w is not None:
-            scale = m_w / px_w  # metres per pixel
-            df.loc[idx, "px_to_m_scale"] = scale
-            scale_values.append(scale)
+    def _hip_shoulder_px_vert(row) -> Optional[float]:
+        """
+        Vertical pixel distance between the shoulder midpoint and the hip
+        midpoint for one frame.  Normalised Y coords * frame_height -> px.
+        """
+        ls_y = row.get("left_shoulder_y")
+        rs_y = row.get("right_shoulder_y")
+        lh_y = row.get("left_hip_y")
+        rh_y = row.get("right_hip_y")
+        if any(pd.isna(v) for v in [ls_y, rs_y, lh_y, rh_y]):
+            return None
+        sh_mid_y = (float(ls_y) + float(rs_y)) / 2.0 * frame_height
+        hip_mid_y = (float(lh_y) + float(rh_y)) / 2.0 * frame_height
+        dist = abs(sh_mid_y - hip_mid_y)
+        return dist if dist > 5.0 else None  # < 5 px is noise
 
-    if not scale_values:
+    def _hip_shoulder_world_vert(row) -> Optional[float]:
+        """
+        World-space vertical (Y-axis) distance between the shoulder midpoint
+        and the hip midpoint in metres.  MediaPipe world Y is vertical and is
+        not foreshortened by a horizontal yaw rotation, so this is reliable
+        from any camera angle.
+        """
+        ls_wy = row.get("left_shoulder_world_y")
+        rs_wy = row.get("right_shoulder_world_y")
+        lh_wy = row.get("left_hip_world_y")
+        rh_wy = row.get("right_hip_world_y")
+        if any(pd.isna(v) for v in [ls_wy, rs_wy, lh_wy, rh_wy]):
+            return None
+        sh_mid_wy = (float(ls_wy) + float(rs_wy)) / 2.0
+        hip_mid_wy = (float(lh_wy) + float(rh_wy)) / 2.0
+        dist = abs(sh_mid_wy - hip_mid_wy)
+        return dist if dist >= 0.05 else None  # < 5 cm is noise
+
+    # Build the raw scale series using whichever path is appropriate.
+    raw_scale_series = pd.Series(np.nan, index=df.index, dtype=float)
+    n_raw = 0
+    scale_method_label = "none"
+
+    if not is_side_on:
+        # Path A: shoulder horizontal width
+        for idx in df.index:
+            row = df.loc[idx]
+            px_w = _shoulder_px_width(row)
+            m_w = _shoulder_world_width(row)
+            if px_w is not None and m_w is not None:
+                raw_scale_series.loc[idx] = m_w / px_w  # metres per pixel
+                n_raw += 1
+        scale_method_label = "shoulder_width"
+
+    if is_side_on or n_raw < 10:
+        # Path B: hip-to-shoulder vertical distance.
+        # Used when explicitly side-on, or when Path A yielded too few frames.
+        if n_raw < 10 and not is_side_on:
+            print(
+                f"  Path A (shoulder width) only gave {n_raw} valid frames; "
+                "falling back to hip-shoulder vertical scale."
+            )
+        raw_scale_series_b = pd.Series(np.nan, index=df.index, dtype=float)
+        n_raw_b = 0
+        for idx in df.index:
+            row = df.loc[idx]
+            px_v = _hip_shoulder_px_vert(row)
+            m_v = _hip_shoulder_world_vert(row)
+            if px_v is not None and m_v is not None:
+                raw_scale_series_b.loc[idx] = m_v / px_v  # metres per pixel
+                n_raw_b += 1
+        if n_raw_b > 0:
+            raw_scale_series = raw_scale_series_b
+            n_raw = n_raw_b
+            scale_method_label = "hip_shoulder_vertical"
+        elif n_raw == 0:
+            print(
+                "  Warning: Could not compute px->m scale from either shoulder "
+                "width or hip-shoulder vertical distance. "
+                "Skipping perspective correction."
+            )
+            return df
+
+    df["scale_method"] = scale_method_label
+    print(f"  Scale method: {scale_method_label} ({n_raw} valid frames)")
+
+    # ------------------------------------------------------------------
+    # Step 2 -- Outlier rejection + temporal smoothing of the scale series
+    # ------------------------------------------------------------------
+    smooth_scale_series = _robust_smooth_scale(raw_scale_series)
+    df["px_to_m_scale"] = smooth_scale_series
+
+    # ------------------------------------------------------------------
+    # Step 3 -- Derive a single stable scalar
+    # ------------------------------------------------------------------
+    # The per-frame scale can drift during the pull-under (shoulder occlusion
+    # for Path A; minor posture changes for Path B).  Using a single scalar
+    # from a stable early window eliminates this artifact while preserving
+    # the true path shape -- only the axis units change from pixels to cm.
+    stable_scale_scalar: float
+
+    if "bar_phase" in df.columns:
+        pull_frames = df[df["bar_phase"] == 0]
+        if len(pull_frames) >= 4:
+            # First half of Pull: athlete is upright and landmarks are most visible.
+            first_half = pull_frames.iloc[: max(4, len(pull_frames) // 2)]
+            valid_pull_scale = smooth_scale_series.loc[first_half.index].dropna()
+            if len(valid_pull_scale) >= 2:
+                stable_scale_scalar = float(valid_pull_scale.median())
+                print(
+                    f"  Stable px->m scale from first-half Pull phase "
+                    f"({len(valid_pull_scale)} frames): "
+                    f"{stable_scale_scalar * 1000:.3f} mm/px"
+                )
+            else:
+                stable_scale_scalar = float(smooth_scale_series.median())
+                print(
+                    f"  Stable px->m scale (full median fallback): "
+                    f"{stable_scale_scalar * 1000:.3f} mm/px"
+                )
+        else:
+            stable_scale_scalar = float(smooth_scale_series.median())
+            print(
+                f"  Stable px->m scale (full median, insufficient Pull frames): "
+                f"{stable_scale_scalar * 1000:.3f} mm/px"
+            )
+    else:
+        stable_scale_scalar = float(smooth_scale_series.median())
         print(
-            "  Warning: Could not compute px→m scale from shoulders. "
-            "Skipping perspective correction."
+            f"  Stable px->m scale (full median, no phase data): "
+            f"{stable_scale_scalar * 1000:.3f} mm/px"
         )
-        return df
-
-    # Robust median scale (fall-back for frames with no visible shoulders)
-    median_scale_m_per_px = float(np.median(scale_values))
-    print(
-        f"  Shoulder-derived px→m scale: median = {median_scale_m_per_px * 1000:.3f} mm/px "
-        f"(from {len(scale_values)}/{len(df)} frames)"
-    )
-
-    # Fill missing scale values with the median
-    df["px_to_m_scale"] = df["px_to_m_scale"].fillna(median_scale_m_per_px)
 
     # ------------------------------------------------------------------
-    # Step 2 – Convert bar pixel positions to centimetres
+    # Step 4 -- Convert bar pixel positions to centimetres
     # ------------------------------------------------------------------
-    # Use the first valid barbell position as the spatial origin so that the
-    # corrected path always starts at (0 cm, 0 cm).
     valid_mask = df["barbell_x_smooth"].notna() & df["barbell_y_smooth"].notna()
     if not valid_mask.any():
         print("  Warning: No valid barbell positions. Skipping perspective correction.")
@@ -251,42 +545,49 @@ def apply_perspective_correction(
     origin_x_px = float(df.loc[origin_idx, "barbell_x_smooth"])
     origin_y_px = float(df.loc[origin_idx, "barbell_y_smooth"])
 
-    for idx in df.index:
-        if not valid_mask.loc[idx]:
-            continue
-        scale = float(df.loc[idx, "px_to_m_scale"])  # m/px (median if not computed)
+    delta_x_px = df.loc[valid_mask, "barbell_x_smooth"] - origin_x_px
+    delta_y_px = df.loc[valid_mask, "barbell_y_smooth"] - origin_y_px
 
-        delta_x_px = float(df.loc[idx, "barbell_x_smooth"]) - origin_x_px
-        delta_y_px = float(df.loc[idx, "barbell_y_smooth"]) - origin_y_px
-
-        df.loc[idx, "barbell_x_corrected_cm"] = delta_x_px * scale * 100.0  # → cm
-        df.loc[idx, "barbell_y_corrected_cm"] = delta_y_px * scale * 100.0  # → cm
+    df.loc[valid_mask, "barbell_x_corrected_cm"] = (
+        delta_x_px * stable_scale_scalar * 100.0
+    )
+    df.loc[valid_mask, "barbell_y_corrected_cm"] = (
+        delta_y_px * stable_scale_scalar * 100.0
+    )
 
     # ------------------------------------------------------------------
-    # Step 3 – Smooth the cm-space path with Savitzky-Golay
+    # Step 5 -- Final SG smoothing of the cm-space path
     # ------------------------------------------------------------------
-    # The per-frame px→m scale inherits MediaPipe landmark jitter, so the
-    # raw cm values are noisier than the already-smoothed pixel path.
-    # Apply the same SG filter that step 2 uses for barbell_x/y_smooth.
     for col in ("barbell_x_corrected_cm", "barbell_y_corrected_cm"):
-        series = df[col]
+        series = pd.Series(df[col])
         filled = series.interpolate(method="linear").bfill().ffill()
         n_valid = int(filled.notna().sum())
-        window = min(11, n_valid // 2 * 2 + 1)
-        if window >= 5 and n_valid >= window:
-            df[col] = savgol_filter(filled, window, 3)
+        win = _make_odd(min(_PATH_SG_WINDOW, n_valid))
+        win = max(win, _PATH_SG_POLY + 2)
+        if win % 2 == 0:
+            win -= 1
+        if n_valid >= win and win > _PATH_SG_POLY:
+            df[col] = savgol_filter(filled.values.astype(float), win, _PATH_SG_POLY)
         else:
             df[col] = filled
 
-    # Summary stats
-    x_range = df["barbell_x_corrected_cm"].max() - df["barbell_x_corrected_cm"].min()
-    y_range = df["barbell_y_corrected_cm"].max() - df["barbell_y_corrected_cm"].min()
+    x_range = float(df["barbell_x_corrected_cm"].max()) - float(
+        df["barbell_x_corrected_cm"].min()
+    )
+    y_range = float(df["barbell_y_corrected_cm"].max()) - float(
+        df["barbell_y_corrected_cm"].min()
+    )
     print(
         f"  Corrected bar path range: "
         f"horizontal = {x_range:.1f} cm, vertical = {y_range:.1f} cm"
     )
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def calculate_perspective_correction(
@@ -297,27 +598,45 @@ def calculate_perspective_correction(
 
     Steps
     -----
-    1. Unpack world landmarks into per-joint columns.
-    2. Estimate the informational camera yaw angle (first frame only).
-    3. Derive a per-frame px→m scale from shoulder geometry.
-    4. Convert the bar's pixel path into centimetres, stored in
-       ``barbell_x_corrected_cm`` / ``barbell_y_corrected_cm``.
+    1. Unpack world landmarks into per-joint ``_world_x/y/z`` columns.
+    2. Estimate the camera yaw angle from the first frame.
+    3. Choose scale method:
 
-    The resulting coordinates are in **centimetres** (both axes), so the path
-    graph has a physically meaningful and consistent scale.
+       - |yaw| >= 10 deg (angled view): use shoulder horizontal width as
+         the px->m ruler (Path A).
+       - |yaw| < 10 deg (side-on view): use hip-to-shoulder vertical
+         distance as the px->m ruler (Path B).  The shoulder pixel width
+         collapses to near-zero from a side-on camera, but the vertical
+         distance is not foreshortened by a horizontal yaw and is perfectly
+         reliable.
+
+    4. Derive a stable px->m scalar (outlier-rejected, smoothed, then
+       median of the early Pull phase).
+    5. Convert bar pixel displacement to centimetres with that scalar.
+
+    All lifts produce valid ``barbell_x/y_corrected_cm`` columns so that
+    the superimposed comparison graphs share a common unit (cm).
 
     Args:
-        df: DataFrame with 'world_landmarks' and barbell tracking columns.
-        frame_width: Video frame width in pixels (used for px conversion).
-        frame_height: Video frame height in pixels (used for px conversion).
+        df: DataFrame with ``world_landmarks`` and barbell tracking columns.
+        frame_width:  Video frame width  in pixels.
+        frame_height: Video frame height in pixels.
 
     Returns:
         DataFrame with additional columns:
-            - ``barbell_x_corrected_cm``: Lateral displacement in cm from start.
-            - ``barbell_y_corrected_cm``: Vertical displacement in cm from start.
-            - ``camera_yaw_deg``: Estimated camera yaw (informational).
-            - ``lateral_correction_factor``: Always 1.0 (legacy; no longer used).
-            - ``px_to_m_scale``: Per-frame metres-per-pixel scale factor.
+
+        ``barbell_x_corrected_cm``
+            Horizontal displacement in cm from the first frame.
+        ``barbell_y_corrected_cm``
+            Vertical displacement in cm from the first frame.
+        ``camera_yaw_deg``
+            Estimated camera yaw in degrees (informational).
+        ``lateral_correction_factor``
+            Always 1.0 (legacy placeholder, no longer used).
+        ``px_to_m_scale``
+            Per-frame smoothed metres-per-pixel scale factor.
+        ``scale_method``
+            String tag: ``"shoulder_width"`` or ``"hip_shoulder_vertical"``.
     """
     if "world_landmarks" not in df.columns:
         print(
@@ -329,27 +648,47 @@ def calculate_perspective_correction(
     # 1. Unpack world landmarks
     df = unpack_world_landmarks(df)
 
-    # 2. Informational camera yaw from first frame
+    # 2. Estimate camera yaw from first frame
     first_idx = df.index[0]
     reference_camera_yaw_deg, _ = calculate_reference_camera_angle(df, first_idx)
 
     if reference_camera_yaw_deg is not None:
-        print(
-            f"  Estimated camera yaw: {reference_camera_yaw_deg:.1f}° "
-            f"(informational only – correction uses shoulder geometry)"
-        )
+        print(f"  Estimated camera yaw: {reference_camera_yaw_deg:.1f} degrees")
     else:
         print(
             "  Note: Could not estimate camera yaw angle; "
-            "proceeding with shoulder-geometry scale only."
+            "skipping perspective correction."
+        )
+        df["camera_yaw_deg"] = np.nan
+        df["lateral_correction_factor"] = 1.0
+        df["px_to_m_scale"] = np.nan
+        df["barbell_x_corrected_cm"] = np.nan
+        df["barbell_y_corrected_cm"] = np.nan
+        df["scale_method"] = "none"
+        return df
+
+    # 3. Choose scale method based on camera yaw
+    is_side_on = abs(reference_camera_yaw_deg) < _SIDE_ANGLE_THRESHOLD_DEG
+    if is_side_on:
+        print(
+            f"  Camera yaw {reference_camera_yaw_deg:.1f} deg is within the "
+            f"+/-{_SIDE_ANGLE_THRESHOLD_DEG} deg side-angle threshold. "
+            "Using hip-to-shoulder vertical distance as scale reference "
+            "(shoulder pixel width is degenerate from a side-on view)."
+        )
+    else:
+        print(
+            f"  Camera yaw {reference_camera_yaw_deg:.1f} deg -- using "
+            "shoulder width as scale reference."
         )
 
-    # 3 & 4. Scale derivation + cm conversion
+    # 4 & 5. Scale derivation + cm conversion
     df = apply_perspective_correction(
         df,
         reference_camera_yaw_deg,
         1.0,  # legacy factor, ignored inside apply_perspective_correction
         first_idx,
+        is_side_on=is_side_on,
     )
 
     return df

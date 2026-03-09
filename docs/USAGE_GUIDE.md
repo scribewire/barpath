@@ -1,21 +1,24 @@
 # BARPATH Usage Guide
 
-<<<<<<< HEAD
-A comprehensive guide to using the BARPATH system for AI-powered weightlifting technique analysis. 
-=======
-A comprehensive guide to using barpath for weightlifting technique analysis.
->>>>>>> 27734bd (Upgrade to YOLO26 models, nano and small, also increase mediapipe)
+A comprehensive guide to using barpath for AI-powered weightlifting technique analysis.
 
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
+   - [Using the GUI](#using-the-gui-recommended)
+   - [Using the Command Line](#using-the-command-line)
+   - [Re-Running Analysis on an Existing Output Folder](#re-running-analysis-on-an-existing-output-folder)
 2. [How It Works](#how-it-works)
-3. [Batch Processing and Hardware Acceleration](#batch-processing-and-hardware-acceleration)
+   - [Perspective-Corrected Bar Path](#perspective-corrected-bar-path)
+   - [Superimposed Comparison Graphs](#superimposed-comparison-graphs)
+3. [Batch Processing, Reanalysis, and Hardware Acceleration](#batch-processing-reanalysis-and-hardware-acceleration)
 4. [Model Format Support](#model-format-support)
 5. [Output Files](#output-files)
 6. [Recording Best Practices](#recording-best-practices)
 7. [Tips for Best Results](#tips-for-best-results)
 8. [Troubleshooting](#troubleshooting)
+
+> **What's new:** Robust dual-path perspective correction (stable scalar, side-on fallback), superimposed batch comparison graphs with DTW similarity scores, and a "Reanalyze" mode that re-runs steps 2–5 on existing output folders without reprocessing the video.
 
 ---
 
@@ -32,10 +35,12 @@ python barpath/barpath_gui.py
 The GUI features a clean tabbed interface with four main sections:
 
 #### **📂 Files Tab**
-- Add one or more video files for analysis
-- Clear videos from the queue
+- Add one or more video files for analysis using **Add Videos**
+- Re-run analysis on existing output folders using **Add Folders (Reanalyze)** — skips the slow video decoding step and re-runs steps 2–5 from the saved `raw_data.pkl`
+- **Mutually exclusive modes**: once you add videos the "Add Folders" button is disabled, and vice versa — clear the list to switch modes
+- Clear the entire input list with **Clear**
 - Select output directory for results
-- View selected videos before running analysis
+- View and individually remove queued items before running analysis
 - Supports MP4, AVI, MOV, MKV, WebM formats
 
 #### **⚙️ Settings Tab**
@@ -45,6 +50,7 @@ The GUI features a clean tabbed interface with four main sections:
   - **clean**: Power clean analysis with Pull/Pull-under/Recovery phases, power calculation, and technique critique
   - **snatch**: Snatch analysis with Pull/Pull-under/Recovery phases, power calculation, and technique critique
   - **none**: Kinematics only, no lift-specific analysis or critique
+- **Disabled automatically** when "Reanalyze" (folders) mode is active — settings are not needed because the model and video are not re-run
 
 #### **▶️ Analyze Tab**
 - Press **Analyze** to start — the entire pipeline runs in a **background worker thread**
@@ -53,6 +59,8 @@ The GUI features a clean tabbed interface with four main sections:
 - Monitor progress with a real-time progress bar and log viewer
 - Logs are rendered as formatted HTML with color coding
 - Progress messages are delivered from the background thread to the UI via a thread-safe queue
+- In **Reanalyze mode**, the progress log shows steps 2–5 only (step 1 / data collection is skipped)
+- For batch runs (2+ videos or folders), a **batch post-processing** phase runs automatically after all items complete, generating the superimposed comparison graphs
 
 #### **📊 Analysis Tab**
 - View the generated lift analysis report automatically after completion
@@ -200,6 +208,25 @@ python barpath/pipeline/5_critique_lift.py \
   --lift_type clean
 ```
 
+### Re-Running Analysis on an Existing Output Folder
+
+If you have already run step 1 and want to re-run steps 2–5 (e.g. after a code update or to change the lift type), use `run_pipeline_from_folder` from `barpath_core.py`:
+
+```python
+from barpath.barpath_core import run_pipeline_from_folder
+
+for step, progress, msg in run_pipeline_from_folder(
+    output_folder="outputs/my_lift",
+    lift_type="clean",
+    encode_video=True,   # set False to skip video re-render
+):
+    print(step, msg)
+```
+
+The folder must contain a `raw_data.pkl` produced by step 1. The source video path is read automatically from the pickle's metadata — if the file no longer exists, video rendering is skipped with a warning rather than raising an error.
+
+In the **GUI**, this is exposed as the **Add Folders (Reanalyze)** button in the Files tab.
+
 ---
 
 ## How It Works
@@ -282,27 +309,59 @@ The lifter's **orientation relative to the camera** is calculated per-frame:
 
 **Use case**: Detect if lifter is angled away from camera (which can distort bar path analysis).
 
-### Angle-Compensated Bar Path
+### Perspective-Corrected Bar Path
 
-barpath produces a physically accurate bar path by correcting for camera angle using **MediaPipe world landmarks**:
+barpath converts the bar path from pixel space to real-world centimetres for any camera angle using **MediaPipe world landmarks**. The algorithm is designed to be numerically stable across the full range of camera placements — from directly side-on to moderately angled views.
 
-**How it works (per frame):**
-1. Measure the shoulder width in **pixel space** — how wide the shoulders appear on screen
-2. Measure the shoulder width in **world space** — the true 3D metric distance in metres from MediaPipe's world landmarks
-3. Derive a `px_to_m` scale factor: `world_width_m / pixel_width_px`
-4. Convert the bar's pixel displacement from its starting position into **centimetres** using that scale
-5. Apply a **Savitzky-Golay smooth** to the resulting cm-space path to suppress per-frame landmark jitter
+#### Scale Derivation: Two Paths
 
-**Why this is better than a trigonometric correction:**
-- The old `1/cos(yaw)` approach amplifies errors badly — a 60° angle doubles the horizontal scale; 70° nearly triples it
-- The shoulder-geometry method is numerically stable at any camera angle: a camera placed at an angle foreshortens the shoulders in pixel space, so the `px_to_m` ratio naturally compensates without any blowup
-- Missing shoulder frames fall back to the median scale computed over all valid frames
+**Path A — Shoulder-width scale** (used for angled-view shots, |yaw| ≥ 10°):
+1. For each frame, measure the *horizontal* pixel distance between the left and right shoulder landmarks (normalised coords × frame width → pixels).
+2. Measure the true 3-D Euclidean distance between the same shoulder world landmarks in metres (from MediaPipe world coordinates).
+3. Derive `raw_scale = world_shoulder_width_m / pixel_shoulder_width_px`.
 
-**Output:**
-- `barbell_x_corrected_cm` / `barbell_y_corrected_cm` — bar displacement in real-world centimetres from the starting position, stored in `final_analysis.csv`
-- `barbell_lateral_corrected_path.png` — angle-compensated bar path graph with both axes in centimetres, equal aspect ratio, and a camera yaw + scale annotation
-- `camera_yaw_deg` — estimated camera yaw in degrees (informational only; not used in the correction)
-- `px_to_m_scale` — per-frame metres-per-pixel scale factor
+**Path B — Hip-to-shoulder vertical scale** (used for side-on shots, |yaw| < 10°, or as a fallback if Path A yields fewer than 10 valid frames):
+1. For each frame, measure the *vertical* pixel distance between the shoulder midpoint and the hip midpoint.
+2. Measure the equivalent world-space vertical distance in metres.
+3. Derive `raw_scale = world_hip_shoulder_vert_m / pixel_hip_shoulder_vert_px`.
+
+> **Why two paths?** When the camera is near-perpendicular to the lifter, the two shoulders are almost coincident in the image — the pixel shoulder *width* collapses toward zero and the shoulder-based scale blows up. The vertical hip-to-shoulder distance is **not** foreshortened by a horizontal-axis yaw rotation and remains reliable at any camera angle. Using Path B ensures side-on shots produce valid cm outputs in the same units as angled-view shots.
+
+#### Scale Cleaning and Stabilisation
+
+Whichever path runs, the raw per-frame scale series is cleaned before use:
+
+1. **IQR outlier rejection** (Tukey fence: Q1 − 1.5·IQR, Q3 + 1.5·IQR) — frames with anomalous scale values (e.g. shoulder occlusion by the barbell) are set to NaN.
+2. **Linear interpolation** across the resulting gaps; bfill/ffill at boundaries so the series is always complete.
+3. **Savitzky-Golay smoothing** with a 31-frame window (cubic polynomial) to suppress high-frequency MediaPipe landmark jitter.
+
+#### Single Stable Scalar
+
+After cleaning, the series is reduced to **one scalar** for the entire lift:
+- **Preferred**: median of the smoothed scale over the first half of the Pull phase (frames where the athlete is most upright and landmarks most reliable).
+- **Fallback**: median of the full smoothed series.
+
+This single scalar is applied to pixel displacements for the whole lift. Using a per-frame rising scale on cumulative pixel displacement would inflate the path during the pull-under (when the pixel shoulder width shrinks due to shoulder rotation), producing crossing or exaggerated lateral traces. The single-scalar approach eliminates this entirely.
+
+#### Conversion and Final Smoothing
+
+```
+barbell_x_corrected_cm = (barbell_x_smooth − origin_x_px) × stable_scalar × 100
+barbell_y_corrected_cm = (barbell_y_smooth − origin_y_px) × stable_scalar × 100
+```
+
+The origin is the first valid barbell position. Both axes use the same scalar because yaw is a rotation about the vertical axis and does not foreshorten the vertical axis. A final Savitzky-Golay pass (25-frame window, cubic) is applied to the cm-space path to absorb residual jitter.
+
+**Output columns:**
+- `barbell_x_corrected_cm` / `barbell_y_corrected_cm` — bar displacement in real-world centimetres from the starting position
+- `camera_yaw_deg` — estimated camera yaw in degrees (informational only)
+- `px_to_m_scale` — per-frame smoothed metres-per-pixel scale factor (stored for diagnostics)
+- `scale_method` — which scale path was used: `"shoulder_width"` (Path A) or `"hip_shoulder_vertical"` (Path B)
+
+**Output graph:**
+- `barbell_lateral_corrected_path.png` — perspective-corrected bar path with both axes in centimetres, equal aspect ratio, annotated with camera yaw and mm/px scale
+
+> **Note:** `barbell_x/y_corrected_cm` and `barbell_lateral_corrected_path.png` are generated for all lift types whenever MediaPipe world landmarks are available — including side-on shots and `lift_type=none`.
 
 ### Joint Smoothing and Kinematic Calculations
 
@@ -396,7 +455,7 @@ barpath analyzes lift technique using **rule-based checks**:
 
 ---
 
-## Batch Processing and Hardware Acceleration
+## Batch Processing, Reanalysis, and Hardware Acceleration
 
 ### Batch Processing
 
@@ -415,18 +474,61 @@ python barpath/barpath_cli.py \
 - A subdirectory is created for each video in `output_dir`:
   ```
   batch_results/
-  ├── video1/
+  ├── lift_1/
   │   ├── raw_data.pkl
   │   ├── final_analysis.csv
   │   ├── graphs/
   │   ├── output.mp4
   │   └── analysis.md
-  ├── video2/
+  ├── lift_2/
   │   ├── raw_data.pkl
   │   ...
+  ├── superimposed_bar_paths_compensated.png   ← batch post-processing
+  └── superimposed_bar_paths_smoothed.png      ← batch post-processing
   ```
 - Progress is shown for each video with frame count
-- Useful for analyzing workout sessions or comparing multiple athletes
+- After all videos complete, **batch post-processing** automatically generates superimposed comparison graphs (see [Superimposed Comparison Graphs](#superimposed-comparison-graphs) below)
+- Useful for analyzing workout sessions or comparing multiple attempts of the same lift
+
+### Reanalyze Existing Output Folders
+
+If you have already run barpath on a video and want to re-run steps 2–5 (e.g. after a code update, to change `lift_type`, or to regenerate graphs), you can reanalyze without re-processing the video:
+
+**GUI:**
+1. Open the **Files Tab**
+2. Click **Add Folders (Reanalyze)** and select one or more existing output folders (each must contain `raw_data.pkl`)
+3. The Settings tab is automatically disabled — model and video settings are not needed
+4. Click **Analyze** — steps 2–5 run on each folder; video is re-rendered if the original source path is still accessible
+
+**Notes:**
+- The source video path is stored inside `raw_data.pkl` when step 1 runs; if the file has moved or been deleted, the video render step is skipped with a warning rather than an error
+- You can add multiple folders and compare them using the batch post-processing superimposed graphs
+- Reanalyze mode and Videos mode are mutually exclusive — clear the input list to switch between them
+
+### Superimposed Comparison Graphs
+
+After processing 2 or more videos (or reanalyzing 2 or more folders), barpath automatically generates two superimposed comparison graphs in the top-level output directory:
+
+| File | Description |
+|------|-------------|
+| `superimposed_bar_paths_compensated.png` | All lifts overlaid in real-world cm — angled-view lifts use shoulder-width scale (Path A); side-on lifts use hip-shoulder vertical scale (Path B) |
+| `superimposed_bar_paths_smoothed.png` | All lifts overlaid in pixel space using smoothed (stabilised) pixel traces; always available regardless of perspective correction |
+
+**How the overlay works:**
+1. Each lift's path is **origin-normalised** at its pull-under start point (the first frame where phase transitions from Pull → Pull-under), so all paths share a common reference origin at (0, 0).
+2. Non-reference lifts are **uniformly scaled** — a single scale factor is found by least-squares minimisation of the distance between matching phase-transition markers (e.g. Pull→Pull-under and Pull-under→Recovery points). If no matching markers exist, arc-length ratio is used as a fallback. Both x and y are multiplied by the same factor (no distortion of the path shape).
+3. A **DTW (Dynamic Time Warping) similarity percentage** is computed for each non-reference lift vs the reference and shown in the legend:
+
+   | Score | Interpretation |
+   |-------|---------------|
+   | ~95–100% | Near-identical paths (e.g. same lift from two camera angles) |
+   | ~75–90% | Similar technique with minor style differences |
+   | ~55–75% | Noticeable shape differences |
+   | < 55% | Substantially different paths |
+
+   The percentage is calculated as `100 × exp(−5 × d_norm)` where `d_norm` is the mean per-step DTW deviation normalised by the bounding-box diagonal of the reference path. Scores are computed on the *scaled* paths so the comparison reflects shape similarity rather than absolute size.
+
+**Example legend entry:** `Lift 2  [95.1% match]`
 
 ### Hardware Acceleration with OpenVINO
 
@@ -502,10 +604,19 @@ outputs/
 |-------|-------------|------|
 | `barbell_xy_stable_path.png` | Smoothed, stabilized bar path (shake-corrected, pixel units) | X px (lateral) vs Y px (vertical) |
 | `barbell_xy_stable_path_unsmoothed.png` | Raw stabilized bar path before Savitzky-Golay smoothing | X px (lateral) vs Y px (vertical) |
-| `barbell_lateral_corrected_path.png` | **Angle-compensated bar path** — both axes in real-world centimetres, equal aspect ratio, SG-smoothed after conversion; annotated with camera yaw and mm/px scale | X cm (lateral displacement) vs Y cm (vertical displacement) |
+| `barbell_lateral_corrected_path.png` | **Perspective-corrected bar path** — both axes in real-world centimetres, equal aspect ratio, SG-smoothed after conversion; annotated with camera yaw and mm/px scale; uses Path A or Path B depending on camera angle | X cm (lateral displacement) vs Y cm (vertical displacement) |
 | `barbell_velocity.png` | Vertical bar velocity over time | Time (s) vs Velocity (px/s) — colored by phase |
 | `barbell_acceleration.png` | Vertical bar acceleration over time | Time (s) vs Acceleration (px/s²) — colored by phase |
 | `barbell_specific_power.png` | Specific power (proxy) over time | Time (s) vs Specific power (px²/s³) |
+
+### Superimposed Graphs (in top-level batch output directory)
+
+These are generated automatically after batch processing 2 or more videos (or reanalyzing 2 or more folders):
+
+| Graph | Description | Axes |
+|-------|-------------|------|
+| `superimposed_bar_paths_compensated.png` | All lifts overlaid — real-world cm (Path A or B per lift); non-reference lifts uniformly scaled; DTW % in legend | cm (lateral) vs cm (vertical) |
+| `superimposed_bar_paths_smoothed.png` | All lifts overlaid — smoothed pixel traces; non-reference lifts uniformly scaled; DTW % in legend | px (lateral) vs px (vertical) |
 
 **All path graphs:**
 - Include generous horizontal padding (≥ 30% of the vertical range on each side) so the legend and axis labels are never crowded
@@ -579,8 +690,9 @@ The CSV contains per-frame kinematic data with the following columns:
 |---|---|---|---|
 | `total_shake_x` | Cumulative camera shake correction (horizontal) | pixels | Derived from Lucas-Kanade optical flow |
 | `total_shake_y` | Cumulative camera shake correction (vertical) | pixels | Derived from Lucas-Kanade optical flow |
-| `camera_yaw_deg` | Estimated camera yaw angle | degrees | Informational only — not used in the correction calculation |
-| `px_to_m_scale` | Per-frame pixel→metre scale factor | m/px | Derived from shoulder pixel width vs world-space width; median used for frames with missing landmarks |
+| `camera_yaw_deg` | Estimated camera yaw angle | degrees | Informational only — determines which scale path (A or B) is chosen |
+| `px_to_m_scale` | Per-frame smoothed pixel→metre scale factor | m/px | IQR-cleaned, interpolated, and SG-smoothed; stored for diagnostics; a single stable scalar derived from this is used for the actual cm conversion |
+| `scale_method` | Which scale derivation path was used | string | `"shoulder_width"` (Path A, angled view) or `"hip_shoulder_vertical"` (Path B, side-on view) |
 | `lateral_correction_factor` | Legacy field | — | Always 1.0; retained for backwards compatibility |
 
 ---
@@ -655,6 +767,7 @@ To get the best results from barpath analysis, follow these recording guidelines
    - Open in Excel or use pandas in a Jupyter notebook
    - Look for gaps in joint positions (high NaN counts = visibility issues)
    - Check if phase labels (0, 1, 2) appear throughout the lift
+   - Check the `scale_method` column: `shoulder_width` for angled views, `hip_shoulder_vertical` for side-on views
 
 4. **Use hardware acceleration for batch jobs** — OpenVINO or TensorRT can 2–5× speedup
    ```bash
@@ -671,6 +784,17 @@ To get the best results from barpath analysis, follow these recording guidelines
    ```bash
    python barpath/barpath_cli.py --input_video attempt1.mp4 attempt2.mp4 attempt3.mp4 --model models/yolo26n.pt --lift_type clean --no-video
    ```
+   The superimposed graphs are generated automatically. Look for DTW similarity scores close to 100% across attempts — high variance in technique shows as lower scores.
+
+7. **Re-run analysis after code updates** — Use "Add Folders (Reanalyze)" in the GUI (or `run_pipeline_from_folder` in code) to re-run steps 2–5 on any previously processed folder without repeating the slow step 1 video decoding. This is especially useful when:
+   - You want to change the `lift_type` without re-processing the video
+   - You have updated the analysis or graphing code and want to refresh outputs
+   - You want to regenerate graphs or the critique report with new settings
+
+8. **Side-on vs angled camera** — barpath handles both automatically using its dual-path scale:
+   - Side-on shots (|yaw| < 10°): `scale_method = hip_shoulder_vertical`
+   - Angled shots (|yaw| ≥ 10°): `scale_method = shoulder_width`
+   - Both produce `barbell_x/y_corrected_cm` in the same physical units, so they can be directly overlaid in the superimposed comparison graphs
 
 ---
 
@@ -707,6 +831,7 @@ To get the best results from barpath analysis, follow these recording guidelines
 - Try `--no-video` to skip the expensive video rendering step
 - Use hardware acceleration: install OpenVINO (Intel) or TensorRT (NVIDIA)
 - Process smaller videos first to validate the pipeline
+- If you only changed analysis code (not detection), use **Reanalyze mode** to skip step 1 entirely — this re-runs only steps 2–5 on the saved `raw_data.pkl`
 
 **Video rendering takes forever (Step 4)**
 - This is normal for long videos (several minutes)
@@ -747,12 +872,11 @@ pip install onnxruntime
 
 ### FFmpeg Errors
 
-<<<<<<< HEAD
 **"Could not initialize video writer"**
 - Check output directory exists and is writable
 - Verify sufficient disk space
 - Try a different output format (change file extension)
-=======
+
 **"FFmpeg: Unknown encoder 'aac'"**
 - FFmpeg variant may not include AAC encoder; install full version
 - Ubuntu: `sudo apt install ffmpeg libavcodec-extra`
@@ -767,7 +891,27 @@ pip install onnxruntime
 - Try using a different codec or container format
 - Edit `4_render_video.py` to adjust codec/quality settings
 
+### Perspective Correction Issues
+
+**`barbell_lateral_corrected_path.png` is missing**
+- Requires MediaPipe world landmarks — check that pose estimation is running and returning data
+- Inspect `final_analysis.csv`: if `px_to_m_scale` is all NaN, MediaPipe could not detect the lifter reliably
+- Try a higher-quality model (`--model models/yolo26s.pt`) or better lighting / contrast
+
+**Corrected path looks distorted or exaggerated**
+- Check `scale_method` in the CSV. If it reads `shoulder_width` but you recorded a near-side-on shot, the shoulder pixel width may be collapsing — increase camera angle to > 10° from side-on or record at a more angled position
+- Check that the Pull phase was detected (phase label 0 must appear in `bar_phase`) — the stable scalar is derived from early Pull frames; if no Pull phase is detected it falls back to the full-series median
+
+**Superimposed graphs are not generated**
+- Superimposed graphs require at least 2 lifts (videos or folders) in the same batch run
+- Each lift must have a valid `final_analysis.csv` in its output folder
+- Check the Analyze tab log for "Skipping superimposed graphs: fewer than 2 lifts with valid data"
+
+**DTW similarity score is unexpectedly low**
+- The score is normalised by the reference path's bounding-box diagonal; a very small reference path makes the score sensitive to small absolute differences
+- Confirm both lifts use the same scale units in the superimposed graph (both should be in cm if perspective correction succeeded for both)
+- Large differences in recording angle or athlete body position between takes can reduce similarity even for technically consistent lifting
+
 ---
 
 **For more details, see [README.md](../README.md) or file an issue on GitHub.**
->>>>>>> 27734bd (Upgrade to YOLO26 models, nano and small, also increase mediapipe)

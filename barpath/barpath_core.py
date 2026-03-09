@@ -9,6 +9,11 @@ This module orchestrates the 5-step barpath analysis pipeline:
 5. Provide technique critique
 
 The runner yields progress updates that can be consumed by CLI or GUI frontends.
+
+``run_pipeline_from_folder`` is a lighter variant that skips step 1 (data
+collection) and re-runs steps 2-5 from an existing output folder that
+already contains a ``raw_data.pkl``.  This is useful for re-analysing
+previously processed videos after changing analysis settings or code.
 """
 
 # Import step functions - using importlib for dynamic loading
@@ -54,12 +59,289 @@ step_2_analyze_data = _import_step_function(
 step_3_generate_graphs = _import_step_function(
     pipeline_dir / "3_generate_graphs.py", "step_3_generate_graphs"
 )
+plot_superimposed_paths_compensated = _import_step_function(
+    pipeline_dir / "3_generate_graphs.py", "plot_superimposed_paths_compensated"
+)
+plot_superimposed_paths_smoothed = _import_step_function(
+    pipeline_dir / "3_generate_graphs.py", "plot_superimposed_paths_smoothed"
+)
 step_4_render_video = _import_step_function(
     pipeline_dir / "4_render_video.py", "step_4_render_video"
 )
 critique_lift = _import_step_function(
     pipeline_dir / "5_critique_lift.py", "critique_lift"
 )
+
+
+def run_pipeline_from_folder(
+    output_folder,
+    lift_type="none",
+    encode_video=True,
+    technique_analysis=True,
+    raw_data_path="raw_data.pkl",
+    analysis_csv_path="final_analysis.csv",
+    cancel_event=None,
+):
+    """
+    Re-run steps 2-5 of the barpath pipeline from an existing output folder.
+
+    The folder must contain a ``raw_data.pkl`` produced by step 1.  The
+    original video file is only required when ``encode_video=True``; its
+    path is read from the pickle's metadata (``source_video`` key).  If
+    the key is absent *or* the file no longer exists the video-render step
+    is automatically skipped with a warning rather than raising an error.
+
+    Yields progress updates as ``(step_name, progress_value, message)``
+    tuples, identical to :func:`run_pipeline`.
+
+    Args:
+        output_folder (str | Path): Existing output directory that contains
+            ``raw_data.pkl`` (and optionally a previous ``final_analysis.csv``
+            and ``output.mp4``).
+        lift_type (str): Lift type passed to the critique step.
+        encode_video (bool): Whether to re-render the output video.
+        technique_analysis (bool): Whether to re-run the technique critique.
+        raw_data_path (str): Filename of the raw-data pickle inside
+            ``output_folder``.  Defaults to ``"raw_data.pkl"``.
+        analysis_csv_path (str): Filename for the re-written analysis CSV.
+            Defaults to ``"final_analysis.csv"``.
+        cancel_event (threading.Event, optional): Set this to abort.
+
+    Yields:
+        tuple: ``(step_name, progress_value, message)``
+    """
+
+    def check_cancel():
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("Pipeline cancelled by user")
+
+    output_folder = Path(output_folder)
+
+    # Resolve pickle and CSV paths inside the folder
+    pkl_path = (
+        output_folder / raw_data_path
+        if not Path(raw_data_path).is_absolute()
+        else Path(raw_data_path)
+    )
+    csv_path = (
+        output_folder / analysis_csv_path
+        if not Path(analysis_csv_path).is_absolute()
+        else Path(analysis_csv_path)
+    )
+
+    if not pkl_path.exists():
+        raise FileNotFoundError(
+            f"raw_data.pkl not found in '{output_folder}'. "
+            "This folder has not been processed by step 1 yet."
+        )
+
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    # --- STEP 2: Analyze Data ---
+    check_cancel()
+    yield ("step2", None, "Loading raw data...")
+
+    with open(pkl_path, "rb") as f:
+        input_data = pickle.load(f)
+
+    # Allow the caller to override the lift type stored in the pickle
+    if lift_type != "none":
+        input_data.setdefault("metadata", {})["lift_type"] = lift_type
+
+    check_cancel()
+    yield ("step2", None, "Starting data analysis...")
+    step_2_analyze_data(input_data, str(csv_path))
+    del input_data
+
+    yield ("step2", None, f"Analysis complete. Saved to {csv_path}")
+
+    # --- STEP 3: Generate Graphs ---
+    check_cancel()
+    yield ("step3", None, "Generating kinematic graphs...")
+
+    df = pd.read_csv(str(csv_path))
+    check_cancel()
+    step_3_generate_graphs(df, str(output_folder))
+    del df
+
+    yield ("step3", None, f"Graphs generated in {output_folder}/")
+
+    # --- STEP 4: Render Video ---
+    check_cancel()
+    if encode_video:
+        # Try to find the original source video path from the pickle metadata
+        with open(pkl_path, "rb") as f:
+            _pkl_meta = pickle.load(f).get("metadata", {})
+        source_video = _pkl_meta.get("source_video") or _pkl_meta.get("input_video")
+
+        if source_video and os.path.exists(source_video):
+            df = pd.read_csv(str(csv_path))
+            if "frame" in df.columns:
+                df = df.set_index("frame")
+
+            output_video_path = output_folder / "output.mp4"
+            pose_overlay_enabled = lift_type != "none"
+
+            for update in step_4_render_video(
+                df, source_video, str(output_video_path), draw_pose=pose_overlay_enabled
+            ):
+                check_cancel()
+                yield update
+
+            del df
+        else:
+            if source_video:
+                yield (
+                    "step4",
+                    None,
+                    f"Video rendering skipped — source video not found: {source_video}",
+                )
+            else:
+                yield (
+                    "step4",
+                    None,
+                    "Video rendering skipped — source video path not stored in raw_data.pkl",
+                )
+    else:
+        yield ("step4", None, "Video rendering skipped")
+
+    # --- STEP 5: Critique Lift ---
+    check_cancel()
+    if technique_analysis and lift_type != "none":
+        yield ("step5", None, f"Analyzing {lift_type} technique...")
+
+        df = pd.read_csv(str(csv_path))
+        if "frame" in df.columns:
+            df = df.set_index("frame")
+
+        check_cancel()
+        critiques = critique_lift(df, lift_type, str(output_folder))
+
+        if not critiques:
+            message = "Analysis complete (No phases detected?)"
+        else:
+            message = (
+                f"Analysis complete. Report saved to "
+                f"{os.path.join(str(output_folder), 'analysis.md')}"
+            )
+
+        yield ("step5", None, message)
+    else:
+        yield ("step5", None, "Technique analysis skipped")
+
+    yield ("complete", 1.0, "Pipeline complete!")
+
+
+def run_batch_postprocess(
+    video_output_dirs,
+    video_labels,
+    batch_output_dir,
+    use_filenames=False,
+    analysis_csv_name="final_analysis.csv",
+    cancel_event=None,
+):
+    """
+    Run post-processing steps that operate across all videos in a batch.
+
+    Currently this generates the superimposed bar-path graph.  Additional
+    cross-video aggregations can be added here in future.
+
+    Yields progress updates as (step_name, progress_value, message) tuples.
+
+    Parameters
+    ----------
+    video_output_dirs : list of str or Path
+        Per-video output directories (one per processed video), in order.
+    video_labels : list of str
+        Human-readable label for each video (filename stem or similar).
+        Used when use_filenames=True.
+    batch_output_dir : str or Path
+        Top-level output directory where the combined graph is saved.
+    use_filenames : bool
+        Passed through to plot_superimposed_paths.
+    analysis_csv_name : str
+        Name of the analysis CSV file inside each per-video output dir.
+    cancel_event : threading.Event, optional
+        Checked before each step; raises InterruptedError if set.
+    """
+
+    def check_cancel():
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("Pipeline cancelled by user")
+
+    yield ("batch", None, "Generating superimposed bar-path graphs...")
+
+    check_cancel()
+
+    # Load each per-video analysis CSV
+    video_data_list = []
+    for label, video_dir in zip(video_labels, video_output_dirs):
+        csv_path = Path(video_dir) / analysis_csv_name
+        if not csv_path.exists():
+            print(f"  Warning: no analysis CSV found at {csv_path} — skipping lift.")
+            continue
+        try:
+            df = pd.read_csv(csv_path)
+            video_data_list.append((label, df))
+        except Exception as exc:
+            print(f"  Warning: could not load {csv_path}: {exc} — skipping lift.")
+
+    if len(video_data_list) < 2:
+        yield (
+            "batch",
+            None,
+            "Skipping superimposed graphs: fewer than 2 lifts with valid data.",
+        )
+        return
+
+    check_cancel()
+
+    os.makedirs(batch_output_dir, exist_ok=True)
+
+    # --- Angle-compensated superimposed graph ---
+    # Uses corrected cm traces for lifts with |yaw| >= 10°, smoothed px for
+    # side-on lifts or those without correction data.
+    try:
+        plot_superimposed_paths_compensated(
+            video_data_list,
+            output_dir=str(batch_output_dir),
+            use_filenames=use_filenames,
+        )
+        yield (
+            "batch",
+            None,
+            f"Compensated superimposed graph saved to "
+            f"{batch_output_dir}/superimposed_bar_paths_compensated.png",
+        )
+    except Exception as exc:
+        yield (
+            "batch",
+            None,
+            f"Warning: could not generate compensated superimposed graph: {exc}",
+        )
+
+    check_cancel()
+
+    # --- Smoothed-only superimposed graph ---
+    # Always uses the smoothed pixel-space traces, no angle compensation.
+    try:
+        plot_superimposed_paths_smoothed(
+            video_data_list,
+            output_dir=str(batch_output_dir),
+            use_filenames=use_filenames,
+        )
+        yield (
+            "batch",
+            None,
+            f"Smoothed superimposed graph saved to "
+            f"{batch_output_dir}/superimposed_bar_paths_smoothed.png",
+        )
+    except Exception as exc:
+        yield (
+            "batch",
+            None,
+            f"Warning: could not generate smoothed superimposed graph: {exc}",
+        )
 
 
 def run_pipeline(
@@ -131,6 +413,10 @@ def run_pipeline(
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
+    # Store the source video path in the pickle metadata so
+    # run_pipeline_from_folder can locate it for re-rendering.
+    _source_video_abs = str(Path(input_video).resolve())
+
     # Update paths to be inside output_dir if they are defaults
     if raw_data_path == "raw_data.pkl":
         raw_data_path = os.path.join(output_dir, "raw_data.pkl")
@@ -154,6 +440,18 @@ def run_pipeline(
     ):
         check_cancel()
         yield update
+
+    # Patch the pickle to include the absolute source video path so that
+    # run_pipeline_from_folder can find the video for re-rendering later.
+    try:
+        with open(raw_data_path, "rb") as _f:
+            _pkl = pickle.load(_f)
+        _pkl.setdefault("metadata", {})["source_video"] = _source_video_abs
+        with open(raw_data_path, "wb") as _f:
+            pickle.dump(_pkl, _f)
+        del _pkl
+    except Exception as _e:
+        print(f"  Warning: could not patch source_video into pickle: {_e}")
 
     # --- STEP 2: Analyze Data ---
     check_cancel()

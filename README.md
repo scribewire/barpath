@@ -31,10 +31,15 @@
   - Tracks 12 joints: shoulders, hips, knees, ankles, elbows, wrists
   - Outputs both normalized (0–1) and world coordinates
 - **🎯 Camera Shake Stabilization**: Lucas-Kanade optical flow on background features for perfectly stabilized bar path tracking
-- **📐 Angle-Compensated Bar Path**: Automatically corrects for camera angle using MediaPipe world landmarks
-  - Derives a per-frame pixel→metre scale from the 3D shoulder geometry (no trigonometric blowup)
-  - Both axes of the corrected graph are in real-world **centimetres** — physically meaningful and correctly proportioned
-  - Smoothed with Savitzky-Golay after conversion to suppress MediaPipe landmark jitter
+- **📐 Robust Perspective-Corrected Bar Path**: Converts the bar path from pixel space to real-world centimetres for any camera angle
+  - **Dual-path scale derivation**: shoulder-width scale (Path A) for angled views; hip-to-shoulder vertical scale (Path B) for side-on shots — both produce valid cm outputs
+  - **Stable single scalar**: outlier-rejected, SG-smoothed per-frame scale is reduced to one stable scalar (median of the early Pull phase) before converting pixel displacements — eliminates pull-under inflation artifacts
+  - **IQR outlier rejection + interpolation + Savitzky-Golay smoothing** applied to the raw scale series to guard against MediaPipe landmark jitter and shoulder occlusion spikes
+  - Both axes of the corrected graph are in real-world **centimetres** — physically meaningful and correctly proportioned at any camera angle
+- **🔁 Reanalyze Existing Outputs**: Re-run analysis steps 2–5 on folders already processed by step 1
+  - Skips the slow video decoding and detection step — reuse existing `raw_data.pkl`
+  - Video re-render is attempted automatically if the original source video path is still valid
+  - Available as a dedicated **"Add Folders (Reanalyze)"** button in the GUI
 - **⚙️ Hardware-Accelerated Inference**: CPU-optimized inference with optional acceleration:
   - ONNX Runtime for cross-platform CPU optimization
   - OpenVINO support for Intel CPUs
@@ -43,7 +48,7 @@
   - **All tracked MediaPipe joints are smoothed** (Savitzky-Golay filter, 11-frame window, cubic polynomial)
   - **Per-frame lifter angle tracking**: the lifter's camera-relative orientation is smoothed and recorded for every frame
   - Smoothed bar position, velocity, acceleration, and specific power graphs
-  - Angle-compensated bar path graph in real-world centimetres (both axes), smoothed after conversion
+  - Perspective-corrected bar path graph in real-world centimetres (both axes), smoothed after conversion
   - Frame-by-frame joint angle measurements (knees, elbows) — all smoothed
   - Data automatically truncated at peak bar height
   - All path graphs include generous horizontal padding for legend legibility
@@ -53,6 +58,12 @@
   - **Recovery** (Green): Catch → barbell reaches maximum height
   - Automatic phase detection using MediaPipe landmarks and kinematics
   - Color-coded in all output visualizations
+- **📈 Superimposed Batch Comparison Graphs**: Compare multiple lifts on a single plot after batch processing
+  - **Angle-compensated superimposed graph**: all lifts plotted in real-world cm (side-on lifts use vertical scale; angled lifts use shoulder-width scale)
+  - **Smoothed pixel-space superimposed graph**: always-available fallback in pixel units
+  - Non-reference lifts are **uniformly scaled** to align phase-transition markers with the reference lift for visual comparability
+  - **DTW similarity percentage** computed for every non-reference lift vs the reference and displayed in the legend (e.g. `Lift 2  [95.1% match]`)
+  - All paths are origin-normalised at the pull-under start point before overlay
 - **🎥 Annotated Video Output**:
   - Skeleton overlay with stabilized bar path visualization
   - Color-coded bar path phases (Pull=red, Pull-under=orange, Recovery=green)
@@ -182,8 +193,8 @@ python barpath/barpath_gui.py
 ```
 
 Then:
-1. **Files Tab** → Select video(s) and output directory
-2. **Settings Tab** → Choose YOLO26 model and lift type (clean, snatch, or none)
+1. **Files Tab** → Add video(s) with **Add Videos**, or re-run existing outputs with **Add Folders (Reanalyze)**
+2. **Settings Tab** → Choose YOLO26 model and lift type (clean, snatch, or none) — disabled automatically in Reanalyze mode
 3. **Analyze Tab** → Click **Analyze** — the pipeline runs in a background thread; the GUI stays fully responsive
 4. **Analysis Tab** → View the generated report with Pull / Pull-under / Recovery phase timing and graphs
 
@@ -220,16 +231,16 @@ For comprehensive usage instructions, see [**USAGE_GUIDE.md**](docs/USAGE_GUIDE.
 barpath/
 ├── barpath_gui.py              # Toga GUI — non-blocking background worker + progress queue
 ├── barpath_cli.py              # Rich CLI with progress bars and batch support
-├── barpath_core.py             # Pipeline orchestrator (generator-based progress)
+├── barpath_core.py             # Pipeline orchestrator (run_pipeline, run_pipeline_from_folder, run_batch_postprocess)
 ├── hardware_detection.py        # Hardware profiling and acceleration selection
 └── pipeline/
     ├── 1_collect_data.py       # YOLO26 + MediaPipe + producer-consumer I/O
     ├── 2_analyze_data.py       # Joint smoothing, lifter angle, 3-phase detection, CSV
-    ├── 3_generate_graphs.py    # Kinematic graphs with 3-phase color coding
+    ├── 3_generate_graphs.py    # Kinematic graphs + superimposed comparison graphs
     ├── 4_render_video.py       # Annotated video rendering
     ├── 5_critique_lift.py      # Rule-based technique analysis + Markdown report
     ├── step1_helpers/          # Optical flow stabilization, landmark extraction
-    ├── step2_helpers/          # Perspective correction, angle calculations
+    ├── step2_helpers/          # Perspective correction (dual-path, stable scalar, IQR cleaning)
     ├── step5_helpers/          # Phase detection, lift-specific fault checks
     └── utils.py                # Shared constants and utilities
 ```
@@ -238,9 +249,9 @@ barpath/
 
 | Step | Module | Description | Key Features |
 |------|--------|-------------|-------------|
-| **1. Collect Data** | `1_collect_data.py` | YOLO26 barbell detection + MediaPipe pose + stabilization | Producer-consumer I/O; decoder thread; bounded queue |
-| **2. Analyze Data** | `2_analyze_data.py` | Kinematics, joint smoothing, phase detection, CSV output | All joints smoothed; per-frame lifter angle; 3-phase system |
-| **3. Generate Graphs** | `3_generate_graphs.py` | Bar path + kinematic plots | Color-coded by Pull/Pull-under/Recovery |
+| **1. Collect Data** | `1_collect_data.py` | YOLO26 barbell detection + MediaPipe pose + stabilization | Producer-consumer I/O; decoder thread; bounded queue; source video path stored in pkl |
+| **2. Analyze Data** | `2_analyze_data.py` | Kinematics, joint smoothing, phase detection, perspective correction, CSV output | All joints smoothed; per-frame lifter angle; 3-phase system; dual-path cm correction |
+| **3. Generate Graphs** | `3_generate_graphs.py` | Bar path + kinematic plots + superimposed comparison | Color-coded by phase; perspective-corrected cm graph; DTW similarity in legend |
 | **4. Render Video** | `4_render_video.py` | Annotated output video | Skeleton + bar path + phase overlay (optional) |
 | **5. Critique Lift** | `5_critique_lift.py` | Rule-based fault detection | Clean/Snatch-specific checks; Markdown report |
 
@@ -251,34 +262,54 @@ Input Video
     ↓
 [Step 1] YOLO26 + MediaPipe + Stabilization
     ├─ Producer: Decode frames (background thread) → Bounded queue
-    ├─ Consumer: Run inference (main thread) → raw_data.pkl
+    ├─ Consumer: Run inference (main thread) → raw_data.pkl (includes source video path)
     ↓
 [Step 2] Analysis & Smoothing
     ├─ Joint smoothing (Savitzky-Golay)
     ├─ Lifter angle per-frame
     ├─ Phase detection (3-phase: Pull/Pull-under/Recovery)
-    ├─ Angle compensation (shoulder geometry → cm-space path, then SG-smoothed)
-    → final_analysis.csv
+    ├─ Perspective correction:
+    │    ├─ Path A (angled view): shoulder-width px→m scale
+    │    ├─ Path B (side-on view): hip-shoulder vertical px→m scale
+    │    ├─ IQR outlier rejection + interpolation + SG smoothing of scale series
+    │    └─ Single stable scalar (median of early Pull phase) → cm displacement
+    → final_analysis.csv  (includes barbell_x/y_corrected_cm, scale_method, px_to_m_scale)
     ↓
 [Step 3] Graph Generation
-    → graphs/*.png (bar path, velocity, acceleration, power)
+    → graphs/*.png (bar path, velocity, acceleration, power, perspective-corrected cm path)
     ↓
 [Step 4] Video Rendering (optional, --no-video to skip)
     → output.mp4 (annotated with skeleton + bar path)
     ↓
 [Step 5] Technique Critique
     → analysis.md (report with phase timing + faults)
+
+── Batch post-processing (2+ videos) ──────────────────────────────────────
+[Batch] Superimposed Comparison Graphs
+    ├─ Load final_analysis.csv from each per-video output folder
+    ├─ Uniform scaling of non-reference lifts (least-squares on phase markers)
+    ├─ DTW similarity % per lift vs reference
+    → superimposed_bar_paths_compensated.png  (cm units, dual-path)
+    → superimposed_bar_paths_smoothed.png     (px units, always available)
+
+── Reanalyze mode (raw_data.pkl already exists) ───────────────────────────
+[run_pipeline_from_folder] Re-run steps 2–5 only
+    ├─ Loads existing raw_data.pkl (no video decoding needed)
+    ├─ Optionally re-renders video if source path is still valid
+    └─ Writes new final_analysis.csv, graphs/, analysis.md
 ```
 
 ## 📊 Output Files
 
 | File | Description |
 |------|-------------|
-| `raw_data.pkl` | Raw per-frame detections from Step 1 (YOLO boxes + MediaPipe landmarks) |
-| `final_analysis.csv` | Enriched data — all joints and bar position smoothed with Savitzky-Golay |
-| `graphs/*.png` | Kinematic graphs (bar path, velocity, acceleration, power, phase colors) |
+| `raw_data.pkl` | Raw per-frame detections from Step 1 (YOLO boxes + MediaPipe landmarks + source video path) |
+| `final_analysis.csv` | Enriched data — all joints and bar position smoothed with Savitzky-Golay; includes cm-corrected path and scale metadata |
+| `graphs/*.png` | Kinematic graphs (bar path, velocity, acceleration, power, perspective-corrected cm path) |
 | `output.mp4` | Annotated video with skeleton, bar path, and 3-phase color overlay (optional) |
 | `analysis.md` | Technique critique report with Pull/Pull-under/Recovery timing and fault analysis |
+| `superimposed_bar_paths_compensated.png` | Batch: all lifts overlaid in real-world cm with DTW similarity scores (batch runs only) |
+| `superimposed_bar_paths_smoothed.png` | Batch: all lifts overlaid in pixel space with DTW similarity scores (batch runs only) |
 
 ### CSV Column Reference
 
@@ -288,13 +319,13 @@ All position and angle columns in `final_analysis.csv` contain **smoothed** valu
 |---|---|---|
 | **Barbell Position** | `barbell_x_smooth`, `barbell_y_smooth` | Smoothed barbell position (pixels) |
 | **Stabilization** | `barbell_x_stable`, `barbell_y_stable` | Stabilized (shake-corrected) barbell position |
-| **Angle-Compensated Path** | `barbell_x_corrected_cm`, `barbell_y_corrected_cm` | Bar displacement in real-world centimetres (both axes), derived from shoulder geometry and SG-smoothed |
+| **Perspective-Corrected Path** | `barbell_x_corrected_cm`, `barbell_y_corrected_cm` | Bar displacement in real-world centimetres (both axes); derived from dual-path shoulder/hip geometry; SG-smoothed |
 | **Joint Positions** | `left_shoulder_x`, `left_shoulder_y`, `left_shoulder_z`, `left_shoulder_vis` | Smoothed joint positions (normalized 0–1) for all 12 tracked joints; `_vis` is MediaPipe visibility score |
 | **Joint Angles** | `left_knee_angle`, `right_knee_angle`, `left_elbow_angle`, `right_elbow_angle` | Smoothed joint angles (degrees) |
 | **Lifter Orientation** | `lifter_angle` | Per-frame smoothed lifter orientation angle (degrees, camera-relative) |
 | **Bar Kinematics** | `vel_y_smooth`, `accel_y_smooth`, `specific_power_y_smooth` | Smoothed barbell vertical velocity (px/s), acceleration (px/s²), and specific power proxy (px²/s³) |
 | **Phase & Timing** | `bar_phase`, `time_s` | Phase label (0=Pull, 1=Pull-under, 2=Recovery); elapsed time in seconds |
-| **Scale & Camera** | `camera_yaw_deg`, `px_to_m_scale` | Estimated camera yaw angle (degrees, informational); per-frame metres-per-pixel scale factor derived from shoulder width |
+| **Scale & Camera** | `camera_yaw_deg`, `px_to_m_scale`, `scale_method` | Estimated camera yaw (degrees, informational); per-frame smoothed metres-per-pixel scale; scale derivation method (`shoulder_width` or `hip_shoulder_vertical`) |
 
 ## 📍 Phase Detection Details
 
@@ -306,11 +337,11 @@ barpath uses a **3-phase system** designed around the biomechanics of Olympic li
 | **Pull-under** | 1 | 🟠 Orange | Hip extension peak → hips stop descending / catch position (t2→t3) |
 | **Recovery** | 2 | 🟢 Green | Catch position → barbell reaches maximum height (t3→t4) |
 
-**For classics lifts** (clean, snatch): Phase boundaries are detected using MediaPipe landmarks and kinematic signals (hip velocity, bar velocity) to identify the t0–t4 keyframes automatically.
+**For classic lifts** (clean, snatch): Phase boundaries are detected using MediaPipe landmarks and kinematic signals (hip velocity, bar velocity) to identify the t0–t4 keyframes automatically.
 
 **For other lifts** (lift_type=none): No phase detection or technique critique is performed; only kinematics are analyzed.
 
-> **Note on angle compensation**: the `barbell_x/y_corrected_cm` columns and `barbell_lateral_corrected_path.png` graph are generated whenever MediaPipe world landmarks are available, regardless of lift type. The correction uses the shoulder's projected pixel width versus its known 3D metric width — no `1/cos(yaw)` amplification — so the scale stays realistic at any camera angle.
+> **Note on perspective correction**: the `barbell_x/y_corrected_cm` columns and `barbell_lateral_corrected_path.png` graph are generated whenever MediaPipe world landmarks are available, regardless of lift type. Angled-view shots use the shoulder horizontal width as a ruler (Path A); side-on shots (|yaw| < 10°) automatically switch to the hip-to-shoulder vertical distance (Path B), which is not foreshortened by horizontal camera yaw. A single stable scalar (median of the early Pull phase) is used for the entire lift rather than a rising per-frame scale, preventing path inflation during the pull-under.
 
 ## 🎛️ Configuration Options
 
@@ -338,9 +369,11 @@ To adjust these, edit `step_1_collect_data.py` line ~164 in the `Pose()` initial
 
 - **Joint Positions & Angles**: Savitzky-Golay filter with 11-frame window, cubic (order 3) polynomial
 - **Barbell Velocity**: 15-frame window for smoother derivatives
+- **Scale Series (perspective correction)**: Savitzky-Golay with 31-frame window, cubic polynomial; preceded by IQR outlier rejection and linear interpolation
+- **cm-Path Final Pass**: Savitzky-Golay with 25-frame window, cubic polynomial applied after pixel→cm conversion
 - **Window Clamping**: Automatically adjusted if video is shorter than window size
 
-To customize, edit `step2_analyze_data.py` and look for the `_savgol_smooth()` function calls.
+To customize, edit `step2_analyze_data.py` and look for the `_savgol_smooth()` function calls, or edit the constants at the top of `step2_helpers/perspective_correction.py`.
 
 ## 🤝 Contributing
 

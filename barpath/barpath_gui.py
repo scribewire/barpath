@@ -35,6 +35,8 @@ from toga.style import Pack
 # Prepare for lazy import of the pipeline runner
 sys.path.insert(0, str(Path(__file__).parent))
 _RUN_PIPELINE = None
+_RUN_BATCH_POSTPROCESS = None
+_RUN_PIPELINE_FROM_FOLDER = None
 
 
 def _get_run_pipeline():
@@ -45,6 +47,26 @@ def _get_run_pipeline():
 
         _RUN_PIPELINE = run_pipeline
     return _RUN_PIPELINE
+
+
+def _get_run_batch_postprocess():
+    """Lazy-load barpath_core.run_batch_postprocess so the GUI starts faster."""
+    global _RUN_BATCH_POSTPROCESS
+    if _RUN_BATCH_POSTPROCESS is None:
+        from barpath_core import run_batch_postprocess
+
+        _RUN_BATCH_POSTPROCESS = run_batch_postprocess
+    return _RUN_BATCH_POSTPROCESS
+
+
+def _get_run_pipeline_from_folder():
+    """Lazy-load barpath_core.run_pipeline_from_folder so the GUI starts faster."""
+    global _RUN_PIPELINE_FROM_FOLDER
+    if _RUN_PIPELINE_FROM_FOLDER is None:
+        from barpath_core import run_pipeline_from_folder
+
+        _RUN_PIPELINE_FROM_FOLDER = run_pipeline_from_folder
+    return _RUN_PIPELINE_FROM_FOLDER
 
 
 class BarpathTogaApp(toga.App):
@@ -61,11 +83,15 @@ class BarpathTogaApp(toga.App):
         self.selected_model: Optional[Path] = None
 
         self.input_videos: List[Path] = []
+        self.input_folders: List[Path] = []
+        # "videos", "folders", or "" (nothing added yet)
+        self.input_mode: str = ""
         self.output_dir: Path = Path("outputs")
         self.lift_type: str = "none"
 
         self.encode_video: bool = True
         self.technique_analysis: bool = True
+        self.use_filenames_in_legend: bool = False
 
         self._is_running: bool = False
         self._pipeline_task: Optional[asyncio.Task[Any]] = None
@@ -237,11 +263,11 @@ class BarpathTogaApp(toga.App):
         )
         content.add(header)
 
-        # Input videos section
-        section_title = toga.Label(
+        # Input videos / folders section
+        self.files_section_title = toga.Label(
             "Input Videos", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))
         )
-        content.add(section_title)
+        content.add(self.files_section_title)
 
         button_row = toga.Box(style=Pack(direction="row", margin_bottom=6))
         self.btn_add_videos = toga.Button(
@@ -249,15 +275,28 @@ class BarpathTogaApp(toga.App):
             on_press=self.on_browse_video,
             style=Pack(margin_right=6, flex=1),
         )
+        self.btn_add_folders = toga.Button(
+            "Add Folders (Reanalyze)",
+            on_press=self.on_browse_folders,
+            style=Pack(margin_right=6, flex=1),
+        )
         self.btn_clear_videos = toga.Button(
-            "Clear Videos",
+            "Clear",
             on_press=self.on_clear_videos,
             enabled=False,
             style=Pack(flex=1),
         )
         button_row.add(self.btn_add_videos)
+        button_row.add(self.btn_add_folders)
         button_row.add(self.btn_clear_videos)
         content.add(button_row)
+
+        # Mode hint label shown when a mode is locked in
+        self.files_mode_hint = toga.Label(
+            "",
+            style=Pack(font_size=9, color="#5B6472", margin_bottom=4),
+        )
+        content.add(self.files_mode_hint)
 
         self.video_list_container = toga.ScrollContainer(
             horizontal=True,
@@ -363,6 +402,37 @@ class BarpathTogaApp(toga.App):
             toga.Label(
                 "Lift Type controls whether critique is generated (`none` disables technique critique).",
                 style=Pack(font_size=9, color="#5B6472", margin_top=6),
+            )
+        )
+
+        # ------------------------------------------------------------------
+        # Multi-video graph options
+        # ------------------------------------------------------------------
+        content.add(
+            toga.Label(
+                "Multi-Video Options",
+                style=Pack(font_weight="bold", margin=(14, 0, 6, 0)),
+            )
+        )
+
+        filenames_row = toga.Box(
+            style=Pack(direction="row", align_items="center", margin_bottom=4)
+        )
+        self.use_filenames_switch = toga.Switch(
+            "Use filenames in superimposed path legend",
+            value=False,
+            on_change=self._on_use_filenames_change,
+            style=Pack(margin_right=8),
+        )
+        filenames_row.add(self.use_filenames_switch)
+        content.add(filenames_row)
+
+        content.add(
+            toga.Label(
+                "When unchecked (default), lifts are labelled 'Lift 1', 'Lift 2', etc. "
+                "When checked, the video filename stem is used instead. "
+                "Only affects the superimposed bar-path graph produced when multiple videos are analysed.",
+                style=Pack(font_size=9, color="#5B6472", margin_top=4, margin_bottom=6),
             )
         )
 
@@ -492,15 +562,27 @@ class BarpathTogaApp(toga.App):
             self, "tab_tip_analysis"
         )
 
-        def _set(btn, tip, is_active: bool):
-            btn.style.update(**(active_btn if is_active else inactive_btn))
-            tip.style.update(**tip_style)
-            # parent row is the tip's parent container; we can walk up via stored attribute if present
-            # (we don't rely on it; background on button + text already indicates state)
+        def _set(btn, tip, is_active: bool, force_disabled: bool = False):
+            if force_disabled:
+                # Greyed-out tab: don't apply the normal active/inactive style;
+                # just ensure it looks muted regardless of selection state.
+                btn.style.update(
+                    background_color="#E8E8E8", color="#AAAAAA", font_weight="normal"
+                )
+                tip.style.update(color="#BBBBBB")
+            else:
+                btn.style.update(**(active_btn if is_active else inactive_btn))
+                tip.style.update(**tip_style)
 
         if files_ok and settings_ok and analyze_ok and analysis_ok:
+            settings_disabled = not self.tab_btn_settings.enabled
             _set(self.tab_btn_files, self.tab_tip_files, active == "files")
-            _set(self.tab_btn_settings, self.tab_tip_settings, active == "settings")
+            _set(
+                self.tab_btn_settings,
+                self.tab_tip_settings,
+                active == "settings",
+                force_disabled=settings_disabled,
+            )
             _set(self.tab_btn_analyze, self.tab_tip_analyze, active == "analyze")
             _set(self.tab_btn_analysis, self.tab_tip_analysis, active == "analysis")
 
@@ -508,31 +590,82 @@ class BarpathTogaApp(toga.App):
     # Tab navigation (swap active page)
     # ----------------------------
 
-    def _select_tab(self, tab: str) -> None:
+    # ----------------------------
+    # Input-mode helpers
+    # ----------------------------
+
+    def _set_input_mode(self, mode: str) -> None:
+        """
+        Lock the UI into 'videos' or 'folders' mode, or reset to '' (empty).
+
+        When locked:
+        - The button for the other mode is disabled.
+        - The Settings sidebar tab is greyed out when mode is 'folders'.
+        - A hint label explains the current mode.
+        """
+        self.input_mode = mode
+
+        if mode == "videos":
+            self.btn_add_videos.enabled = True
+            self.btn_add_folders.enabled = False
+            self.files_section_title.text = "Input Videos"
+            self.files_mode_hint.text = (
+                "Videos mode — clear the list to switch to Reanalyze mode."
+            )
+            self._set_settings_tab_enabled(True)
+
+        elif mode == "folders":
+            self.btn_add_videos.enabled = False
+            self.btn_add_folders.enabled = True
+            self.files_section_title.text = "Output Folders (Reanalyze)"
+            self.files_mode_hint.text = (
+                "Reanalyze mode: steps 2–5 are re-run on existing output folders. "
+                "Clear the list to switch back to Videos mode."
+            )
+            self._set_settings_tab_enabled(False)
+
+        else:
+            # No mode yet — both buttons active
+            self.btn_add_videos.enabled = True
+            self.btn_add_folders.enabled = True
+            self.files_section_title.text = "Input Videos / Folders"
+            self.files_mode_hint.text = ""
+            self._set_settings_tab_enabled(True)
+
+    def _set_settings_tab_enabled(self, enabled: bool) -> None:
+        """Grey out or restore the Settings sidebar tab button."""
+        self.tab_btn_settings.enabled = enabled
+        self.tab_tip_settings.style.color = "#5B6472" if enabled else "#BBBBBB"
+
+    def _select_tab(self, tab_key: str) -> None:
         """Select a tab by removing and adding pages (eliminates redraw flashing)."""
-        if tab not in ("files", "settings", "analyze", "analysis"):
-            tab = "files"
+        if tab_key not in ("files", "settings", "analyze", "analysis"):
+            tab_key = "files"
+
+        # If Settings is disabled (folders mode) redirect to Files
+        if tab_key == "settings" and not self.tab_btn_settings.enabled:
+            tab_key = "files"
 
         # Debounce redundant selections (avoids unnecessary churn)
-        if getattr(self, "_current_tab", None) == tab:
+        if getattr(self, "_current_tab", None) == tab_key:
             return
-        self._current_tab = tab
+        self._current_tab = tab_key
 
         # Clear the page host and add only the selected page
         self.page_host.clear()
 
-        if tab == "files":
+        if tab_key == "files":
             self.page_host.add(self.page_files)
-        elif tab == "settings":
+        elif tab_key == "settings":
             self.page_host.add(self.page_settings)
-        elif tab == "analyze":
+        elif tab_key == "analyze":
             self.page_host.add(self.page_analyze)
         else:  # analysis
             self.page_host.add(self.page_analysis)
             self._render_analysis()
 
         # Update visual state of tabs
-        self._apply_tab_styles(tab)
+        self._apply_tab_styles(tab_key)
 
     # ----------------------------
     # Logging (Rich-ish)
@@ -551,19 +684,35 @@ class BarpathTogaApp(toga.App):
         self._log("")
 
     def _log_config(self) -> None:
-        model = self._resolve_selected_model()
         self._log("[bold]Configuration:[/bold]")
-        self._log(f"  Input Videos: [cyan]{len(self.input_videos)}[/cyan]")
-        if len(self.input_videos) <= 8:
-            for i, vid in enumerate(self.input_videos, 1):
-                self._log(f"    {i}. [dim]{vid.name}[/dim]")
+
+        if self.input_mode == "folders":
+            active_list = self.input_folders
+            self._log("  Mode:         [cyan]Reanalyze (steps 2-5)[/cyan]")
+            self._log(f"  Folders:      [cyan]{len(active_list)}[/cyan]")
+            if len(active_list) <= 8:
+                for i, item in enumerate(active_list, 1):
+                    self._log(f"    {i}. [dim]{item.name}[/dim]")
+            else:
+                for i, item in enumerate(active_list[:5], 1):
+                    self._log(f"    {i}. [dim]{item.name}[/dim]")
+                self._log(f"    ... [dim]+{len(active_list) - 5} more[/dim]")
         else:
-            for i, vid in enumerate(self.input_videos[:5], 1):
-                self._log(f"    {i}. [dim]{vid.name}[/dim]")
-            self._log(f"    ... [dim]+{len(self.input_videos) - 5} more[/dim]")
-        self._log(
-            f"  Model:        [cyan]{model if model else '(not selected)'}[/cyan]"
-        )
+            active_list = self.input_videos
+            model = self._resolve_selected_model()
+            self._log("  Mode:         [cyan]Full pipeline (steps 1-5)[/cyan]")
+            self._log(f"  Input Videos: [cyan]{len(active_list)}[/cyan]")
+            if len(active_list) <= 8:
+                for i, item in enumerate(active_list, 1):
+                    self._log(f"    {i}. [dim]{item.name}[/dim]")
+            else:
+                for i, item in enumerate(active_list[:5], 1):
+                    self._log(f"    {i}. [dim]{item.name}[/dim]")
+                self._log(f"    ... [dim]+{len(active_list) - 5} more[/dim]")
+            self._log(
+                f"  Model:        [cyan]{model if model else '(not selected)'}[/cyan]"
+            )
+
         self._log(f"  Lift Type:    [cyan]{self.lift_type}[/cyan]")
         self._log(f"  Output Dir:   [cyan]{self._effective_output_dir()}[/cyan]")
         self._log("")
@@ -717,6 +866,9 @@ class BarpathTogaApp(toga.App):
         self._refresh_settings_buttons()
         self._log(f"[green]✓[/green] Lift type: [cyan]{self.lift_type}[/cyan]")
 
+    def _on_use_filenames_change(self, widget: Any) -> None:
+        self.use_filenames_in_legend = bool(widget.value)
+
     def _resolve_selected_model(self) -> Optional[Path]:
         if self.selected_model is None:
             return None
@@ -761,21 +913,59 @@ class BarpathTogaApp(toga.App):
                     self._add_video_row(vp)
                     added += 1
 
-            self.btn_clear_videos.enabled = len(self.input_videos) > 0
             if added:
+                self._set_input_mode("videos")
+                self.btn_clear_videos.enabled = True
                 self._log(f"[green]✓[/green] Added [cyan]{added}[/cyan] video(s)")
         except Exception as e:
             await self.main_window.dialog(  # type: ignore[attr-defined]
                 toga.ErrorDialog("Error", f"Could not select file(s): {e}")
             )
 
+    async def on_browse_folders(self, widget: toga.Widget) -> None:
+        """Let the user pick one or more existing output folders to reanalyze."""
+        try:
+            chosen = await self.main_window.dialog(  # type: ignore
+                toga.SelectFolderDialog(
+                    title="Select Output Folder to Reanalyze",
+                )
+            )
+            if not chosen:
+                return
+
+            folder = Path(chosen)
+            pkl_path = folder / "raw_data.pkl"
+            if not pkl_path.exists():
+                await self.main_window.dialog(  # type: ignore[attr-defined]
+                    toga.ErrorDialog(
+                        "Invalid Folder",
+                        f"'{folder.name}' does not contain raw_data.pkl.\n"
+                        "Only folders previously processed by Barpath can be reanalyzed.",
+                    )
+                )
+                return
+
+            if folder not in self.input_folders:
+                self.input_folders.append(folder)
+                self._add_video_row(folder)
+
+            self._set_input_mode("folders")
+            self.btn_clear_videos.enabled = True
+            self._log(f"[green]✓[/green] Added folder: [cyan]{folder.name}[/cyan]")
+        except Exception as e:
+            await self.main_window.dialog(  # type: ignore[attr-defined]
+                toga.ErrorDialog("Error", f"Could not select folder: {e}")
+            )
+
     def on_clear_videos(self, widget: toga.Widget) -> None:
         self.input_videos.clear()
+        self.input_folders.clear()
         self.video_list_box.clear()
         self.btn_clear_videos.enabled = False
-        self._log("[yellow]![/yellow] Cleared all videos")
+        self._set_input_mode("")
+        self._log("[yellow]![/yellow] Cleared all inputs")
 
-    def _add_video_row(self, video_path: Path) -> None:
+    def _add_video_row(self, item_path: Path) -> None:
         row = toga.Box(
             style=Pack(
                 direction="row", margin_bottom=4, margin=6, background_color="#F2F3F7"
@@ -784,25 +974,33 @@ class BarpathTogaApp(toga.App):
 
         remove_btn = toga.Button(
             "Remove",
-            on_press=lambda w, vp=video_path: self.on_remove_video(w, vp),
+            on_press=lambda w, vp=item_path: self.on_remove_video(w, vp),
             style=Pack(width=80, margin_right=8),
         )
         row.add(remove_btn)
 
-        row.add(toga.Label(str(video_path), style=Pack(flex=1, color="#222")))
+        row.add(toga.Label(str(item_path), style=Pack(flex=1, color="#222")))
 
         self.video_list_box.add(row)
 
-    def on_remove_video(self, widget: toga.Widget, video_path: Path) -> None:
-        if video_path in self.input_videos:
-            self.input_videos.remove(video_path)
+    def on_remove_video(self, widget: toga.Widget, item_path: Path) -> None:
+        if item_path in self.input_videos:
+            self.input_videos.remove(item_path)
+        if item_path in self.input_folders:
+            self.input_folders.remove(item_path)
 
         self.video_list_box.clear()
-        for vp in self.input_videos:
+        active_list = (
+            self.input_folders if self.input_mode == "folders" else self.input_videos
+        )
+        for vp in active_list:
             self._add_video_row(vp)
 
-        self.btn_clear_videos.enabled = len(self.input_videos) > 0
-        self._log(f"[yellow]–[/yellow] Removed: [dim]{video_path.name}[/dim]")
+        remaining = len(active_list)
+        self.btn_clear_videos.enabled = remaining > 0
+        if remaining == 0:
+            self._set_input_mode("")
+        self._log(f"[yellow]–[/yellow] Removed: [dim]{item_path.name}[/dim]")
 
     def on_open_output_dir(self, widget: toga.Widget) -> None:
         target_path = self._effective_output_dir().expanduser()
@@ -864,18 +1062,31 @@ class BarpathTogaApp(toga.App):
         if self._is_running:
             return
 
-        if not self.input_videos:
+        using_folders = self.input_mode == "folders"
+
+        if not using_folders and not self.input_videos:
             self._select_tab("files")
             self._log(
-                "[bold red]ERROR[/bold red] Please add at least one video in Files."
+                "[bold red]ERROR[/bold red] Please add at least one video or output folder in Files."
             )
             return
 
-        selected_model = self._resolve_selected_model()
-        if not selected_model:
-            self._select_tab("settings")
-            self._log("[bold red]ERROR[/bold red] Please select a model in Settings.")
+        if using_folders and not self.input_folders:
+            self._select_tab("files")
+            self._log(
+                "[bold red]ERROR[/bold red] Please add at least one output folder in Files."
+            )
             return
+
+        selected_model: Optional[Path] = None
+        if not using_folders:
+            selected_model = self._resolve_selected_model()
+            if not selected_model:
+                self._select_tab("settings")
+                self._log(
+                    "[bold red]ERROR[/bold red] Please select a model in Settings."
+                )
+                return
 
         # Clear log and print configuration
         self._log_html_lines = []
@@ -907,9 +1118,12 @@ class BarpathTogaApp(toga.App):
         #    every (step, progress, message) tuple onto _progress_queue.
         #    It never touches Toga widgets directly.
         input_videos_snapshot = list(self.input_videos)
+        input_folders_snapshot = list(self.input_folders)
         selected_model_snapshot = selected_model
         encode_video_snapshot = self.encode_video
         lift_type_snapshot = self.lift_type
+        use_filenames_snapshot = self.use_filenames_in_legend
+        using_folders_snapshot = using_folders
 
         self._thread_executor.submit(
             self._pipeline_worker,
@@ -917,6 +1131,9 @@ class BarpathTogaApp(toga.App):
             selected_model_snapshot,
             encode_video_snapshot,
             lift_type_snapshot,
+            use_filenames_snapshot,
+            input_folders_snapshot,
+            using_folders_snapshot,
         )
 
         # 2. Kick off the lightweight async watcher that reads _progress_queue
@@ -931,30 +1148,68 @@ class BarpathTogaApp(toga.App):
     def _pipeline_worker(
         self,
         input_videos: List[Path],
+        selected_model: Optional[Path],
+        encode_video: bool,
+        lift_type: str,
+        use_filenames_in_legend: bool = False,
+        input_folders: Optional[List[Path]] = None,
+        using_folders: bool = False,
+    ) -> None:
+        """
+        Execute the barpath pipeline for every queued video or output folder.
+
+        When ``using_folders`` is True the worker re-runs steps 2-5 on each
+        folder using ``run_pipeline_from_folder``; otherwise the full 5-step
+        pipeline is run on each video file.
+
+        Progress tuples are pushed onto ``self._progress_queue``.  When all
+        items are finished (or on error/cancellation) a sentinel string is
+        pushed to wake up the async watcher on the main thread.
+        """
+        if input_folders is None:
+            input_folders = []
+
+        if using_folders:
+            self._pipeline_worker_folders(
+                input_folders, encode_video, lift_type, use_filenames_in_legend
+            )
+        else:
+            self._pipeline_worker_videos(
+                input_videos,
+                selected_model,  # type: ignore[arg-type]
+                encode_video,
+                lift_type,
+                use_filenames_in_legend,
+            )
+
+    def _pipeline_worker_videos(
+        self,
+        input_videos: List[Path],
         selected_model: Path,
         encode_video: bool,
         lift_type: str,
+        use_filenames_in_legend: bool,
     ) -> None:
-        """
-        Execute the full barpath pipeline for every queued video.
-
-        Progress tuples are pushed onto ``self._progress_queue``.  When all
-        videos are finished (or on error/cancellation) a sentinel string is
-        pushed to wake up the async watcher on the main thread.
-        """
+        """Full 5-step pipeline for a list of raw video files."""
         run_pipeline = _get_run_pipeline()
         is_batch = len(input_videos) > 1
         total_videos = len(input_videos)
+
+        completed_video_dirs: List[Path] = []
+        completed_video_labels: List[str] = []
 
         try:
             for video_idx, input_video in enumerate(input_videos, 1):
                 if self._cancel_event.is_set():
                     break
 
-                # Build per-video output paths
                 out_base = self._effective_output_dir()
                 if is_batch:
-                    video_output_dir = out_base / input_video.stem
+                    if use_filenames_in_legend:
+                        folder_name = input_video.stem
+                    else:
+                        folder_name = f"lift_{video_idx}"
+                    video_output_dir = out_base / folder_name
                     video_output_dir.mkdir(parents=True, exist_ok=True)
                 else:
                     video_output_dir = out_base
@@ -964,7 +1219,6 @@ class BarpathTogaApp(toga.App):
                     video_output_dir / "output.mp4" if encode_video else None
                 )
 
-                # Push a banner message for this video
                 self._progress_queue.put(
                     (
                         "_banner_",
@@ -974,7 +1228,6 @@ class BarpathTogaApp(toga.App):
                     )
                 )
 
-                # Drain the pipeline generator — the heavy lifting is here
                 for step_name, progress_value, message in run_pipeline(
                     input_video=str(input_video),
                     model_path=str(selected_model),
@@ -989,7 +1242,12 @@ class BarpathTogaApp(toga.App):
                 ):
                     self._progress_queue.put((step_name, progress_value, message))
 
-                # Signal completion of this individual video
+                completed_video_dirs.append(video_output_dir)
+                if use_filenames_in_legend:
+                    completed_video_labels.append(input_video.stem)
+                else:
+                    completed_video_labels.append(f"Lift {video_idx}")
+
                 self._progress_queue.put(
                     (
                         "_video_done_",
@@ -998,7 +1256,119 @@ class BarpathTogaApp(toga.App):
                     )
                 )
 
-            # All videos processed (or cancelled)
+            if (
+                not self._cancel_event.is_set()
+                and is_batch
+                and len(completed_video_dirs) > 1
+            ):
+                self._progress_queue.put(
+                    (
+                        "_banner_",
+                        None,
+                        "[bold cyan]Batch post-processing...[/bold cyan]",
+                    )
+                )
+                run_batch_postprocess = _get_run_batch_postprocess()
+                for step_name, progress_value, message in run_batch_postprocess(
+                    video_output_dirs=completed_video_dirs,
+                    video_labels=completed_video_labels,
+                    batch_output_dir=self._effective_output_dir(),
+                    use_filenames=use_filenames_in_legend,
+                    cancel_event=self._cancel_event,
+                ):
+                    self._progress_queue.put((step_name, progress_value, message))
+
+            if self._cancel_event.is_set():
+                self._progress_queue.put("_CANCELLED_")
+            else:
+                self._progress_queue.put("_DONE_")
+
+        except InterruptedError:
+            self._progress_queue.put("_CANCELLED_")
+        except Exception as exc:
+            import traceback
+
+            tb = traceback.format_exc()
+            self._progress_queue.put(f"_ERROR_:{exc}\n{tb}")
+
+    def _pipeline_worker_folders(
+        self,
+        input_folders: List[Path],
+        encode_video: bool,
+        lift_type: str,
+        use_filenames_in_legend: bool,
+    ) -> None:
+        """Re-run steps 2-5 for a list of existing output folders."""
+        run_pipeline_from_folder = _get_run_pipeline_from_folder()
+        is_batch = len(input_folders) > 1
+        total_folders = len(input_folders)
+
+        completed_video_dirs: List[Path] = []
+        completed_video_labels: List[str] = []
+
+        try:
+            for folder_idx, folder in enumerate(input_folders, 1):
+                if self._cancel_event.is_set():
+                    break
+
+                self._progress_queue.put(
+                    (
+                        "_banner_",
+                        None,
+                        f"[bold cyan]Reanalyzing folder {folder_idx}/{total_folders}[/bold cyan]: "
+                        f"[dim]{folder.name}[/dim]",
+                    )
+                )
+
+                for step_name, progress_value, message in run_pipeline_from_folder(
+                    output_folder=folder,
+                    lift_type=lift_type,
+                    encode_video=encode_video,
+                    technique_analysis=(lift_type != "none"),
+                    cancel_event=self._cancel_event,
+                ):
+                    self._progress_queue.put((step_name, progress_value, message))
+
+                completed_video_dirs.append(folder)
+                if use_filenames_in_legend:
+                    completed_video_labels.append(folder.name)
+                else:
+                    completed_video_labels.append(f"Lift {folder_idx}")
+
+                self._progress_queue.put(
+                    (
+                        "_video_done_",
+                        None,
+                        f"[green]✓[/green] Completed: [dim]{folder.name}[/dim]",
+                    )
+                )
+
+            if (
+                not self._cancel_event.is_set()
+                and is_batch
+                and len(completed_video_dirs) > 1
+            ):
+                self._progress_queue.put(
+                    (
+                        "_banner_",
+                        None,
+                        "[bold cyan]Batch post-processing...[/bold cyan]",
+                    )
+                )
+                run_batch_postprocess = _get_run_batch_postprocess()
+                for step_name, progress_value, message in run_batch_postprocess(
+                    video_output_dirs=completed_video_dirs,
+                    video_labels=completed_video_labels,
+                    batch_output_dir=(
+                        completed_video_dirs[0].parent
+                        if completed_video_dirs
+                        else Path("outputs")
+                    ),
+                    use_filenames=use_filenames_in_legend,
+                    cancel_event=self._cancel_event,
+                ):
+                    self._progress_queue.put((step_name, progress_value, message))
+
             if self._cancel_event.is_set():
                 self._progress_queue.put("_CANCELLED_")
             else:
@@ -1025,8 +1395,11 @@ class BarpathTogaApp(toga.App):
         so that the GUI remains fully responsive (repaints, clicks, etc.)
         while the pipeline runs on a background thread.
         """
-        is_batch = len(self.input_videos) > 1
-        total_videos = len(self.input_videos)
+        active_list = (
+            self.input_folders if self.input_mode == "folders" else self.input_videos
+        )
+        is_batch = len(active_list) > 1
+        total_videos = len(active_list)
         # We track the video index here by counting _video_done_ sentinels
         videos_done = 0
 
@@ -1080,6 +1453,10 @@ class BarpathTogaApp(toga.App):
                         videos_done += 1
                         continue
 
+                    if step_name == "batch":
+                        self._log(f"[green]✓[/green] [dim]batch[/dim] {message}")
+                        continue
+
                     # Throttle per-frame log spam (only log non-frame messages)
                     if "frame" not in str(message).lower() or progress_value is None:
                         if progress_value is not None:
@@ -1120,11 +1497,15 @@ class BarpathTogaApp(toga.App):
 
     async def _on_pipeline_done(self, is_batch: bool) -> None:
         """Handle successful pipeline completion: update UI and show report."""
-        self._log("[bold green]✓ All Videos Complete![/bold green]")
+        label = "Folders" if self.input_mode == "folders" else "Videos"
+        self._log(f"[bold green]✓ All {label} Complete![/bold green]")
         self.progress_bar.value = 100
         self.progress_label.text = "Analysis complete!"
 
-        if is_batch and self.input_videos:
+        if self.input_mode == "folders" and self.input_folders:
+            # For folders mode, look for the report in the last folder directly
+            analysis_path = self.input_folders[-1] / "analysis.md"
+        elif is_batch and self.input_videos:
             last_video = self.input_videos[-1]
             analysis_path = (
                 self._effective_output_dir() / last_video.stem / "analysis.md"

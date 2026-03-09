@@ -1,9 +1,12 @@
 import argparse
 import os
 from pathlib import Path
+from typing import Optional
 
 import matplotlib
+import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
+import numpy as np
 import pandas as pd
 
 matplotlib.use("Agg")  # Use non-interactive backend
@@ -32,6 +35,23 @@ START_MARKER_COLOR = "white"
 START_MARKER_EDGE = "black"
 END_MARKER_COLOR = "black"
 END_MARKER_EDGE = "white"
+
+# ---------------------------------------------------------------------------
+# Palette for superimposed multi-lift paths.
+# Chosen to be visually distinct from each other AND from the phase colors.
+# ---------------------------------------------------------------------------
+LIFT_PALETTE = [
+    "#1f77b4",  # muted blue
+    "#9467bd",  # muted purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#7f7f7f",  # medium grey
+    "#bcbd22",  # yellow-green
+    "#17becf",  # teal
+    "#aec7e8",  # light blue
+    "#ffbb78",  # light orange
+    "#c5b0d5",  # light purple
+]
 
 
 def _phase_legend_handles():
@@ -448,6 +468,685 @@ def _plot_timeseries(df, y_col, title, y_label, output_dir):
     plt.close(fig)
     print(f"  ✓ Generated: {graph_path}")
     return graph_path
+
+
+# ---------------------------------------------------------------------------
+# Superimposed multi-lift path graphs
+# ---------------------------------------------------------------------------
+
+# Camera-yaw threshold below which a lift is treated as "side-on" and the
+# angle-compensated columns are considered unreliable.  Must match the value
+# used in perspective_correction.py (_SIDE_ANGLE_THRESHOLD_DEG).
+_SIDE_ANGLE_THRESHOLD_DEG = 10.0
+
+
+# ---------------------------------------------------------------------------
+# DTW similarity and reference-scale helpers
+# ---------------------------------------------------------------------------
+
+
+def _dtw_distance(seq_a: np.ndarray, seq_b: np.ndarray) -> float:
+    """
+    Compute the Dynamic Time Warping distance between two 2-D point sequences.
+
+    Each sequence is shaped ``(N, 2)`` where columns are (x, y).  The DTW
+    cost matrix is built with Euclidean point-to-point distances and the
+    standard DP recurrence.  The raw accumulated cost at the corner is
+    returned (not normalised — use :func:`_dtw_similarity_pct` for a
+    percentage score).
+
+    Parameters
+    ----------
+    seq_a, seq_b : ndarray, shape (N, 2) and (M, 2)
+
+    Returns
+    -------
+    float
+        DTW distance (lower = more similar).
+    """
+    raw, _ = _dtw_distance_with_steps(seq_a, seq_b)
+    return raw
+
+
+def _dtw_distance_with_steps(seq_a: np.ndarray, seq_b: np.ndarray) -> tuple:
+    """
+    Compute the DTW distance and the length of the optimal warping path.
+
+    Uses the standard DP recurrence with Euclidean point-to-point cost.
+    After filling the cost matrix the optimal path is traced back from
+    ``(N, M)`` to ``(1, 1)`` to count the number of warping steps ``W``.
+
+    Returns
+    -------
+    (distance, n_steps) : (float, int)
+        ``distance``  – accumulated DTW cost along the optimal path.
+        ``n_steps``   – number of cells in the optimal path (>= max(N, M)).
+    """
+    n, m = len(seq_a), len(seq_b)
+    # Accumulated cost matrix (1-indexed; row/col 0 are sentinels)
+    dtw = np.full((n + 1, m + 1), np.inf)
+    dtw[0, 0] = 0.0
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = float(np.linalg.norm(seq_a[i - 1] - seq_b[j - 1]))
+            dtw[i, j] = cost + min(dtw[i - 1, j], dtw[i, j - 1], dtw[i - 1, j - 1])
+
+    # Trace back the optimal path to count steps
+    i, j = n, m
+    n_steps = 0
+    while i > 0 or j > 0:
+        n_steps += 1
+        if i == 0:
+            j -= 1
+        elif j == 0:
+            i -= 1
+        else:
+            best = min(dtw[i - 1, j - 1], dtw[i - 1, j], dtw[i, j - 1])
+            if dtw[i - 1, j - 1] == best:
+                i -= 1
+                j -= 1
+            elif dtw[i - 1, j] == best:
+                i -= 1
+            else:
+                j -= 1
+
+    return float(dtw[n, m]), max(n_steps, 1)
+
+
+def _path_length(seq: np.ndarray) -> float:
+    """
+    Return the total arc-length of a 2-D point sequence ``(N, 2)``.
+    Used to normalise DTW distance so it is independent of sequence length.
+    """
+    if len(seq) < 2:
+        return 1.0
+    diffs = np.diff(seq, axis=0)
+    return float(np.sum(np.linalg.norm(diffs, axis=1))) or 1.0
+
+
+def _dtw_similarity_pct(
+    ref_xy: np.ndarray,
+    other_xy: np.ndarray,
+) -> float:
+    """
+    Return a percentage similarity score in [0, 100] between two 2-D bar
+    paths using Dynamic Time Warping.
+
+    Normalisation
+    -------------
+    The raw DTW cost is the sum of Euclidean distances along the optimal
+    warping path.  We normalise it by two factors to make it independent of
+    both sequence length and absolute path scale:
+
+    1. **Step count** – divide by the number of warping steps ``W``
+       (the length of the optimal warping path, ``1 <= W <= N+M-1``).
+       This gives the *mean per-step deviation* in the same units as the
+       path coordinates.
+
+    2. **Path scale** – divide by the bounding-box diagonal of the
+       reference path.  This converts the mean deviation into a
+       dimensionless fraction of the overall path extent, so a 3 cm
+       deviation on a 160 cm path scores differently from a 3 cm
+       deviation on a 10 cm path.
+
+    The resulting ``d_norm`` is the mean warping deviation as a fraction
+    of the path's spatial extent.  A value of 0 means the paths are
+    identical; a value of 1 means the average warp step deviates by the
+    full diagonal of the bounding box.
+
+    Mapping to percentage
+    ---------------------
+    An exponential decay converts ``d_norm`` to a human-readable score:
+
+        similarity = 100 * exp(-k * d_norm)
+
+    ``k = 5`` is calibrated so the scale is intuitive for bar-path work:
+
+    * d_norm = 0.00  → 100 %  (identical)
+    * d_norm = 0.05  →  78 %  (very similar — minor style differences)
+    * d_norm = 0.10  →  61 %  (noticeable shape difference)
+    * d_norm = 0.14  →  50 %  (substantially different)
+    * d_norm = 0.20  →  37 %  (very different)
+
+    Parameters
+    ----------
+    ref_xy   : ndarray (N, 2)  – reference lift path
+    other_xy : ndarray (M, 2)  – comparison lift path
+
+    Returns
+    -------
+    float in [0, 100]
+    """
+    if len(ref_xy) < 2 or len(other_xy) < 2:
+        return 0.0
+
+    raw, n_steps = _dtw_distance_with_steps(ref_xy, other_xy)
+
+    # Mean per-step deviation in path coordinate units
+    mean_dev = raw / max(n_steps, 1)
+
+    # Characteristic scale: bounding-box diagonal of the reference path
+    ref_x_range = float(ref_xy[:, 0].max() - ref_xy[:, 0].min())
+    ref_y_range = float(ref_xy[:, 1].max() - ref_xy[:, 1].min())
+    bbox_diag = float(np.sqrt(ref_x_range**2 + ref_y_range**2))
+    if bbox_diag < 1e-6:
+        bbox_diag = 1.0
+
+    d_norm = mean_dev / bbox_diag
+
+    # k=5: 50% at d_norm≈0.14, 78% at d_norm≈0.05, 37% at d_norm≈0.20
+    k = 5.0
+    return float(100.0 * np.exp(-k * d_norm))
+
+
+def _find_phase_transition_points(
+    x_vals: np.ndarray,
+    y_vals: np.ndarray,
+    phase_vals: np.ndarray,
+) -> dict:
+    """
+    Return a dict mapping ``'A->B'`` strings to ``(x, y)`` tuples for every
+    phase transition found in *phase_vals*.
+    """
+    pts: dict = {}
+    for i in range(1, len(phase_vals)):
+        if phase_vals[i] != phase_vals[i - 1]:
+            key = f"{phase_vals[i - 1]}->{phase_vals[i]}"
+            pts[key] = (float(x_vals[i]), float(y_vals[i]))
+    return pts
+
+
+def _uniform_scale_to_reference(
+    ref_x: np.ndarray,
+    ref_y: np.ndarray,
+    ref_phases: np.ndarray,
+    other_x: np.ndarray,
+    other_y: np.ndarray,
+    other_phases: np.ndarray,
+) -> float:
+    """
+    Find the single uniform scale factor ``s`` that best maps the
+    *other* lift onto the *reference* lift by minimising the sum of
+    squared distances between matching phase-transition markers.
+
+    Both paths must already be translated so the pull-under start sits
+    at the origin ``(0, 0)``.  The pull-under origin itself is the same
+    for both (always (0,0)) and so is excluded from the optimisation —
+    only the ``1->2`` (pull-under→recovery) and ``0->1`` markers that are
+    not at the origin are used.
+
+    If no usable non-origin markers are found the function falls back to
+    matching the total arc-length of the two paths (a reasonable proxy for
+    overall scale).
+
+    Parameters
+    ----------
+    ref_x, ref_y, ref_phases     : reference path arrays
+    other_x, other_y, other_phases : path to be scaled
+
+    Returns
+    -------
+    float  – scale factor (multiply *other* x/y by this value)
+    """
+    ref_pts = _find_phase_transition_points(ref_x, ref_y, ref_phases)
+    other_pts = _find_phase_transition_points(other_x, other_y, other_phases)
+
+    # Collect matching non-origin marker pairs
+    numerator = 0.0
+    denominator = 0.0
+
+    common_keys = set(ref_pts.keys()) & set(other_pts.keys())
+    for key in common_keys:
+        rx, ry = ref_pts[key]
+        ox, oy = other_pts[key]
+        # Skip the pull-under anchor itself (it is (0,0) for both)
+        if abs(ox) < 1e-9 and abs(oy) < 1e-9:
+            continue
+        # Least-squares 1-D scale: s = dot(other_pt, ref_pt) / dot(other_pt, other_pt)
+        numerator += ox * rx + oy * ry
+        denominator += ox * ox + oy * oy
+
+    if denominator > 1e-9:
+        scale = numerator / denominator
+        # Clamp to a physically sensible range — never shrink by more than
+        # 60 % or stretch by more than 2.5×
+        return float(np.clip(scale, 0.4, 2.5))
+
+    # Fallback: match arc-lengths
+    ref_len = _path_length(np.column_stack([ref_x, ref_y]))
+    other_len = _path_length(np.column_stack([other_x, other_y]))
+    if other_len > 1e-9:
+        return float(np.clip(ref_len / other_len, 0.4, 2.5))
+
+    return 1.0
+
+
+def _get_lift_yaw(df: pd.DataFrame) -> float:
+    """Return the camera yaw (degrees) stored in df, or NaN if unavailable."""
+    if "camera_yaw_deg" not in df.columns:
+        return float("nan")
+    valid = df["camera_yaw_deg"].dropna()
+    if valid.empty:
+        return float("nan")
+    return float(valid.iloc[0])
+
+
+def _find_pull_under_anchor(phase_vals: np.ndarray) -> int:
+    """
+    Return the index (into phase_vals) of the first frame where the phase
+    transitions from Pull (0) to Pull-under (1).
+
+    If no such transition exists — e.g. phase detection failed or the lift
+    only has a single phase — returns 0 so callers always get a valid index.
+    """
+    for i in range(1, len(phase_vals)):
+        if phase_vals[i - 1] == 0 and phase_vals[i] == 1:
+            return i
+    return 0
+
+
+def _extract_lift_path(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    phase_col: str,
+    y_trunc_col: str,
+):
+    """
+    Extract (x_vals, y_vals, phase_vals) from *df* using the given columns,
+    truncating at peak bar height and translating so the pull-under start
+    point sits at (0, 0).
+
+    The anchor point is the first frame where the phase transitions from
+    Pull (0) to Pull-under (1).  If that transition is not present the first
+    data point is used as the origin instead (graceful fallback).
+
+    Returns None if there are fewer than 2 usable data points.
+    """
+    working_df = df
+    if y_trunc_col in df.columns and bool(df[y_trunc_col].notna().any()):
+        peak_idx = df[y_trunc_col].idxmin()
+        working_df = df.loc[:peak_idx]
+
+    path_df = working_df[[x_col, y_col, phase_col]].dropna()
+    if len(path_df) < 2:
+        return None
+
+    x_vals = np.asarray(path_df[x_col], dtype=float)
+    y_vals = np.asarray(path_df[y_col], dtype=float)
+    phase_vals = np.asarray(path_df[phase_col], dtype=int)
+
+    anchor = _find_pull_under_anchor(phase_vals)
+    x_vals = x_vals - x_vals[anchor]
+    y_vals = y_vals - y_vals[anchor]
+    return x_vals, y_vals, phase_vals
+
+
+def _draw_superimposed_figure(
+    lift_paths,
+    output_dir,
+    filename,
+    title,
+    unit_label,
+    use_filenames,
+    similarity_scores: Optional[list] = None,
+):
+    """
+    Shared rendering helper for superimposed bar-path graphs.
+
+    Parameters
+    ----------
+    lift_paths : list of (label, x_vals, y_vals, phase_vals)
+        Pre-extracted, origin-normalised path arrays (one per lift).
+        For non-reference lifts these are the *scaled* arrays so the visual
+        comparison reflects the scale normalisation.
+    output_dir : str or Path
+    filename : str
+        Output PNG filename (no directory).
+    title : str
+        Graph title (may contain newlines).
+    unit_label : str
+        Axis unit string, e.g. ``"cm"`` or ``"px"``.
+    use_filenames : bool
+        When True use the raw label; when False use "Lift N".
+    similarity_scores : list of float or None, optional
+        Per-lift DTW similarity percentages (same length as ``lift_paths``).
+        Index 0 (the reference lift) should be ``None``; subsequent entries
+        are the score vs the reference.  When provided the percentage is
+        appended to the legend label.
+    """
+    if not lift_paths:
+        print(f"Skipping {filename}: no lift paths to draw.")
+        return
+
+    if similarity_scores is None:
+        similarity_scores = [None] * len(lift_paths)
+
+    fig, ax = plt.subplots(figsize=(8, 10))
+
+    all_x = np.concatenate([p[1] for p in lift_paths])
+    all_y = np.concatenate([p[2] for p in lift_paths])
+
+    lift_line_handles = []
+    seen_phases_global: set = set()
+
+    for lift_idx, (file_label, x_vals, y_vals, phase_vals) in enumerate(lift_paths):
+        lift_color = LIFT_PALETTE[lift_idx % len(LIFT_PALETTE)]
+        base_label = file_label if use_filenames else f"Lift {lift_idx + 1}"
+
+        # Append DTW similarity to every lift except the reference (lift 0)
+        score = (
+            similarity_scores[lift_idx] if lift_idx < len(similarity_scores) else None
+        )
+        if score is not None:
+            legend_label = f"{base_label}  [{score:.1f}% match]"
+        else:
+            legend_label = base_label
+
+        (line_handle,) = ax.plot(
+            x_vals,
+            y_vals,
+            color=lift_color,
+            linewidth=2.0,
+            alpha=0.85,
+            solid_capstyle="round",
+            label=legend_label,
+            zorder=3,
+        )
+        lift_line_handles.append(line_handle)
+
+        # Phase-transition dots: fill = phase color, edge = lift color
+        for i in range(1, len(phase_vals)):
+            if phase_vals[i] != phase_vals[i - 1]:
+                transition_phase = int(phase_vals[i])
+                phase_color = PHASE_COLORS[transition_phase % len(PHASE_COLORS)]
+                ax.plot(
+                    x_vals[i],
+                    y_vals[i],
+                    marker="o",
+                    color=phase_color,
+                    markersize=7,
+                    markeredgecolor=lift_color,
+                    markeredgewidth=1.2,
+                    zorder=5,
+                    label="_nolegend_",
+                )
+                seen_phases_global.add(transition_phase)
+
+    # Phase-dot legend entries (one per observed phase)
+    phase_dot_handles = []
+    for phase_id in sorted(PHASE_COLORS):
+        if phase_id in seen_phases_global:
+            phase_dot_handles.append(
+                mlines.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor=PHASE_COLORS[phase_id],
+                    markeredgecolor="#555555",
+                    markeredgewidth=0.8,
+                    markersize=8,
+                    label=f"\u2192 {PHASE_LABELS[phase_id]}",
+                )
+            )
+
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel(f"Horizontal Displacement ({unit_label})", fontsize=12)
+    ax.set_ylabel(f"Vertical Displacement ({unit_label})", fontsize=12)
+    ax.grid(True, alpha=0.3)
+    ax.invert_yaxis()
+    ax.set_aspect("equal")
+
+    _set_path_axis_limits(ax, all_x, all_y, inverted_y=True)
+
+    ax.legend(
+        handles=lift_line_handles + phase_dot_handles,
+        loc="best",
+        fontsize=9,
+        title="Lifts / Phase transitions",
+        title_fontsize=9,
+    )
+
+    output_path = Path(output_dir) / filename
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  ✓ Generated: {output_path}")
+
+
+def _compute_scaled_paths_and_similarity(lift_paths):
+    """
+    Given a list of ``(label, x_vals, y_vals, phase_vals)`` tuples:
+
+    1. Keep the first lift (index 0) as the reference — its coordinates are
+       unchanged.
+    2. For every subsequent lift, compute the best uniform scale factor that
+       maps its phase-transition markers onto the reference markers
+       (least-squares, see :func:`_uniform_scale_to_reference`), then scale
+       its x and y arrays by that factor.
+    3. Compute the DTW similarity percentage between each scaled non-reference
+       path and the reference path (on the *scaled* coordinates so the
+       comparison reflects the shape rather than the absolute size).
+
+    Returns
+    -------
+    scaled_paths : list of (label, x_vals, y_vals, phase_vals)
+        Reference lift unchanged; others have scaled x/y.
+    similarity_scores : list of float or None
+        Index 0 is ``None`` (reference has no score vs itself); subsequent
+        entries are the DTW percentage for that lift vs the reference.
+    scale_factors : list of float
+        Scale factor applied to each lift (1.0 for the reference).
+    """
+    if not lift_paths:
+        return lift_paths, [], []
+
+    scaled_paths = []
+    similarity_scores: list = []
+    scale_factors: list = []
+
+    ref_label, ref_x, ref_y, ref_ph = lift_paths[0]
+    scaled_paths.append((ref_label, ref_x, ref_y, ref_ph))
+    similarity_scores.append(None)  # reference has no score vs itself
+    scale_factors.append(1.0)
+
+    ref_xy = np.column_stack([ref_x, ref_y])
+
+    for label, x, y, ph in lift_paths[1:]:
+        # Find the best uniform scale
+        s = _uniform_scale_to_reference(ref_x, ref_y, ref_ph, x, y, ph)
+        sx = x * s
+        sy = y * s
+        scaled_paths.append((label, sx, sy, ph))
+        scale_factors.append(s)
+
+        # DTW similarity on the scaled path vs the reference
+        other_xy = np.column_stack([sx, sy])
+        pct = _dtw_similarity_pct(ref_xy, other_xy)
+        similarity_scores.append(pct)
+
+        print(
+            f"  Superimposed scaling: '{label}' scale={s:.4f}, "
+            f"DTW similarity={pct:.1f}%"
+        )
+
+    return scaled_paths, similarity_scores, scale_factors
+
+
+def plot_superimposed_paths_compensated(
+    video_data_list, output_dir, use_filenames=False
+):
+    """
+    Superimposed bar-path graph using real-world centimetre traces.
+
+    Every lift uses its ``barbell_x/y_corrected_cm`` columns when they exist
+    and contain at least one non-NaN value.  These columns are now produced
+    for all lifts — angled-view lifts use the shoulder-width scale (Path A)
+    and side-on lifts use the hip-to-shoulder vertical scale (Path B) — so
+    all traces are in the same physical unit (cm) and can be directly compared.
+
+    A lift falls back to its smoothed pixel columns only if the corrected_cm
+    columns are missing or entirely NaN (e.g. world_landmarks were absent).
+    Lifts where neither column set exists are silently skipped.
+
+    The Y axis is labelled "cm" whenever at least one lift has corrected data,
+    and "px" only if every lift fell back to pixels.
+
+    Non-reference lifts are uniformly scaled to best match the reference
+    lift's phase-transition marker positions (no distortion — both x and y
+    are multiplied by the same scalar).  DTW similarity percentages vs the
+    reference are shown in the legend.
+
+    Parameters
+    ----------
+    video_data_list : list of (label, df) tuples
+    output_dir : str or Path
+    use_filenames : bool
+    """
+    if not video_data_list:
+        print("Skipping compensated superimposed path: no data provided.")
+        return
+
+    SMOOTH_COLS = ["barbell_x_smooth", "barbell_y_smooth", "bar_phase"]
+    CORR_COLS = [
+        "barbell_x_corrected_cm",
+        "barbell_y_corrected_cm",
+        "bar_phase",
+    ]
+
+    raw_lift_paths = []
+    any_cm = False
+
+    for lift_idx, (file_label, df) in enumerate(video_data_list):
+        # Use corrected_cm for any lift that has valid (non-NaN) cm data,
+        # regardless of camera yaw — side-on lifts now produce cm columns too.
+        use_corrected = (
+            all(c in df.columns for c in CORR_COLS)
+            and df["barbell_x_corrected_cm"].notna().any()
+        )
+
+        if use_corrected:
+            x_col, y_col, phase_col = CORR_COLS
+            y_trunc_col = "barbell_y_corrected_cm"
+            any_cm = True
+            method = (
+                df["scale_method"].iloc[0]
+                if "scale_method" in df.columns
+                else "unknown"
+            )
+            print(
+                f"  Lift {lift_idx + 1} ({file_label}): using corrected_cm [{method}]"
+            )
+        elif (
+            all(c in df.columns for c in SMOOTH_COLS)
+            and df["barbell_x_smooth"].notna().any()
+        ):
+            x_col, y_col, phase_col = SMOOTH_COLS
+            y_trunc_col = "barbell_y_smooth"
+            print(
+                f"  Lift {lift_idx + 1} ({file_label}): falling back to smoothed px (no cm data)"
+            )
+        else:
+            print(f"  Skipping lift {lift_idx + 1}: no usable path columns.")
+            continue
+
+        result = _extract_lift_path(df, x_col, y_col, phase_col, y_trunc_col)
+        if result is None:
+            print(f"  Skipping lift {lift_idx + 1}: insufficient data points.")
+            continue
+
+        raw_lift_paths.append((file_label, result[0], result[1], result[2]))
+
+    if not raw_lift_paths:
+        print(
+            "Skipping compensated superimposed path: all lifts had insufficient data."
+        )
+        return
+
+    # Scale non-reference lifts and compute DTW similarity
+    lift_paths, similarity_scores, scale_factors = _compute_scaled_paths_and_similarity(
+        raw_lift_paths
+    )
+
+    unit_label = "cm" if any_cm else "px"
+    title = (
+        "Superimposed Bar Paths — Real-World Scale\n"
+        "(origin-normalised at pull-under start; non-reference lifts uniformly scaled to reference)"
+    )
+
+    _draw_superimposed_figure(
+        lift_paths,
+        output_dir,
+        filename="superimposed_bar_paths_compensated.png",
+        title=title,
+        unit_label=unit_label,
+        use_filenames=use_filenames,
+        similarity_scores=similarity_scores,
+    )
+
+
+def plot_superimposed_paths_smoothed(video_data_list, output_dir, use_filenames=False):
+    """
+    Superimposed bar-path graph using the smoothed pixel-space traces for
+    every lift, regardless of whether angle-compensated data is available.
+
+    Non-reference lifts are uniformly scaled to best match the reference
+    lift's phase-transition marker positions.  DTW similarity percentages
+    vs the reference are shown in the legend.
+
+    Parameters
+    ----------
+    video_data_list : list of (label, df) tuples
+    output_dir : str or Path
+    use_filenames : bool
+    """
+    if not video_data_list:
+        print("Skipping smoothed superimposed path: no data provided.")
+        return
+
+    SMOOTH_COLS = ["barbell_x_smooth", "barbell_y_smooth", "bar_phase"]
+
+    raw_lift_paths = []
+    for lift_idx, (file_label, df) in enumerate(video_data_list):
+        if not all(c in df.columns for c in SMOOTH_COLS):
+            print(f"  Skipping lift {lift_idx + 1}: smoothed columns not found.")
+            continue
+        if not df["barbell_x_smooth"].notna().any():
+            print(f"  Skipping lift {lift_idx + 1}: smoothed columns are all NaN.")
+            continue
+
+        result = _extract_lift_path(
+            df,
+            x_col="barbell_x_smooth",
+            y_col="barbell_y_smooth",
+            phase_col="bar_phase",
+            y_trunc_col="barbell_y_smooth",
+        )
+        if result is None:
+            print(f"  Skipping lift {lift_idx + 1}: insufficient data points.")
+            continue
+
+        raw_lift_paths.append((file_label, result[0], result[1], result[2]))
+
+    if not raw_lift_paths:
+        print("Skipping smoothed superimposed path: all lifts had insufficient data.")
+        return
+
+    # Scale non-reference lifts and compute DTW similarity
+    lift_paths, similarity_scores, scale_factors = _compute_scaled_paths_and_similarity(
+        raw_lift_paths
+    )
+
+    _draw_superimposed_figure(
+        lift_paths,
+        output_dir,
+        filename="superimposed_bar_paths_smoothed.png",
+        title="Superimposed Bar Paths — Smoothed\n(origin-normalised; non-reference lifts uniformly scaled to reference)",
+        unit_label="px",
+        use_filenames=use_filenames,
+        similarity_scores=similarity_scores,
+    )
 
 
 # ---------------------------------------------------------------------------
