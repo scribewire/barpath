@@ -10,6 +10,7 @@ import os
 import sys
 from pathlib import Path
 import ast
+
 try:
     import cv2
 except ImportError:
@@ -24,18 +25,19 @@ except ImportError:
 # GEOMETRIC CALCULATIONS
 # ============================================================================
 
+
 def calculate_angle(p1, p2, p3):
     """
     Calculate the angle (in degrees) between three 2D points.
-    
+
     Args:
         p1 (np.ndarray): First point [x, y]
         p2 (np.ndarray): Vertex point [x, y]
         p3 (np.ndarray): Third point [x, y]
-    
+
     Returns:
         float: Angle in degrees, or np.nan if calculation fails
-    
+
     Example:
         >>> p1 = np.array([0, 0])
         >>> p2 = np.array([1, 0])
@@ -46,22 +48,22 @@ def calculate_angle(p1, p2, p3):
     # Check for NaN values
     if np.isnan(p1).any() or np.isnan(p2).any() or np.isnan(p3).any():
         return np.nan
-    
+
     # Calculate vectors from vertex (p2) to the other points
     v1 = p1 - p2
     v2 = p3 - p2
-    
+
     # Calculate dot product and norms
     dot = np.dot(v1, v2)
     norm = np.linalg.norm(v1) * np.linalg.norm(v2)
-    
+
     # Handle numerical instability or zero-length vectors
     if norm == 0:
         return np.nan
-    
+
     # Clamp cosine value to [-1, 1] to avoid domain errors
     cosine_angle = np.clip(dot / norm, -1.0, 1.0)
-    
+
     # Return angle in degrees
     angle = np.arccos(cosine_angle)
     return np.degrees(angle)
@@ -70,19 +72,19 @@ def calculate_angle(p1, p2, p3):
 def calculate_lifter_angle(left_shoulder_or_landmarks, right_shoulder=None):
     """
     Calculate the lifter's orientation angle using shoulder positions.
-    
+
     Uses the (x, z) coordinates to determine if the lifter is facing
     straight (90°) or at an angle to the camera.
-    
+
     Can be called two ways:
     1. With two tuples: calculate_lifter_angle(left_shoulder, right_shoulder)
     2. With landmarks dict: calculate_lifter_angle(landmarks)
-    
+
     Args:
         left_shoulder_or_landmarks: Either a shoulder tuple (x, y, z, visibility)
                                    or a landmarks dict
         right_shoulder (tuple): (x, y, z, visibility) for right shoulder, or None if first arg is dict
-    
+
     Returns:
         float: Orientation angle in degrees (90° = perpendicular to camera)
     """
@@ -90,32 +92,32 @@ def calculate_lifter_angle(left_shoulder_or_landmarks, right_shoulder=None):
     if isinstance(left_shoulder_or_landmarks, dict):
         landmarks = left_shoulder_or_landmarks
         try:
-            left_shoulder = landmarks.get('left_shoulder')
-            right_shoulder_val = landmarks.get('right_shoulder')
-            
+            left_shoulder = landmarks.get("left_shoulder")
+            right_shoulder_val = landmarks.get("right_shoulder")
+
             if left_shoulder is None or right_shoulder_val is None:
                 return np.nan
-            
+
             # Use (x, z) coordinates (indices 0 and 2)
             delta_x = left_shoulder[0] - right_shoulder_val[0]
             delta_z = left_shoulder[2] - right_shoulder_val[2]
-            
+
             angle_rad = np.arctan2(delta_z, delta_x)
             angle_deg = 90 - abs(np.degrees(angle_rad))
             return angle_deg
         except (IndexError, TypeError, AttributeError):
             return np.nan
-    
+
     # Handle tuple input (two separate arguments)
     left_shoulder = left_shoulder_or_landmarks
     if left_shoulder is None or right_shoulder is None:
         return np.nan
-    
+
     try:
         # Use (x, z) coordinates (indices 0 and 2)
         delta_x = left_shoulder[0] - right_shoulder[0]
         delta_z = left_shoulder[2] - right_shoulder[2]
-        
+
         angle_rad = np.arctan2(delta_z, delta_x)
         angle_deg = 90 - abs(np.degrees(angle_rad))
         return angle_deg
@@ -127,14 +129,15 @@ def calculate_lifter_angle(left_shoulder_or_landmarks, right_shoulder=None):
 # DATA VALIDATION
 # ============================================================================
 
+
 def check_file_exists(filepath, file_description="File"):
     """
     Check if a file exists and exit with error message if not.
-    
+
     Args:
         filepath (str): Path to check
         file_description (str): Human-readable description for error message
-    
+
     Raises:
         SystemExit: If file doesn't exist
     """
@@ -146,35 +149,35 @@ def check_file_exists(filepath, file_description="File"):
 def validate_video_path(video_path):
     """
     Validate that video path exists and has valid extension.
-    
+
     Args:
         video_path (str): Path to video file
-    
+
     Returns:
         bool: True if valid, False otherwise
     """
     if not os.path.exists(video_path):
         print(f"❌ Error: Video file not found at '{video_path}'")
         return False
-    
-    valid_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv'}
+
+    valid_extensions = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv"}
     ext = os.path.splitext(video_path)[1].lower()
-    
+
     if ext not in valid_extensions:
         print(f"❌ Error: Unsupported video format '{ext}'")
         print(f"   Supported formats: {', '.join(valid_extensions)}")
         return False
-    
+
     return True
 
 
 def validate_model_path(model_path):
     """
     Validate that model path exists and is a valid YOLO model.
-    
+
     Args:
         model_path (str): Path to model file
-    
+
     Returns:
         bool: True if valid, False otherwise
     """
@@ -183,19 +186,19 @@ def validate_model_path(model_path):
         print("\n💡 Tip: Download models with:")
         print("   python models/download_models.py")
         return False
-    
-    if not model_path.endswith('.pt'):
+
+    if not model_path.endswith(".pt"):
         print(f"❌ Error: Model must be a .pt file, got '{model_path}'")
         return False
-    
+
     # Check file size (should be >1 MB for real model, not a pointer)
     file_size = os.path.getsize(model_path)
     if file_size < 1_000_000:  # Less than 1 MB
-        print(f"⚠️  Warning: Model file is only {file_size/1024:.1f} KB")
+        print(f"⚠️  Warning: Model file is only {file_size / 1024:.1f} KB")
         print("   This might be a Git LFS pointer file, not the actual model.")
         print("   Run: git lfs pull")
         return False
-    
+
     return True
 
 
@@ -203,44 +206,45 @@ def validate_model_path(model_path):
 # COORDINATE TRANSFORMATIONS
 # ============================================================================
 
+
 def normalize_to_pixel_coords(normalized_x, normalized_y, frame_width, frame_height):
     """
     Convert normalized coordinates [0, 1] to pixel coordinates.
-    
+
     Args:
         normalized_x (float): X coordinate normalized to [0, 1]
         normalized_y (float): Y coordinate normalized to [0, 1]
         frame_width (int): Frame width in pixels
         frame_height (int): Frame height in pixels
-    
+
     Returns:
         tuple: (pixel_x, pixel_y) or (np.nan, np.nan) if inputs are invalid
     """
     if np.isnan(normalized_x) or np.isnan(normalized_y):
         return np.nan, np.nan
-    
+
     pixel_x = normalized_x * frame_width
     pixel_y = normalized_y * frame_height
-    
+
     return pixel_x, pixel_y
 
 
 def pixel_to_normalized_coords(pixel_x, pixel_y, frame_width, frame_height):
     """
     Convert pixel coordinates to normalized coordinates [0, 1].
-    
+
     Args:
         pixel_x (float): X coordinate in pixels
         pixel_y (float): Y coordinate in pixels
         frame_width (int): Frame width in pixels
         frame_height (int): Frame height in pixels
-    
+
     Returns:
         tuple: (normalized_x, normalized_y)
     """
     normalized_x = pixel_x / frame_width
     normalized_y = pixel_y / frame_height
-    
+
     return normalized_x, normalized_y
 
 
@@ -248,10 +252,11 @@ def pixel_to_normalized_coords(pixel_x, pixel_y, frame_width, frame_height):
 # PATH UTILITIES
 # ============================================================================
 
+
 def ensure_dir_exists(directory):
     """
     Create directory if it doesn't exist.
-    
+
     Args:
         directory (str): Directory path to create
     """
@@ -261,7 +266,7 @@ def ensure_dir_exists(directory):
 def get_project_root():
     """
     Get the project root directory.
-    
+
     Returns:
         Path: Project root directory
     """
@@ -271,7 +276,7 @@ def get_project_root():
 def get_models_dir():
     """
     Get the models directory path.
-    
+
     Returns:
         Path: Models directory
     """
@@ -282,10 +287,11 @@ def get_models_dir():
 # PROGRESS & LOGGING
 # ============================================================================
 
+
 def print_header(text, width=70):
     """
     Print a formatted header for console output.
-    
+
     Args:
         text (str): Header text
         width (int): Total width of header
@@ -299,13 +305,13 @@ def print_header(text, width=70):
 def print_section(text):
     """
     Print a section divider.
-    
+
     Args:
         text (str): Section text
     """
     print(f"\n{'─' * 70}")
     print(f"  {text}")
-    print('─' * 70)
+    print("─" * 70)
 
 
 def print_success(text):
@@ -332,14 +338,15 @@ def print_info(text):
 # STATISTICS & METRICS
 # ============================================================================
 
+
 def calculate_detection_rate(detected_count, total_count):
     """
     Calculate detection rate percentage.
-    
+
     Args:
         detected_count (int): Number of successful detections
         total_count (int): Total number of frames
-    
+
     Returns:
         float: Detection rate as percentage
     """
@@ -351,14 +358,14 @@ def calculate_detection_rate(detected_count, total_count):
 def format_file_size(size_bytes):
     """
     Format file size in human-readable format.
-    
+
     Args:
         size_bytes (int): Size in bytes
-    
+
     Returns:
         str: Formatted size (e.g., "45.23 MB")
     """
-    for unit in ['B', 'KB', 'MB', 'GB']:
+    for unit in ["B", "KB", "MB", "GB"]:
         if size_bytes < 1024.0:
             return f"{size_bytes:.2f} {unit}"
         size_bytes /= 1024.0
@@ -369,74 +376,87 @@ def format_file_size(size_bytes):
 # VIDEO DRAWING UTILITIES
 # ============================================================================
 
+
 def draw_legend(image, colors):
     """
     Draws a color legend on the image.
-    
+
     Args:
         image (np.ndarray): The frame/image to draw on
         colors (dict): Dictionary of color names to BGR tuples
-    
+
     Returns:
         int: Y offset after legend (for text placement)
     """
     if cv2 is None:
         return 0
-    
+
     y_offset = 30
     for i, (name, color) in enumerate(colors.items()):
-        cv2.rectangle(image, (15, 10 + i * y_offset), (35, 30 + i * y_offset), color, -1)
-        cv2.putText(image, name, (45, 25 + i * y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.rectangle(
+            image, (15, 10 + i * y_offset), (35, 30 + i * y_offset), color, -1
+        )
+        cv2.putText(
+            image,
+            name,
+            (45, 25 + i * y_offset),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+        )
     return 15 + len(colors) * y_offset
 
 
 def get_connection_color(lm1_name, lm2_name, color_scheme):
     """
     Determines the color for a skeleton connection based on body part.
-    
+
     Args:
         lm1_name (str): First landmark name
         lm2_name (str): Second landmark name
         color_scheme (dict): Color scheme dictionary
-    
+
     Returns:
         tuple: BGR color tuple
     """
     # Check for torso connections
-    if ('shoulder' in lm1_name or 'hip' in lm1_name) and ('shoulder' in lm2_name or 'hip' in lm2_name):
+    if ("shoulder" in lm1_name or "hip" in lm1_name) and (
+        "shoulder" in lm2_name or "hip" in lm2_name
+    ):
         return color_scheme.get("Torso", (255, 255, 0))
-    
+
     # Check for left side
-    if 'left' in lm1_name and 'left' in lm2_name:
-        if any(part in lm1_name for part in ['shoulder', 'elbow', 'wrist']):
+    if "left" in lm1_name and "left" in lm2_name:
+        if any(part in lm1_name for part in ["shoulder", "elbow", "wrist"]):
             return color_scheme.get("Left Arm", (0, 165, 255))
-        if any(part in lm1_name for part in ['hip', 'knee', 'ankle']):
+        if any(part in lm1_name for part in ["hip", "knee", "ankle"]):
             return color_scheme.get("Left Leg", (255, 0, 128))
-    
+
     # Check for right side
-    if 'right' in lm1_name and 'right' in lm2_name:
-        if any(part in lm1_name for part in ['shoulder', 'elbow', 'wrist']):
+    if "right" in lm1_name and "right" in lm2_name:
+        if any(part in lm1_name for part in ["shoulder", "elbow", "wrist"]):
             return color_scheme.get("Right Arm", (0, 255, 255))
-        if any(part in lm1_name for part in ['hip', 'knee', 'ankle']):
+        if any(part in lm1_name for part in ["hip", "knee", "ankle"]):
             return color_scheme.get("Right Leg", (0, 255, 0))
-    
+
     return (255, 255, 255)
 
 
 def parse_landmarks_from_string(landmarks_str):
     """
     Safely parses the landmark dictionary string from the CSV.
-    
+
     Args:
         landmarks_str (str): String representation of landmarks dict
-    
+
     Returns:
         dict: Parsed landmarks dictionary, or empty dict if parsing fails
     """
     try:
         if pd is not None and pd.isna(landmarks_str):
             return {}
-        if landmarks_str == '{}' or landmarks_str == '':
+        if landmarks_str == "{}" or landmarks_str == "":
             return {}
         return ast.literal_eval(landmarks_str)
     except Exception:
@@ -446,19 +466,19 @@ def parse_landmarks_from_string(landmarks_str):
 def parse_barbell_box(box_str):
     """
     Parses the barbell box string from CSV.
-    
+
     Args:
         box_str (str): String representation of box coordinates
-    
+
     Returns:
         tuple: (x1, y1, x2, y2) as integers, or None if parsing fails
     """
     try:
         if pd is not None and pd.isna(box_str):
             return None
-        if box_str == '' or box_str is None:
+        if box_str == "" or box_str is None:
             return None
-        values = [float(v.strip()) for v in str(box_str).split(',')]
+        values = [float(v.strip()) for v in str(box_str).split(",")]
         if len(values) == 4:
             return tuple(map(int, values))
     except Exception:
@@ -472,21 +492,27 @@ def parse_barbell_box(box_str):
 
 # MediaPipe landmark names (used across pipeline)
 LANDMARK_NAMES = {
-    'left_shoulder', 'right_shoulder', 
-    'left_hip', 'right_hip', 
-    'left_knee', 'right_knee',
-    'left_ankle', 'right_ankle', 
-    'left_elbow', 'right_elbow', 
-    'left_wrist', 'right_wrist',
+    "left_shoulder",
+    "right_shoulder",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
 }
 
 # Color scheme for visualization
 COLOR_SCHEME = {
-    "Torso": (255, 255, 0),      # Cyan
-    "Left Arm": (0, 165, 255),   # Orange
+    "Torso": (255, 255, 0),  # Cyan
+    "Left Arm": (0, 165, 255),  # Orange
     "Right Arm": (0, 255, 255),  # Yellow
-    "Left Leg": (255, 0, 128),   # Purple
-    "Right Leg": (0, 255, 0),    # Green
-    "Barbell Box": (255, 0, 255),# Magenta
-    "Barbell Path": (0, 0, 255), # Red
+    "Left Leg": (255, 0, 128),  # Purple
+    "Right Leg": (0, 255, 0),  # Green
+    "Barbell Box": (255, 0, 255),  # Magenta
+    "Barbell Path": (0, 0, 255),  # Red
 }
