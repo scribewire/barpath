@@ -15,45 +15,33 @@ from utils import (
     parse_landmarks_from_string,
 )
 
-# --- Constants ---
-# ---------------------------------------------------------------------------
-# Phase colors — BGR order (OpenCV).
-# Must match the hex values used in 3_generate_graphs.py:
-#   Pull        #e02020  → (32,  32, 224)
-#   Pull-under  #f07800  → (0,  120, 240)
-#   Recovery    #18a020  → (32, 160,  24)
-# ---------------------------------------------------------------------------
+from config import (
+    GC_INTERVAL_FRAMES,
+    FPS_SMOOTHING,
+    PHASE_COLORS_BGR,
+    SKELETON_LINE_THICKNESS,
+    LANDMARK_RADIUS,
+    BARBELL_BOX_THICKNESS,
+)
+
 LEGEND_COLORS = {
     "Barbell Box": COLOR_SCHEME["Barbell Box"],
-    "Pull": (32, 32, 224),  # BGR for #e02020 — vivid red
-    "Pull-under": (0, 120, 240),  # BGR for #f07800 — vivid orange
-    "Recovery": (32, 160, 24),  # BGR for #18a020 — vivid green
+    "Pull": PHASE_COLORS_BGR[0],
+    "Pull-under": PHASE_COLORS_BGR[1],
+    "Recovery": PHASE_COLORS_BGR[2],
 }
 
-# Integer-keyed BGR lookup used when drawing per-segment bar path lines
-PHASE_COLORS_BGR = {
-    0: (32, 32, 224),  # Phase 0 — Pull        (vivid red)
-    1: (0, 120, 240),  # Phase 1 — Pull-under  (vivid orange)
-    2: (32, 160, 24),  # Phase 2 — Recovery    (vivid green)
-}
-
-# Skeleton connections to draw
 SKELETON_CONNECTIONS = [
-    # Torso
     ("left_shoulder", "right_shoulder"),
     ("left_shoulder", "left_hip"),
     ("right_shoulder", "right_hip"),
     ("left_hip", "right_hip"),
-    # Left arm
     ("left_shoulder", "left_elbow"),
     ("left_elbow", "left_wrist"),
-    # Right arm
     ("right_shoulder", "right_elbow"),
     ("right_elbow", "right_wrist"),
-    # Left leg
     ("left_hip", "left_knee"),
     ("left_knee", "left_ankle"),
-    # Right leg
     ("right_hip", "right_knee"),
     ("right_knee", "right_ankle"),
 ]
@@ -141,7 +129,6 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
     # Performance tracking for FPS display
     last_iter_timestamp = time.perf_counter()
     smoothed_fps = None
-    fps_smoothing = 0.2
 
     # Loop through frames and yield progress
     for frame_idx in range(frames_to_render):
@@ -223,7 +210,7 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
             if barbell_box:
                 x1, y1, x2, y2 = barbell_box
                 cv2.rectangle(
-                    frame, (x1, y1), (x2, y2), LEGEND_COLORS["Barbell Box"], 2
+                    frame, (x1, y1), (x2, y2), LEGEND_COLORS["Barbell Box"], BARBELL_BOX_THICKNESS
                 )
 
         # --- Draw Skeleton ---
@@ -243,10 +230,10 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
                         p1 = landmark_pixels[lm1_name]
                         p2 = landmark_pixels[lm2_name]
                         color = get_connection_color(lm1_name, lm2_name, LEGEND_COLORS)
-                        cv2.line(frame, p1, p2, color, 3)
+                        cv2.line(frame, p1, p2, color, SKELETON_LINE_THICKNESS)
 
                 for name, (px, py) in landmark_pixels.items():
-                    cv2.circle(frame, (px, py), 5, (255, 255, 255), -1)
+                    cv2.circle(frame, (px, py), LANDMARK_RADIUS, (255, 255, 255), -1)
 
         # --- Draw Legend and Info Text ---
         last_y = draw_legend(frame, LEGEND_COLORS)
@@ -272,8 +259,8 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
         if smoothed_fps is None:
             smoothed_fps = inst_fps
         else:
-            smoothed_fps = (fps_smoothing * inst_fps) + (
-                (1 - fps_smoothing) * smoothed_fps
+            smoothed_fps = (FPS_SMOOTHING * inst_fps) + (
+                (1 - FPS_SMOOTHING) * smoothed_fps
             )
         last_iter_timestamp = now_ts
 
@@ -289,7 +276,7 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
         del frame
         if points_to_draw is not None:
             del points_to_draw
-        if frame_idx % 50 == 0:
+        if frame_idx % GC_INTERVAL_FRAMES == 0:
             gc.collect()
 
     cap.release()
