@@ -1,0 +1,166 @@
+"""
+Central configuration for the barpath analysis pipeline.
+
+All magic numbers, thresholds, and tunable parameters are defined here
+so they can be adjusted in one place and easily tested.
+"""
+
+# ---------------------------------------------------------------------------
+# Step 1: Data Collection
+# ---------------------------------------------------------------------------
+
+# Frame decoding queue size (buffer ahead of inference)
+DECODE_QUEUE_SIZE = 8
+
+# Target frames per second for analysis (higher FPS videos will be subsampled)
+TARGET_ANALYSIS_FPS = 30.0
+
+# YOLO detection confidence threshold
+YOLO_CONFIDENCE_THRESHOLD = 0.25
+
+# MediaPipe pose estimation settings
+MEDIAPIPE_DETECTION_CONFIDENCE = 0.5
+MEDIAPIPE_TRACKING_CONFIDENCE = 0.5
+MEDIAPIPE_MODEL_COMPLEXITY = 2
+
+# Stabilization parameters
+STAB_MIN_FEATURES = 50
+STAB_FEATURE_QUALITY = 0.01
+STAB_FEATURE_MIN_DISTANCE = 30
+STAB_LK_WINDOW_SIZE = 15
+STAB_LK_MAX_LEVEL = 2
+STAB_LK_CRITERIA_COUNT = 10
+STAB_LK_CRITERIA_EPS = 0.03
+STAB_MOTION_OUTLIER_THRESHOLD = 3.0
+
+# ---------------------------------------------------------------------------
+# Step 2: Data Analysis
+# ---------------------------------------------------------------------------
+
+# Landmarks to track (used for unpacking and angle calculations)
+LANDMARKS_TO_TRACK = {
+    "left_shoulder",
+    "right_shoulder",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+}
+
+# Smoothing window sizes (Savitzky-Golay)
+SAVGOL_POSITION_WINDOW = 11
+SAVGOL_VELOCITY_WINDOW = 15
+SAVGOL_POLY_ORDER = 3
+
+# Phase detection thresholds
+PHASE_VEL_THRESHOLD_FACTOR = 0.05  # fraction of max velocity
+PHASE_HIP_SMOOTH_WINDOW = 9
+PHASE_HIP_DROP_STD_FACTOR = 0.1
+
+# Truncation settings
+TRUNCATION_BUFFER_SECONDS = 1.0  # seconds before knee pass to keep
+
+# Perspective correction
+PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG = 10.0
+PERSPECTIVE_IQR_MULTIPLIER = 1.5
+PERSPECTIVE_SCALE_SG_WINDOW = 31
+PERSPECTIVE_SCALE_SG_POLY = 3
+PERSPECTIVE_PATH_SG_WINDOW = 25
+PERSPECTIVE_PATH_SG_POLY = 3
+
+# Barbell endcap real-world width (metres)
+BARBELL_ENDCAP_WIDTH_M = 0.05  # 50mm
+
+# ---------------------------------------------------------------------------
+# Step 3: Graph Generation
+# ---------------------------------------------------------------------------
+
+# Graph DPI and sizing
+GRAPH_DPI = 150
+GRAPH_WIDTH_PATH = 8
+GRAPH_HEIGHT_PATH = 10
+GRAPH_WIDTH_TIMESERIES = 12
+GRAPH_HEIGHT_TIMESERIES = 6
+
+# Phase colors (hex)
+PHASE_COLORS = {
+    0: "#e02020",  # Pull - vivid red
+    1: "#f07800",  # Pull-under - vivid orange
+    2: "#18a020",  # Recovery - vivid green
+}
+
+PHASE_LABELS = {
+    0: "Pull",
+    1: "Pull-under",
+    2: "Recovery",
+}
+
+PHASE_FILL_ALPHA = 0.12
+
+# Start/end marker colors
+START_MARKER_COLOR = "white"
+START_MARKER_EDGE = "black"
+END_MARKER_COLOR = "black"
+END_MARKER_EDGE = "white"
+
+# Multi-lift palette for superimposed graphs
+LIFT_PALETTE = [
+    "#1f77b4",  # muted blue
+    "#9467bd",  # muted purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#7f7f7f",  # medium grey
+    "#bcbd22",  # yellow-green
+    "#17becf",  # teal
+    "#aec7e8",  # light blue
+    "#ffbb78",  # light orange
+    "#c5b0d5",  # light purple
+]
+
+# DTW similarity scaling factor
+DTW_SIMILARITY_K = 5.0
+
+# ---------------------------------------------------------------------------
+# Step 4: Video Rendering
+# ---------------------------------------------------------------------------
+
+# Memory management: run garbage collection every N frames
+GC_INTERVAL_FRAMES = 50
+
+# FPS smoothing factor for display
+FPS_SMOOTHING = 0.2
+
+# Phase colors in BGR (OpenCV format)
+PHASE_COLORS_BGR = {
+    0: (32, 32, 224),    # Pull - vivid red
+    1: (0, 120, 240),    # Pull-under - vivid orange
+    2: (32, 160, 24),    # Recovery - vivid green
+}
+
+# Skeleton line thickness
+SKELETON_LINE_THICKNESS = 3
+LANDMARK_RADIUS = 5
+
+# Barbell box line thickness
+BARBELL_BOX_THICKNESS = 2
+
+# ---------------------------------------------------------------------------
+# Step 5: Critique
+# ---------------------------------------------------------------------------
+
+# Scale factor clamping for uniform scaling
+SCALE_MIN = 0.4
+SCALE_MAX = 2.5
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+# Log level: "DEBUG", "INFO", "WARNING", "ERROR"
+LOG_LEVEL = "INFO"

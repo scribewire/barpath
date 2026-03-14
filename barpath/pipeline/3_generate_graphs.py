@@ -9,49 +9,28 @@ import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 
-matplotlib.use("Agg")  # Use non-interactive backend
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ---------------------------------------------------------------------------
-# Phase color definitions (matplotlib named colors / hex)
-# Keep these in one place so every graph is consistent.
-# ---------------------------------------------------------------------------
-PHASE_COLORS = {
-    0: "#e02020",  # Pull        — vivid red
-    1: "#f07800",  # Pull-under  — vivid orange
-    2: "#18a020",  # Recovery    — vivid green
-}
-PHASE_LABELS = {
-    0: "Pull",
-    1: "Pull-under",
-    2: "Recovery",
-}
-
-# Lighter, transparent fills used for background shading on time-series plots
-PHASE_FILL_ALPHA = 0.12
-
-# Start / end marker styles that do NOT conflict with phase colors
-START_MARKER_COLOR = "white"
-START_MARKER_EDGE = "black"
-END_MARKER_COLOR = "black"
-END_MARKER_EDGE = "white"
-
-# ---------------------------------------------------------------------------
-# Palette for superimposed multi-lift paths.
-# Chosen to be visually distinct from each other AND from the phase colors.
-# ---------------------------------------------------------------------------
-LIFT_PALETTE = [
-    "#1f77b4",  # muted blue
-    "#9467bd",  # muted purple
-    "#8c564b",  # brown
-    "#e377c2",  # pink
-    "#7f7f7f",  # medium grey
-    "#bcbd22",  # yellow-green
-    "#17becf",  # teal
-    "#aec7e8",  # light blue
-    "#ffbb78",  # light orange
-    "#c5b0d5",  # light purple
-]
+from config import (
+    GRAPH_DPI,
+    GRAPH_WIDTH_PATH,
+    GRAPH_HEIGHT_PATH,
+    GRAPH_WIDTH_TIMESERIES,
+    GRAPH_HEIGHT_TIMESERIES,
+    PHASE_COLORS,
+    PHASE_LABELS,
+    PHASE_FILL_ALPHA,
+    START_MARKER_COLOR,
+    START_MARKER_EDGE,
+    END_MARKER_COLOR,
+    END_MARKER_EDGE,
+    LIFT_PALETTE,
+    DTW_SIMILARITY_K,
+    PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG,
+    SCALE_MIN,
+    SCALE_MAX,
+)
 
 
 def _phase_legend_handles():
@@ -353,7 +332,7 @@ def plot_barbell_lateral_corrected(df, output_dir):
     ax.legend(handles=phase_handles + marker_handles, loc="best", fontsize=9)
 
     output_path = Path(output_dir) / "barbell_lateral_corrected_path.png"
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path, dpi=GRAPH_DPI, bbox_inches="tight")
     plt.close(fig)
     print(f"  ✓ Generated: {output_path}")
 
@@ -378,7 +357,7 @@ def _plot_xy_path(df, x_col, y_col, title, filename, output_dir):
     y_vals = path_data_df[y_col].values
     phase_vals = path_data_df["bar_phase"].values.astype(int)
 
-    fig, ax = plt.subplots(figsize=(8, 10))
+    fig, ax = plt.subplots(figsize=(GRAPH_WIDTH_PATH, GRAPH_HEIGHT_PATH))
 
     _plot_phase_path(ax, x_vals, y_vals, phase_vals)
     _draw_start_end_markers(ax, x_vals, y_vals)
@@ -403,7 +382,7 @@ def _plot_xy_path(df, x_col, y_col, title, filename, output_dir):
     ax.legend(handles=phase_handles + marker_handles, loc="best", fontsize=9)
 
     graph_path = os.path.join(output_dir, filename)
-    plt.savefig(graph_path, dpi=150, bbox_inches="tight")
+    plt.savefig(graph_path, dpi=GRAPH_DPI, bbox_inches="tight")
     plt.close(fig)
     print(f"  ✓ Generated: {graph_path}")
     return graph_path
@@ -425,7 +404,7 @@ def _plot_timeseries(df, y_col, title, y_label, output_dir):
         )
         return None
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(GRAPH_WIDTH_TIMESERIES, GRAPH_HEIGHT_TIMESERIES))
 
     # --- Phase shading (drawn first so it sits behind the data line) ---
     if "bar_phase" in df.columns:
@@ -464,20 +443,10 @@ def _plot_timeseries(df, y_col, title, y_label, output_dir):
     )
 
     graph_path = os.path.join(output_dir, f"{y_col}_graph.png")
-    plt.savefig(graph_path, dpi=150, bbox_inches="tight")
+    plt.savefig(graph_path, dpi=GRAPH_DPI, bbox_inches="tight")
     plt.close(fig)
     print(f"  ✓ Generated: {graph_path}")
     return graph_path
-
-
-# ---------------------------------------------------------------------------
-# Superimposed multi-lift path graphs
-# ---------------------------------------------------------------------------
-
-# Camera-yaw threshold below which a lift is treated as "side-on" and the
-# angle-compensated columns are considered unreliable.  Must match the value
-# used in perspective_correction.py (_SIDE_ANGLE_THRESHOLD_DEG).
-_SIDE_ANGLE_THRESHOLD_DEG = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -635,9 +604,7 @@ def _dtw_similarity_pct(
 
     d_norm = mean_dev / bbox_diag
 
-    # k=5: 50% at d_norm≈0.14, 78% at d_norm≈0.05, 37% at d_norm≈0.20
-    k = 5.0
-    return float(100.0 * np.exp(-k * d_norm))
+    return float(100.0 * np.exp(-DTW_SIMILARITY_K * d_norm))
 
 
 def _find_phase_transition_points(
@@ -709,15 +676,12 @@ def _uniform_scale_to_reference(
 
     if denominator > 1e-9:
         scale = numerator / denominator
-        # Clamp to a physically sensible range — never shrink by more than
-        # 60 % or stretch by more than 2.5×
-        return float(np.clip(scale, 0.4, 2.5))
+        return float(np.clip(scale, SCALE_MIN, SCALE_MAX))
 
-    # Fallback: match arc-lengths
     ref_len = _path_length(np.column_stack([ref_x, ref_y]))
     other_len = _path_length(np.column_stack([other_x, other_y]))
     if other_len > 1e-9:
-        return float(np.clip(ref_len / other_len, 0.4, 2.5))
+        return float(np.clip(ref_len / other_len, SCALE_MIN, SCALE_MAX))
 
     return 1.0
 
@@ -823,7 +787,7 @@ def _draw_superimposed_figure(
     if similarity_scores is None:
         similarity_scores = [None] * len(lift_paths)
 
-    fig, ax = plt.subplots(figsize=(8, 10))
+    fig, ax = plt.subplots(figsize=(GRAPH_WIDTH_PATH, GRAPH_HEIGHT_PATH))
 
     all_x = np.concatenate([p[1] for p in lift_paths])
     all_y = np.concatenate([p[2] for p in lift_paths])
@@ -910,7 +874,7 @@ def _draw_superimposed_figure(
     )
 
     output_path = Path(output_dir) / filename
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path, dpi=GRAPH_DPI, bbox_inches="tight")
     plt.close(fig)
     print(f"  ✓ Generated: {output_path}")
 

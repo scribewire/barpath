@@ -3,64 +3,6 @@ Perspective correction helpers for Step 2: Data Analysis.
 
 This module converts the bar path from pixel space to real-world centimetres
 using MediaPipe shoulder geometry as a reference ruler.
-
-How it works
-------------
-MediaPipe provides shoulder positions in both normalised image coordinates
-and metric world coordinates (metres, centred at the hip midpoint).
-
-The ratio of the *world-space* shoulder width (metres) to the *pixel-space*
-projected shoulder width gives us a px→m scale factor:
-
-    scale = world_shoulder_width_m / pixel_shoulder_width_px
-
-Under a standard pinhole camera model this is equivalent to Z / f_px
-(depth divided by focal length in pixels), which is the correct factor for
-converting any pixel displacement at that depth into a real-world displacement:
-
-    Δx_world  =  Δu_px  ×  scale   (same depth assumption)
-
-The same depth assumption is valid for the barbell because the bar stays
-close to the athlete's body and moves within roughly the same depth plane
-as the torso throughout the lift.
-
-Stability
----------
-The raw per-frame scale can spike when the barbell occludes the shoulders
-(the bar passing the torso during the turnover phase).  Three successive
-steps guard against this:
-
-  1. IQR outlier rejection (Tukey fence, 1.5 × IQR) – spikes are nulled.
-  2. Linear interpolation across the resulting gaps, then bfill/ffill at
-     boundaries – the scale varies smoothly through occlusion windows.
-  3. Savitzky-Golay smoothing with a wide window – high-frequency MediaPipe
-     landmark jitter is suppressed.
-
-A *single stable scalar* (median of the smoothed scale over the first half of
-the Pull phase, or the full-series median as a fallback) is then used for the
-entire lift instead of a per-frame varying scale.  Using a per-frame rising
-scale on cumulative pixel displacement inflates the corrected path during the
-pull-under, because the pixel shoulder width shrinks as the shoulders rotate
-and the scale therefore rises by 10–20 %.  Applying that rising scale to the
-already-growing cumulative displacement overstates the lateral travel.  A
-single scalar avoids this entirely.
-
-Side-on shots: vertical reference scale
------------------------------------------
-When the camera yaw is within ±10° of a true side-on shot, both shoulders
-are almost coincident in the image.  The pixel shoulder *width* approaches
-zero and the shoulder-width-based scale blows up.  However, for a purely
-horizontal yaw rotation the vertical axis is not foreshortened at all, so
-the vertical distance between the shoulder midpoint and the hip midpoint is
-a perfectly reliable ruler.  We use that instead:
-
-    scale_side = world_hip_shoulder_vert_m / pixel_hip_shoulder_vert_px
-
-This produces valid barbell_x/y_corrected_cm columns for side-on shots in
-the same physical units as the angled-view corrected columns, which is
-essential for the superimposed comparison graph.  The yaw annotation in the
-output still records that this was a side-on shot so the caller can treat
-it differently if needed.
 """
 
 from typing import Optional, Tuple
@@ -69,30 +11,14 @@ import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-# Camera yaw angles within this half-range (degrees) are treated as
-# "side-on" – correction is skipped because the shoulder pixel width is
-# near-zero and world-Z estimates are unreliable.
-_SIDE_ANGLE_THRESHOLD_DEG = 10.0
-
-# IQR multiplier for Tukey-fence outlier rejection on the scale series.
-_IQR_MULTIPLIER = 1.5
-
-# Savitzky-Golay parameters for the scale series smoothing pass.
-_SCALE_SG_WINDOW = 31  # wide enough to span a full occlusion burst
-_SCALE_SG_POLY = 3
-
-# Savitzky-Golay parameters for the final cm-path smoothing pass.
-_PATH_SG_WINDOW = 25
-_PATH_SG_POLY = 3
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+from config import (
+    PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG,
+    PERSPECTIVE_IQR_MULTIPLIER,
+    PERSPECTIVE_SCALE_SG_WINDOW,
+    PERSPECTIVE_SCALE_SG_POLY,
+    PERSPECTIVE_PATH_SG_WINDOW,
+    PERSPECTIVE_PATH_SG_POLY,
+)
 
 
 def _make_odd(n: int) -> int:
@@ -221,8 +147,8 @@ def _robust_smooth_scale(raw_scale: pd.Series) -> pd.Series:
     iqr = q3 - q1
 
     if iqr > 0:
-        lo = q1 - _IQR_MULTIPLIER * iqr
-        hi = q3 + _IQR_MULTIPLIER * iqr
+        lo = q1 - PERSPECTIVE_IQR_MULTIPLIER * iqr
+        hi = q3 + PERSPECTIVE_IQR_MULTIPLIER * iqr
         outlier_mask = raw_scale.notna() & ((raw_scale < lo) | (raw_scale > hi))
         n_out = int(outlier_mask.sum())
         if n_out > 0:
@@ -245,13 +171,13 @@ def _robust_smooth_scale(raw_scale: pd.Series) -> pd.Series:
         return interpolated
 
     # Step 3 -- Savitzky-Golay smoothing
-    win = _make_odd(min(_SCALE_SG_WINDOW, n_valid))
-    win = max(win, _SCALE_SG_POLY + 2)
+    win = _make_odd(min(PERSPECTIVE_SCALE_SG_WINDOW, n_valid))
+    win = max(win, PERSPECTIVE_SCALE_SG_POLY + 2)
     if win % 2 == 0:
         win -= 1
 
-    if n_valid >= win and win > _SCALE_SG_POLY:
-        smoothed = savgol_filter(interpolated.values.astype(float), win, _SCALE_SG_POLY)
+    if n_valid >= win and win > PERSPECTIVE_SCALE_SG_POLY:
+        smoothed = savgol_filter(interpolated.values.astype(float), win, PERSPECTIVE_SCALE_SG_POLY)
         # Clamp to a physically plausible range so SG ringing at boundaries
         # cannot produce negative or absurdly large scale values.
         med = float(np.median(valid.to_numpy(dtype=float)))
@@ -562,12 +488,12 @@ def apply_perspective_correction(
         series = pd.Series(df[col])
         filled = series.interpolate(method="linear").bfill().ffill()
         n_valid = int(filled.notna().sum())
-        win = _make_odd(min(_PATH_SG_WINDOW, n_valid))
-        win = max(win, _PATH_SG_POLY + 2)
+        win = _make_odd(min(PERSPECTIVE_PATH_SG_WINDOW, n_valid))
+        win = max(win, PERSPECTIVE_PATH_SG_POLY + 2)
         if win % 2 == 0:
             win -= 1
-        if n_valid >= win and win > _PATH_SG_POLY:
-            df[col] = savgol_filter(filled.values.astype(float), win, _PATH_SG_POLY)
+        if n_valid >= win and win > PERSPECTIVE_PATH_SG_POLY:
+            df[col] = savgol_filter(filled.values.astype(float), win, PERSPECTIVE_PATH_SG_POLY)
         else:
             df[col] = filled
 
@@ -668,11 +594,11 @@ def calculate_perspective_correction(
         return df
 
     # 3. Choose scale method based on camera yaw
-    is_side_on = abs(reference_camera_yaw_deg) < _SIDE_ANGLE_THRESHOLD_DEG
+    is_side_on = abs(reference_camera_yaw_deg) < PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG
     if is_side_on:
         print(
             f"  Camera yaw {reference_camera_yaw_deg:.1f} deg is within the "
-            f"+/-{_SIDE_ANGLE_THRESHOLD_DEG} deg side-angle threshold. "
+            f"+/-{PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG} deg side-angle threshold. "
             "Using hip-to-shoulder vertical distance as scale reference "
             "(shoulder pixel width is degenerate from a side-on view)."
         )
