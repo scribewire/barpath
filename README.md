@@ -81,6 +81,25 @@
 
 ## 🔧 Requirements
 
+### 🧼 Code formatting & linting
+
+We use [ruff](https://github.com/charliermarsh/ruff) to enforce a consistent style and catch common problems. A GitHub Actions workflow (`.github/workflows/ruff.yml`) runs `ruff check .` on every push and pull request; the job will fail if any issue is found.
+
+Prospective contributors should run the same check locally before committing:
+
+```bash
+# install ruff (it's lightweight)
+pip install ruff
+
+# lint the repository – the command will exit non-zero if problems exist
+ruff check .
+```
+
+You can also auto‑format with `ruff format .` or configure your editor to format on save.
+
+Any code (hand‑written or agent‑generated) must pass ruff so the CI stays green.
+
+
 ### System Dependencies
 
 | Dependency | Purpose | Installation |
