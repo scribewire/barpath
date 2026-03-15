@@ -7,9 +7,7 @@ Analyzes the lift phases and provides feedback on technique faults.
 import argparse
 import os
 
-import numpy as np
 import pandas as pd
-
 from analysis_utils import calculate_max_specific_power
 from step5_helpers.classics_phase_detection import identify_classics_phases
 from step5_helpers.clean import check_clean_faults
@@ -30,18 +28,26 @@ def write_analysis_md(critiques, phases, df, lift_type, output_path="analysis.md
                 max_power_real = max_power_result.get("max_power_real")
 
                 if max_power_real is not None:
-                    f.write(f"- **Peak Power (Pull -> Pull-under):** {max_power_real:.2f} W/kg\n")
+                    f.write(
+                        f"- **Peak Power (Pull -> Pull-under):** {max_power_real:.2f} W/kg\n"
+                    )
                     f.write(f"  *(Raw: {max_power_px:.2f} px^2/s^3)*\n\n")
                 else:
-                    f.write(f"- **Peak Power (Pull -> Pull-under):** {max_power_px:.2f} px^2/s^3\n")
-                    f.write("  *(Note: Real-world conversion unavailable - endcap not detected)*\n\n")
+                    f.write(
+                        f"- **Peak Power (Pull -> Pull-under):** {max_power_px:.2f} px^2/s^3\n"
+                    )
+                    f.write(
+                        "  *(Note: Real-world conversion unavailable - endcap not detected)*\n\n"
+                    )
 
             f.write("## Phase Timing\n")
             if phases:
 
                 def get_duration(start_idx, end_idx):
                     try:
-                        return float(df.loc[end_idx, "time_s"] - df.loc[start_idx, "time_s"])
+                        return float(
+                            df.loc[end_idx, "time_s"] - df.loc[start_idx, "time_s"]
+                        )
                     except KeyError:
                         return float("nan")
 
@@ -102,8 +108,12 @@ def critique_lift(df, lift_type="clean", output_dir="."):
 
 def main():
     parser = argparse.ArgumentParser(description="Step 5: Identify lift phases.")
-    parser.add_argument("--input", default="final_analysis.csv", help="Path to analysis CSV.")
-    parser.add_argument("--lift_type", required=True, choices=["clean", "snatch", "none"])
+    parser.add_argument(
+        "--input", default="final_analysis.csv", help="Path to analysis CSV."
+    )
+    parser.add_argument(
+        "--lift_type", required=True, choices=["clean", "snatch", "none"]
+    )
     args = parser.parse_args()
 
     if args.lift_type == "none":
@@ -124,6 +134,7 @@ def main():
     except Exception as e:
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

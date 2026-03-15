@@ -21,7 +21,7 @@ YOLO_CONFIDENCE_THRESHOLD = 0.25
 # MediaPipe pose estimation settings
 MEDIAPIPE_DETECTION_CONFIDENCE = 0.5
 MEDIAPIPE_TRACKING_CONFIDENCE = 0.5
-MEDIAPIPE_MODEL_COMPLEXITY = 2
+MEDIAPIPE_MODEL_COMPLEXITY = 1
 
 # Stabilization parameters
 STAB_MIN_FEATURES = 50
@@ -73,6 +73,11 @@ PERSPECTIVE_SCALE_SG_WINDOW = 31
 PERSPECTIVE_SCALE_SG_POLY = 3
 PERSPECTIVE_PATH_SG_WINDOW = 25
 PERSPECTIVE_PATH_SG_POLY = 3
+PERSPECTIVE_MIN_VALID_FRAMES = 30  # minimum frames required for scale methods
+PERSPECTIVE_YAW_SG_WINDOW = 15  # Savitzky-Golay window for smoothing yaw estimation
+PERSPECTIVE_YAW_SG_POLY = 2
+PERSPECTIVE_ORIGIN_SEARCH_FRAMES = 10  # frames to search for reliable origin
+PERSPECTIVE_ORIGIN_MIN_VALID = 5  # minimum valid barbell positions for origin
 
 # Barbell endcap real-world width (metres)
 BARBELL_ENDCAP_WIDTH_M = 0.05  # 50mm
@@ -138,9 +143,9 @@ FPS_SMOOTHING = 0.2
 
 # Phase colors in BGR (OpenCV format)
 PHASE_COLORS_BGR = {
-    0: (32, 32, 224),    # Pull - vivid red
-    1: (0, 120, 240),    # Pull-under - vivid orange
-    2: (32, 160, 24),    # Recovery - vivid green
+    0: (32, 32, 224),  # Pull - vivid red
+    1: (0, 120, 240),  # Pull-under - vivid orange
+    2: (32, 160, 24),  # Recovery - vivid green
 }
 
 # Skeleton line thickness

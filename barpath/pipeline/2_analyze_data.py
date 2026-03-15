@@ -15,20 +15,21 @@ import argparse
 import gc
 import os
 import pickle
+from typing import cast
 
 import numpy as np
 import pandas as pd
+from analysis_utils import (
+    calculate_max_specific_power,
+    calculate_pixel_to_meter_conversion,
+)
+from config import BARBELL_ENDCAP_WIDTH_M
 from pandas import Series
-from typing import cast
-
-from analysis_utils import calculate_max_specific_power, calculate_pixel_to_meter_conversion
-from config import BARBELL_ENDCAP_WIDTH_M, LANDMARKS_TO_TRACK
 from step2_helpers import (
     assign_phases_from_classics,
     assign_phases_kinematic,
     calculate_hip_y_average,
     calculate_joint_angles,
-    calculate_knee_y_average,
     calculate_lifter_angle,
     calculate_perspective_correction,
     calculate_stabilized_position,
@@ -109,7 +110,9 @@ def step_2_analyze_data(input_data, output_path):
             )
         df = assign_phases_kinematic(df, fps)
 
-    has_world_landmarks = "world_landmarks" in df.columns and df["world_landmarks"].notna().any()
+    has_world_landmarks = bool(
+        "world_landmarks" in df.columns and int(df["world_landmarks"].notna().sum()) > 0
+    )
 
     if has_world_landmarks:
         print("Calculating perspective-corrected bar path...")
@@ -117,17 +120,27 @@ def step_2_analyze_data(input_data, output_path):
 
         valid_frames = df["barbell_x_corrected_cm"].notna().sum()
         if valid_frames > 10:
-            print(f"  Perspective correction calculated for {valid_frames}/{len(df)} frames")
-            corrected_x_range = df["barbell_x_corrected_cm"].max() - df["barbell_x_corrected_cm"].min()
-            corrected_y_range = df["barbell_y_corrected_cm"].max() - df["barbell_y_corrected_cm"].min()
-            print(f"  Corrected bar path range: horizontal = {corrected_x_range:.1f} cm, vertical = {corrected_y_range:.1f} cm")
+            print(
+                f"  Perspective correction calculated for {valid_frames}/{len(df)} frames"
+            )
+            corrected_x_range = (
+                df["barbell_x_corrected_cm"].max() - df["barbell_x_corrected_cm"].min()
+            )
+            corrected_y_range = (
+                df["barbell_y_corrected_cm"].max() - df["barbell_y_corrected_cm"].min()
+            )
+            print(
+                f"  Corrected bar path range: horizontal = {corrected_x_range:.1f} cm, vertical = {corrected_y_range:.1f} cm"
+            )
             avg_yaw = df["camera_yaw_deg"].dropna()
             if len(avg_yaw) > 0:
                 avg_yaw_val = float(avg_yaw.iloc[0])
                 if not pd.isna(avg_yaw_val):
                     print(f"  Estimated camera yaw: {avg_yaw_val:.1f} deg")
         elif valid_frames > 0:
-            print(f"  Warning: Only {valid_frames} frames with perspective correction (need >10)")
+            print(
+                f"  Warning: Only {valid_frames} frames with perspective correction (need >10)"
+            )
     else:
         print("Skipping perspective correction (no world landmarks available)")
 
@@ -140,7 +153,9 @@ def step_2_analyze_data(input_data, output_path):
         max_power_result = calculate_max_specific_power(df, phases)
         if max_power_result is not None:
             if max_power_result.get("max_power_real") is not None:
-                print(f"Peak power output (pull->pull-under): {max_power_result['max_power_real']:.2f} W/kg")
+                print(
+                    f"Peak power output (pull->pull-under): {max_power_result['max_power_real']:.2f} W/kg"
+                )
             else:
                 print(
                     f"Peak power output (pull->pull-under): {max_power_result['max_power_px']:.2f} px^2/s^3 "
@@ -181,13 +196,15 @@ def step_2_analyze_data(input_data, output_path):
         counts = df["bar_phase"].value_counts().sort_index()
         print("Phase breakdown:")
         for pid, count in counts.items():
-            pid_int = int(pid)
+            pid_int = int(float(str(pid)))
             label = phase_names.get(pid_int, f"Phase {pid_int}")
             print(f"  {label}: {count} frames ({100 * count / len(df):.1f}%)")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Step 2: Analyze raw data and save to CSV.")
+    parser = argparse.ArgumentParser(
+        description="Step 2: Analyze raw data and save to CSV."
+    )
     parser.add_argument(
         "--input",
         default="raw_data.pkl",

@@ -250,6 +250,20 @@ def step_4_render_video(df, video_path, output_video_path, draw_pose=True):
                 2,
             )
 
+        if frame_count in df.index:
+            scale_method = df.loc[frame_count, "scale_method"] if "scale_method" in df.columns else ""
+            if scale_method and scale_method != "none":
+                scale_text = f"Scale: {scale_method}"
+                cv2.putText(
+                    frame,
+                    scale_text,
+                    (15, last_y + 55),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (200, 200, 200),
+                    1,
+                )
+
         out.write(frame)
 
         # Calculate rendering FPS

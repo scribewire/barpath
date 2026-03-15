@@ -9,16 +9,20 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy.signal import savgol_filter
-
 from config import (
-    PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG,
+    BARBELL_ENDCAP_WIDTH_M,
     PERSPECTIVE_IQR_MULTIPLIER,
-    PERSPECTIVE_SCALE_SG_WINDOW,
-    PERSPECTIVE_SCALE_SG_POLY,
-    PERSPECTIVE_PATH_SG_WINDOW,
+    PERSPECTIVE_MIN_VALID_FRAMES,
+    PERSPECTIVE_ORIGIN_SEARCH_FRAMES,
     PERSPECTIVE_PATH_SG_POLY,
+    PERSPECTIVE_PATH_SG_WINDOW,
+    PERSPECTIVE_SCALE_SG_POLY,
+    PERSPECTIVE_SCALE_SG_WINDOW,
+    PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG,
+    PERSPECTIVE_YAW_SG_POLY,
+    PERSPECTIVE_YAW_SG_WINDOW,
 )
+from scipy.signal import savgol_filter
 
 
 def _make_odd(n: int) -> int:
@@ -76,10 +80,10 @@ def unpack_world_landmarks(df: pd.DataFrame) -> pd.DataFrame:
 
 def calculate_reference_camera_angle(
     df: pd.DataFrame, first_idx
-) -> Tuple[Optional[float], float]:
+) -> Tuple[Optional[float], pd.Series]:
     """
-    Estimate the camera yaw angle from the shoulder world landmarks at the
-    first frame.
+    Estimate the camera yaw angle from shoulder world landmarks across all frames.
+    Returns both the reference yaw (from first valid frame) and a per-frame yaw series.
 
     Yaw is the angle between the shoulder line and the camera's depth (Z)
     axis, computed from the world-space X and Z offsets of the two shoulders.
@@ -89,27 +93,69 @@ def calculate_reference_camera_angle(
         first_idx: Index of the first (reference) frame.
 
     Returns:
-        ``(camera_yaw_deg, 1.0)`` – the second element is a legacy API
-        placeholder; the correction factor is no longer used downstream.
+        ``(reference_camera_yaw_deg, yaw_series)`` – reference yaw from the first
+        valid frame, and a smoothed per-frame yaw series for continuous tracking.
     """
+    yaw_series = pd.Series(np.nan, index=df.index, dtype=float)
+
+    for idx in df.index:
+        try:
+            l_sh_x = _safe_get(df, idx, "left_shoulder_world_x")
+            l_sh_z = _safe_get(df, idx, "left_shoulder_world_z")
+            r_sh_x = _safe_get(df, idx, "right_shoulder_world_x")
+            r_sh_z = _safe_get(df, idx, "right_shoulder_world_z")
+
+            if (
+                l_sh_x is not None
+                and l_sh_z is not None
+                and r_sh_x is not None
+                and r_sh_z is not None
+            ):
+                dx = float(r_sh_x) - float(l_sh_x)
+                dz = float(r_sh_z) - float(l_sh_z)
+                if abs(dz) > 1e-6:
+                    camera_yaw_rad = np.arctan2(abs(dx), abs(dz))
+                    yaw_series.loc[idx] = float(np.degrees(camera_yaw_rad))
+        except Exception:
+            pass
+
+    yaw_series = _smooth_yaw_series(yaw_series)
+
     reference_camera_yaw_deg: Optional[float] = None
+    valid_yaw = yaw_series.dropna()
+    if len(valid_yaw) > 0:
+        reference_camera_yaw_deg = float(valid_yaw.iloc[0])
 
-    try:
-        l_sh_x = _safe_get(df, first_idx, "left_shoulder_world_x")
-        l_sh_z = _safe_get(df, first_idx, "left_shoulder_world_z")
-        r_sh_x = _safe_get(df, first_idx, "right_shoulder_world_x")
-        r_sh_z = _safe_get(df, first_idx, "right_shoulder_world_z")
+    return reference_camera_yaw_deg, yaw_series
 
-        if None not in (l_sh_x, l_sh_z, r_sh_x, r_sh_z):
-            dx = float(r_sh_x) - float(l_sh_x)  # type: ignore[arg-type]
-            dz = float(r_sh_z) - float(l_sh_z)  # type: ignore[arg-type]
-            # Yaw = angle of the shoulder line relative to the camera Z axis.
-            camera_yaw_rad = np.arctan2(abs(dx), abs(dz))
-            reference_camera_yaw_deg = float(np.degrees(camera_yaw_rad))
-    except Exception as exc:
-        print(f"  Warning: Could not calculate reference camera angle: {exc}")
 
-    return reference_camera_yaw_deg, 1.0  # second value kept for API compat
+def _smooth_yaw_series(yaw_series: pd.Series) -> pd.Series:
+    """
+    Smooth the per-frame yaw series using Savitzky-Golay filtering.
+
+    Args:
+        yaw_series: Per-frame camera yaw in degrees.
+
+    Returns:
+        Smoothed yaw series with the same index.
+    """
+    valid = yaw_series.dropna()
+    if len(valid) < 5:
+        return yaw_series
+
+    interpolated = yaw_series.interpolate(method="linear").bfill().ffill()
+    n_valid = int(interpolated.notna().sum())
+
+    win = _make_odd(min(PERSPECTIVE_YAW_SG_WINDOW, n_valid))
+    win = max(win, PERSPECTIVE_YAW_SG_POLY + 2)
+
+    if n_valid >= win and win > PERSPECTIVE_YAW_SG_POLY:
+        smoothed = savgol_filter(
+            interpolated.values.astype(float), win, PERSPECTIVE_YAW_SG_POLY
+        )
+        yaw_series = pd.Series(smoothed, index=yaw_series.index)
+
+    return yaw_series
 
 
 def _robust_smooth_scale(raw_scale: pd.Series) -> pd.Series:
@@ -177,7 +223,9 @@ def _robust_smooth_scale(raw_scale: pd.Series) -> pd.Series:
         win -= 1
 
     if n_valid >= win and win > PERSPECTIVE_SCALE_SG_POLY:
-        smoothed = savgol_filter(interpolated.values.astype(float), win, PERSPECTIVE_SCALE_SG_POLY)
+        smoothed = savgol_filter(
+            interpolated.values.astype(float), win, PERSPECTIVE_SCALE_SG_POLY
+        )
         # Clamp to a physically plausible range so SG ringing at boundaries
         # cannot produce negative or absurdly large scale values.
         med = float(np.median(valid.to_numpy(dtype=float)))
@@ -196,6 +244,93 @@ def _hip_shoulder_vertical_scale(raw_scale: pd.Series) -> pd.Series:
     return _robust_smooth_scale(raw_scale)
 
 
+def _calculate_barbell_endcap_scale(
+    df: pd.DataFrame, frame_width: int
+) -> Tuple[pd.Series, int]:
+    """
+    Calculate px->m scale using the barbell endcap width.
+
+    Path C: Uses the known real-world width of barbell endcaps (50mm)
+    to compute scale from the detected barbell bounding box width.
+
+    Args:
+        df: DataFrame with barbell_box column
+        frame_width: Video frame width in pixels
+
+    Returns:
+        Tuple of (raw_scale_series, valid_frame_count)
+    """
+    raw_scale_series = pd.Series(np.nan, index=df.index, dtype=float)
+    valid_count = 0
+
+    for idx in df.index:
+        box = df.loc[idx, "barbell_box"]
+        if box is None or (isinstance(box, float) and pd.isna(box)):
+            continue
+        try:
+            if isinstance(box, str):
+                values = [float(v.strip()) for v in box.split(",")]
+                if len(values) != 4:
+                    continue
+                x1, _, x2, _ = values
+            elif isinstance(box, (list, tuple)):
+                if len(box) != 4:
+                    continue
+                x1, _, x2, _ = box[0], box[1], box[2], box[3]
+            else:
+                continue
+
+            box_width_px = abs(x2 - x1)
+            if box_width_px > 20:
+                scale = BARBELL_ENDCAP_WIDTH_M / box_width_px
+                raw_scale_series.loc[idx] = scale
+                valid_count += 1
+        except Exception:
+            continue
+
+    return raw_scale_series, valid_count
+
+
+def _find_robust_origin(
+    df: pd.DataFrame, valid_mask: pd.Series
+) -> Tuple[Optional[int], float, float]:
+    """
+    Find a robust origin frame for barbell position reference.
+
+    Searches through the first N frames to find one with reliable
+    barbell tracking (not just first valid frame).
+
+    Args:
+        df: DataFrame with barbell_x_smooth, barbell_y_smooth columns
+        valid_mask: Boolean mask of valid barbell positions
+
+    Returns:
+        Tuple of (origin_frame_index, origin_x_px, origin_y_px) or
+        (None, nan, nan) if no suitable origin found
+    """
+    valid_indices = df[valid_mask].index.tolist()
+
+    if len(valid_indices) == 0:
+        return None, np.nan, np.nan
+
+    search_frames = min(PERSPECTIVE_ORIGIN_SEARCH_FRAMES, len(valid_indices))
+
+    for i in range(search_frames):
+        idx = valid_indices[i]
+        x = df.loc[idx, "barbell_x_smooth"]
+        y = df.loc[idx, "barbell_y_smooth"]
+
+        if pd.notna(x) and pd.notna(y):
+            return int(idx), float(x), float(y)
+
+    first_valid = valid_indices[0]
+    return (
+        int(first_valid),
+        float(df.loc[first_valid, "barbell_x_smooth"]),
+        float(df.loc[first_valid, "barbell_y_smooth"]),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Core correction
 # ---------------------------------------------------------------------------
@@ -204,6 +339,7 @@ def _hip_shoulder_vertical_scale(raw_scale: pd.Series) -> pd.Series:
 def apply_perspective_correction(
     df: pd.DataFrame,
     reference_camera_yaw_deg: Optional[float],
+    yaw_series: pd.Series,
     lateral_correction_factor: float,  # kept for API compat, ignored
     first_idx,
     is_side_on: bool = False,
@@ -380,10 +516,10 @@ def apply_perspective_correction(
                 n_raw += 1
         scale_method_label = "shoulder_width"
 
-    if is_side_on or n_raw < 10:
+    if is_side_on or n_raw < PERSPECTIVE_MIN_VALID_FRAMES:
         # Path B: hip-to-shoulder vertical distance.
         # Used when explicitly side-on, or when Path A yielded too few frames.
-        if n_raw < 10 and not is_side_on:
+        if n_raw < PERSPECTIVE_MIN_VALID_FRAMES and not is_side_on:
             print(
                 f"  Path A (shoulder width) only gave {n_raw} valid frames; "
                 "falling back to hip-shoulder vertical scale."
@@ -403,11 +539,24 @@ def apply_perspective_correction(
             scale_method_label = "hip_shoulder_vertical"
         elif n_raw == 0:
             print(
-                "  Warning: Could not compute px->m scale from either shoulder "
-                "width or hip-shoulder vertical distance. "
-                "Skipping perspective correction."
+                "  Warning: Could not compute px->m scale from shoulder width "
+                "or hip-shoulder vertical distance. Trying barbell endcap width..."
             )
-            return df
+            raw_scale_series_c, n_raw_c = _calculate_barbell_endcap_scale(
+                df, frame_width
+            )
+            if n_raw_c >= PERSPECTIVE_MIN_VALID_FRAMES:
+                raw_scale_series = raw_scale_series_c
+                n_raw = n_raw_c
+                scale_method_label = "barbell_endcap"
+                print(f"  Using barbell endcap scale: {n_raw_c} valid frames")
+            else:
+                print(
+                    f"  Warning: Could not compute px->m scale. "
+                    f"Barbell endcap: {n_raw_c} frames (need {PERSPECTIVE_MIN_VALID_FRAMES}). "
+                    "Skipping perspective correction."
+                )
+                return df
 
     df["scale_method"] = scale_method_label
     print(f"  Scale method: {scale_method_label} ({n_raw} valid frames)")
@@ -467,9 +616,14 @@ def apply_perspective_correction(
         print("  Warning: No valid barbell positions. Skipping perspective correction.")
         return df
 
-    origin_idx = df[valid_mask].index[0]
-    origin_x_px = float(df.loc[origin_idx, "barbell_x_smooth"])
-    origin_y_px = float(df.loc[origin_idx, "barbell_y_smooth"])
+    origin_idx, origin_x_px, origin_y_px = _find_robust_origin(df, valid_mask)
+    if origin_idx is None:
+        print(
+            "  Warning: Could not find reliable origin frame. Skipping perspective correction."
+        )
+        return df
+
+    print(f"  Using robust origin frame {origin_idx} for barbell position reference")
 
     delta_x_px = df.loc[valid_mask, "barbell_x_smooth"] - origin_x_px
     delta_y_px = df.loc[valid_mask, "barbell_y_smooth"] - origin_y_px
@@ -493,7 +647,9 @@ def apply_perspective_correction(
         if win % 2 == 0:
             win -= 1
         if n_valid >= win and win > PERSPECTIVE_PATH_SG_POLY:
-            df[col] = savgol_filter(filled.values.astype(float), win, PERSPECTIVE_PATH_SG_POLY)
+            df[col] = savgol_filter(
+                filled.values.astype(float), win, PERSPECTIVE_PATH_SG_POLY
+            )
         else:
             df[col] = filled
 
@@ -574,12 +730,16 @@ def calculate_perspective_correction(
     # 1. Unpack world landmarks
     df = unpack_world_landmarks(df)
 
-    # 2. Estimate camera yaw from first frame
+    # 2. Estimate camera yaw from multiple frames (continuous tracking)
     first_idx = df.index[0]
-    reference_camera_yaw_deg, _ = calculate_reference_camera_angle(df, first_idx)
+    reference_camera_yaw_deg, yaw_series = calculate_reference_camera_angle(
+        df, first_idx
+    )
 
     if reference_camera_yaw_deg is not None:
-        print(f"  Estimated camera yaw: {reference_camera_yaw_deg:.1f} degrees")
+        print(
+            f"  Estimated camera yaw (reference): {reference_camera_yaw_deg:.1f} degrees"
+        )
     else:
         print(
             "  Note: Could not estimate camera yaw angle; "
@@ -593,18 +753,24 @@ def calculate_perspective_correction(
         df["scale_method"] = "none"
         return df
 
-    # 3. Choose scale method based on camera yaw
-    is_side_on = abs(reference_camera_yaw_deg) < PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG
+    df["camera_yaw_deg"] = yaw_series
+
+    # 3. Choose scale method based on camera yaw (use median for stability)
+    valid_yaw = yaw_series.dropna()
+    median_yaw = (
+        float(valid_yaw.median()) if len(valid_yaw) > 0 else reference_camera_yaw_deg
+    )
+    is_side_on = abs(median_yaw) < PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG
     if is_side_on:
         print(
-            f"  Camera yaw {reference_camera_yaw_deg:.1f} deg is within the "
+            f"  Camera yaw median {median_yaw:.1f} deg is within the "
             f"+/-{PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG} deg side-angle threshold. "
             "Using hip-to-shoulder vertical distance as scale reference "
             "(shoulder pixel width is degenerate from a side-on view)."
         )
     else:
         print(
-            f"  Camera yaw {reference_camera_yaw_deg:.1f} deg -- using "
+            f"  Camera yaw median {median_yaw:.1f} deg -- using "
             "shoulder width as scale reference."
         )
 
@@ -612,6 +778,7 @@ def calculate_perspective_correction(
     df = apply_perspective_correction(
         df,
         reference_camera_yaw_deg,
+        yaw_series,
         1.0,  # legacy factor, ignored inside apply_perspective_correction
         first_idx,
         is_side_on=is_side_on,

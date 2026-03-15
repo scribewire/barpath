@@ -18,6 +18,14 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import torch
+from config import (
+    DECODE_QUEUE_SIZE,
+    MEDIAPIPE_DETECTION_CONFIDENCE,
+    MEDIAPIPE_MODEL_COMPLEXITY,
+    MEDIAPIPE_TRACKING_CONFIDENCE,
+    STAB_MIN_FEATURES,
+    YOLO_CONFIDENCE_THRESHOLD,
+)
 from hardware_detection import detect_intel_gpu, detect_nvidia_gpu
 from step1_helpers import (
     StabilizationParams,
@@ -30,16 +38,7 @@ from step1_helpers import (
     track_features,
     update_features,
 )
-from ultralytics import YOLO
-
-from config import (
-    DECODE_QUEUE_SIZE,
-    YOLO_CONFIDENCE_THRESHOLD,
-    MEDIAPIPE_DETECTION_CONFIDENCE,
-    MEDIAPIPE_TRACKING_CONFIDENCE,
-    MEDIAPIPE_MODEL_COMPLEXITY,
-    STAB_MIN_FEATURES,
-)
+from ultralytics import YOLO  # type: ignore
 from utils import LANDMARK_NAMES
 
 LANDMARKS_TO_TRACK = LANDMARK_NAMES
@@ -59,9 +58,13 @@ def _get_model_path(model_path: Path) -> tuple[str, bool]:
             print(f"Detected OpenVINO model in: {model_path}")
             return str(model_path), True
         elif xml_files:
-            raise ValueError(f"OpenVINO directory missing .bin weights file: {model_path}")
+            raise ValueError(
+                f"OpenVINO directory missing .bin weights file: {model_path}"
+            )
         elif bin_files:
-            raise ValueError(f"OpenVINO directory missing .xml model file: {model_path}")
+            raise ValueError(
+                f"OpenVINO directory missing .xml model file: {model_path}"
+            )
         else:
             raise ValueError(f"Directory does not contain a valid model: {model_path}")
     elif model_path.is_file():
@@ -117,7 +120,7 @@ def step_1_collect_data(
     if total_frames == 0:
         raise ValueError(f"Video file {video_path} has no frames.")
 
-    mp_pose_solution = mp.solutions.pose
+    mp_pose_solution = mp.solutions.pose  # type: ignore
     pose = None
     if lift_type != "none":
         pose = mp_pose_solution.Pose(
@@ -191,7 +194,7 @@ def step_1_collect_data(
         if item is _QUEUE_DONE:
             break
 
-        frame_count, frame = item
+        frame_count, frame = item  # type: ignore
 
         frame_data: dict = {
             "frame": frame_count,
@@ -264,7 +267,9 @@ def step_1_collect_data(
                             np.array(e["center"]) - feet_pos_px
                         ),
                     )
-                    print(f"[Info] Barbell initially detected at frame {frame_count} (near feet).")
+                    print(
+                        f"[Info] Barbell initially detected at frame {frame_count} (near feet)."
+                    )
                 else:
                     best_endcap = min(
                         detected_endcaps,
@@ -303,11 +308,16 @@ def step_1_collect_data(
                     prev_background_features, curr_features, status, stab_params
                 )
 
-        if curr_background_features is None or len(curr_background_features) < STAB_MIN_FEATURES:
+        if (
+            curr_background_features is None
+            or len(curr_background_features) < STAB_MIN_FEATURES
+        ):
             new_features = detect_features(gray, background_mask, stab_params)
             if new_features is not None:
                 curr_background_features = update_features(
-                    curr_background_features, new_features, min_features=STAB_MIN_FEATURES
+                    curr_background_features,
+                    new_features,
+                    min_features=STAB_MIN_FEATURES,
                 )
 
         frame_data["shake_dx"] = shake_dx
@@ -325,7 +335,9 @@ def step_1_collect_data(
         if smoothed_fps is None:
             smoothed_fps = inst_fps
         else:
-            smoothed_fps = (fps_smoothing * inst_fps) + ((1 - fps_smoothing) * smoothed_fps)
+            smoothed_fps = (fps_smoothing * inst_fps) + (
+                (1 - fps_smoothing) * smoothed_fps
+            )
         last_iter_timestamp = now_ts
 
         progress_fraction = frames_processed / total_frames
@@ -364,8 +376,16 @@ def main():
     )
     parser.add_argument("--input", required=True, help="Path to the source video file")
     parser.add_argument("--model", required=True, help="Path to the trained YOLO model")
-    parser.add_argument("--output", default="raw_data.pkl", help="Path to save the raw data pickle file.")
-    parser.add_argument("--lift_type", default="none", help="Type of lift (e.g., 'clean', 'snatch', 'none').")
+    parser.add_argument(
+        "--output",
+        default="raw_data.pkl",
+        help="Path to save the raw data pickle file.",
+    )
+    parser.add_argument(
+        "--lift_type",
+        default="none",
+        help="Type of lift (e.g., 'clean', 'snatch', 'none').",
+    )
 
     args = parser.parse_args()
 
