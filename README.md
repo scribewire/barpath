@@ -31,11 +31,6 @@
   - Tracks 12 joints: shoulders, hips, knees, ankles, elbows, wrists
   - Outputs both normalized (0–1) and world coordinates
 - **🎯 Camera Shake Stabilization**: Lucas-Kanade optical flow on background features for perfectly stabilized bar path tracking
-- **📐 Robust Perspective-Corrected Bar Path**: Converts the bar path from pixel space to real-world centimetres for any camera angle
-  - **Dual-path scale derivation**: shoulder-width scale (Path A) for angled views; hip-to-shoulder vertical scale (Path B) for side-on shots — both produce valid cm outputs
-  - **Stable single scalar**: outlier-rejected, SG-smoothed per-frame scale is reduced to one stable scalar (median of the early Pull phase) before converting pixel displacements — eliminates pull-under inflation artifacts
-  - **IQR outlier rejection + interpolation + Savitzky-Golay smoothing** applied to the raw scale series to guard against MediaPipe landmark jitter and shoulder occlusion spikes
-  - Both axes of the corrected graph are in real-world **centimetres** — physically meaningful and correctly proportioned at any camera angle
 - **🔁 Reanalyze Existing Outputs**: Re-run analysis steps 2–5 on folders already processed by step 1
   - Skips the slow video decoding and detection step — reuse existing `raw_data.pkl`
   - Video re-render is attempted automatically if the original source video path is still valid
@@ -46,9 +41,7 @@
   - TensorRT support for NVIDIA GPUs
 - **📊 Comprehensive Kinematic Analysis**:
   - **All tracked MediaPipe joints are smoothed** (Savitzky-Golay filter, 11-frame window, cubic polynomial)
-  - **Per-frame lifter angle tracking**: the lifter's camera-relative orientation is smoothed and recorded for every frame
   - Smoothed bar position, velocity, acceleration, and specific power graphs
-  - Perspective-corrected bar path graph in real-world centimetres (both axes), smoothed after conversion
   - Frame-by-frame joint angle measurements (knees, elbows) — all smoothed
   - Data automatically truncated at peak bar height
   - All path graphs include generous horizontal padding for legend legibility
@@ -59,9 +52,8 @@
   - Automatic phase detection using MediaPipe landmarks and kinematics
   - Color-coded in all output visualizations
 - **📈 Superimposed Batch Comparison Graphs**: Compare multiple lifts on a single plot after batch processing
-  - **Angle-compensated superimposed graph**: all lifts plotted in real-world cm (side-on lifts use vertical scale; angled lifts use shoulder-width scale)
-  - **Smoothed pixel-space superimposed graph**: always-available fallback in pixel units
-  - Non-reference lifts are **uniformly scaled** to align phase-transition markers with the reference lift for visual comparability
+  - **Superimposed bar-path graph**: all lifts overlaid in pixel space, uniformly scaled for visual comparability
+  - Non-reference lifts are **uniformly scaled** to align phase-transition markers with the reference lift
   - **DTW similarity percentage** computed for every non-reference lift vs the reference and displayed in the legend (e.g. `Lift 2  [95.1% match]`)
   - All paths are origin-normalised at the pull-under start point before overlay
 - **🎥 Annotated Video Output**:
@@ -78,6 +70,19 @@
   - Supports Clean and Snatch lifts with lift-specific fault checks
   - Early arm bend, incomplete extension, poor transition timing, and more
   - Can be skipped with `--lift_type none` for non-Olympic lifts
+
+- **🤖 ML-Based Technique Analysis** (NEW):
+  - **Fast Analysis (DTW)**: Compares bar path shape to pro baselines using Dynamic Time Warping
+    - Produces 0-100% similarity score with per-frame temporal deviance curve
+    - Video overlay shows green (similar) to red (deviant) bar path coloring
+    - No training required — just store pro reference trajectories
+  - **Smart Analysis (Random Forest)**: Detects specific technique faults with probability scores
+    - Multi-label classification — multiple faults can be detected simultaneously
+    - 11 fault types for clean, 15 for snatch (including snatch-specific faults)
+    - Trained on pro lifts (all faults = 0) + hand-labeled error lifts
+  - **Lifter Selection**: Choose which pro baseline to compare against (e.g., "liao_hui", "lu_xiaojun", "generic")
+  - **Graceful Degradation**: Falls back to generic models, skips analysis if no models found
+  - Toggle Fast/Smart analysis independently via CLI flags or GUI switches
 
 ## 🔧 Requirements
 
@@ -256,11 +261,11 @@ barpath/
     ├── 1_collect_data.py       # YOLO26 + MediaPipe + producer-consumer I/O
     ├── 2_analyze_data.py       # Joint smoothing, lifter angle, 3-phase detection, CSV
     ├── 3_generate_graphs.py    # Kinematic graphs + superimposed comparison graphs
-    ├── 4_render_video.py       # Annotated video rendering
-    ├── 5_critique_lift.py      # Rule-based technique analysis + Markdown report
+    ├── 4_critique_lift.py      # ML-based technique analysis (Fast + Smart Analysis)
+    ├── 5_render_video.py       # Annotated video rendering with similarity overlay
     ├── step1_helpers/          # Optical flow stabilization, landmark extraction
-    ├── step2_helpers/          # Perspective correction (dual-path, stable scalar, IQR cleaning)
-    ├── step5_helpers/          # Phase detection, lift-specific fault checks
+    ├── step2_helpers/          # Joint smoothing, kinematics, phase detection
+    ├── step4_helpers/          # Feature extraction, DTW analysis, RF fault detection
     └── utils.py                # Shared constants and utilities
 ```
 
@@ -269,10 +274,10 @@ barpath/
 | Step | Module | Description | Key Features |
 |------|--------|-------------|-------------|
 | **1. Collect Data** | `1_collect_data.py` | YOLO26 barbell detection + MediaPipe pose + stabilization | Producer-consumer I/O; decoder thread; bounded queue; source video path stored in pkl |
-| **2. Analyze Data** | `2_analyze_data.py` | Kinematics, joint smoothing, phase detection, perspective correction, CSV output | All joints smoothed; per-frame lifter angle; 3-phase system; dual-path cm correction |
-| **3. Generate Graphs** | `3_generate_graphs.py` | Bar path + kinematic plots + superimposed comparison | Color-coded by phase; perspective-corrected cm graph; DTW similarity in legend |
-| **4. Render Video** | `4_render_video.py` | Annotated output video | Skeleton + bar path + phase overlay (optional) |
-| **5. Critique Lift** | `5_critique_lift.py` | Rule-based fault detection | Clean/Snatch-specific checks; Markdown report |
+| **2. Analyze Data** | `2_analyze_data.py` | Kinematics, joint smoothing, phase detection, CSV output | All joints smoothed; 3-phase system |
+| **3. Generate Graphs** | `3_generate_graphs.py` | Bar path + kinematic plots + superimposed comparison | Color-coded by phase; DTW similarity in legend |
+| **4. Critique Lift** | `4_critique_lift.py` | ML-based technique analysis | Fast Analysis (DTW similarity); Smart Analysis (RF fault detection); Markdown report |
+| **5. Render Video** | `5_render_video.py` | Annotated output video | Skeleton + bar path + phase overlay + similarity coloring (when available) |
 
 ### Data Flow Diagram
 
@@ -285,31 +290,35 @@ Input Video
     ↓
 [Step 2] Analysis & Smoothing
     ├─ Joint smoothing (Savitzky-Golay)
-    ├─ Lifter angle per-frame
     ├─ Phase detection (3-phase: Pull/Pull-under/Recovery)
-    ├─ Perspective correction:
-    │    ├─ Path A (angled view): shoulder-width px→m scale
-    │    ├─ Path B (side-on view): hip-shoulder vertical px→m scale
-    │    ├─ IQR outlier rejection + interpolation + SG smoothing of scale series
-    │    └─ Single stable scalar (median of early Pull phase) → cm displacement
-    → final_analysis.csv  (includes barbell_x/y_corrected_cm, scale_method, px_to_m_scale)
+    ├─ Kinematics: velocity, acceleration, power
+    → final_analysis.csv
     ↓
 [Step 3] Graph Generation
-    → graphs/*.png (bar path, velocity, acceleration, power, perspective-corrected cm path)
+    → graphs/*.png (bar path, velocity, acceleration, power)
     ↓
-[Step 4] Video Rendering (optional, --no-video to skip)
-    → output.mp4 (annotated with skeleton + bar path)
+[Step 4] Technique Analysis (ML-based)
+    ├─ Fast Analysis: DTW bar path similarity vs pro baselines
+    │    ├─ Load pro trajectories from models/analysis/{lifter}/{lift_type}/
+    │    ├─ Compute similarity score (0-100%) + per-frame temporal curve
+    │    └─ Pass temporal curve to Step 5 for video overlay
+    ├─ Smart Analysis: Random Forest fault detection
+    │    ├─ Extract ~22 scalar features from CSV (all camera-angle-invariant)
+    │    ├─ Load trained model from models/analysis/{lifter}/{lift_type}/
+    │    └─ Output fault probabilities (e.g., {"early_arm_bend": 0.92})
+    → analysis.md (report with similarity score, fault probabilities, coaching cues)
     ↓
-[Step 5] Technique Critique
-    → analysis.md (report with phase timing + faults)
+[Step 5] Video Rendering (optional, --no-video to skip)
+    ├─ Skeleton + bar path overlay
+    ├─ Phase-based coloring (default) OR similarity-based coloring (when Fast Analysis available)
+    └─ → output.mp4
 
 ── Batch post-processing (2+ videos) ──────────────────────────────────────
 [Batch] Superimposed Comparison Graphs
     ├─ Load final_analysis.csv from each per-video output folder
     ├─ Uniform scaling of non-reference lifts (least-squares on phase markers)
     ├─ DTW similarity % per lift vs reference
-    → superimposed_bar_paths_compensated.png  (cm units, dual-path)
-    → superimposed_bar_paths_smoothed.png     (px units, always available)
+    → superimposed_bar_paths.png  (px units, always available)
 
 ── Reanalyze mode (raw_data.pkl already exists) ───────────────────────────
 [run_pipeline_from_folder] Re-run steps 2–5 only
@@ -323,12 +332,11 @@ Input Video
 | File | Description |
 |------|-------------|
 | `raw_data.pkl` | Raw per-frame detections from Step 1 (YOLO boxes + MediaPipe landmarks + source video path) |
-| `final_analysis.csv` | Enriched data — all joints and bar position smoothed with Savitzky-Golay; includes cm-corrected path and scale metadata |
-| `graphs/*.png` | Kinematic graphs (bar path, velocity, acceleration, power, perspective-corrected cm path) |
+| `final_analysis.csv` | Enriched data — all joints and bar position smoothed with Savitzky-Golay |
+| `graphs/*.png` | Kinematic graphs (bar path, velocity, acceleration, power) |
 | `output.mp4` | Annotated video with skeleton, bar path, and 3-phase color overlay (optional) |
 | `analysis.md` | Technique critique report with Pull/Pull-under/Recovery timing and fault analysis |
-| `superimposed_bar_paths_compensated.png` | Batch: all lifts overlaid in real-world cm with DTW similarity scores (batch runs only) |
-| `superimposed_bar_paths_smoothed.png` | Batch: all lifts overlaid in pixel space with DTW similarity scores (batch runs only) |
+| `superimposed_bar_paths.png` | Batch: all lifts overlaid with DTW similarity scores (batch runs only) |
 
 ### CSV Column Reference
 
@@ -338,29 +346,10 @@ All position and angle columns in `final_analysis.csv` contain **smoothed** valu
 |---|---|---|
 | **Barbell Position** | `barbell_x_smooth`, `barbell_y_smooth` | Smoothed barbell position (pixels) |
 | **Stabilization** | `barbell_x_stable`, `barbell_y_stable` | Stabilized (shake-corrected) barbell position |
-| **Perspective-Corrected Path** | `barbell_x_corrected_cm`, `barbell_y_corrected_cm` | Bar displacement in real-world centimetres (both axes); derived from dual-path shoulder/hip geometry; SG-smoothed |
 | **Joint Positions** | `left_shoulder_x`, `left_shoulder_y`, `left_shoulder_z`, `left_shoulder_vis` | Smoothed joint positions (normalized 0–1) for all 12 tracked joints; `_vis` is MediaPipe visibility score |
 | **Joint Angles** | `left_knee_angle`, `right_knee_angle`, `left_elbow_angle`, `right_elbow_angle` | Smoothed joint angles (degrees) |
-| **Lifter Orientation** | `lifter_angle` | Per-frame smoothed lifter orientation angle (degrees, camera-relative) |
 | **Bar Kinematics** | `vel_y_smooth`, `accel_y_smooth`, `specific_power_y_smooth` | Smoothed barbell vertical velocity (px/s), acceleration (px/s²), and specific power proxy (px²/s³) |
 | **Phase & Timing** | `bar_phase`, `time_s` | Phase label (0=Pull, 1=Pull-under, 2=Recovery); elapsed time in seconds |
-| **Scale & Camera** | `camera_yaw_deg`, `px_to_m_scale`, `scale_method` | Estimated camera yaw (degrees, informational); per-frame smoothed metres-per-pixel scale; scale derivation method (`shoulder_width` or `hip_shoulder_vertical`) |
-
-## 📍 Phase Detection Details
-
-barpath uses a **3-phase system** designed around the biomechanics of Olympic lifts (clean and snatch):
-
-| Phase | Label | Color | Definition |
-|-------|-------|-------|------------|
-| **Pull** | 0 | 🔴 Red | Barbell starts moving upward → lifter's hips reach peak extension (t0→t2) |
-| **Pull-under** | 1 | 🟠 Orange | Hip extension peak → hips stop descending / catch position (t2→t3) |
-| **Recovery** | 2 | 🟢 Green | Catch position → barbell reaches maximum height (t3→t4) |
-
-**For classic lifts** (clean, snatch): Phase boundaries are detected using MediaPipe landmarks and kinematic signals (hip velocity, bar velocity) to identify the t0–t4 keyframes automatically.
-
-**For other lifts** (lift_type=none): No phase detection or technique critique is performed; only kinematics are analyzed.
-
-> **Note on perspective correction**: the `barbell_x/y_corrected_cm` columns and `barbell_lateral_corrected_path.png` graph are generated whenever MediaPipe world landmarks are available, regardless of lift type. Angled-view shots use the shoulder horizontal width as a ruler (Path A); side-on shots (|yaw| < 10°) automatically switch to the hip-to-shoulder vertical distance (Path B), which is not foreshortened by horizontal camera yaw. A single stable scalar (median of the early Pull phase) is used for the entire lift rather than a rising per-frame scale, preventing path inflation during the pull-under.
 
 ## 🎛️ Configuration Options
 
@@ -388,11 +377,9 @@ To adjust these, edit `step_1_collect_data.py` line ~164 in the `Pose()` initial
 
 - **Joint Positions & Angles**: Savitzky-Golay filter with 11-frame window, cubic (order 3) polynomial
 - **Barbell Velocity**: 15-frame window for smoother derivatives
-- **Scale Series (perspective correction)**: Savitzky-Golay with 31-frame window, cubic polynomial; preceded by IQR outlier rejection and linear interpolation
-- **cm-Path Final Pass**: Savitzky-Golay with 25-frame window, cubic polynomial applied after pixel→cm conversion
 - **Window Clamping**: Automatically adjusted if video is shorter than window size
 
-To customize, edit `step2_analyze_data.py` and look for the `_savgol_smooth()` function calls, or edit the constants at the top of `step2_helpers/perspective_correction.py`.
+To customize, edit `analysis_utils.py` and look for the `safe_savgol_smooth()` function.
 
 ## 🤝 Contributing
 

@@ -25,7 +25,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import toga
 from gui_helpers.log_renderer import LogRenderer
@@ -34,39 +34,39 @@ from toga.style import Pack
 
 # Prepare for lazy import of the pipeline runner
 sys.path.insert(0, str(Path(__file__).parent))
-_RUN_PIPELINE = None
-_RUN_BATCH_POSTPROCESS = None
-_RUN_PIPELINE_FROM_FOLDER = None
+_run_pipeline = None
+_run_batch_postprocess = None
+_run_pipeline_from_folder = None
 
 
 def _get_run_pipeline():
     """Lazy-load barpath_core.run_pipeline so the GUI starts faster."""
-    global _RUN_PIPELINE
-    if _RUN_PIPELINE is None:
+    global _run_pipeline
+    if _run_pipeline is None:
         from barpath_core import run_pipeline  # Local import keeps startup lightweight
 
-        _RUN_PIPELINE = run_pipeline
-    return _RUN_PIPELINE
+        _run_pipeline = run_pipeline
+    return _run_pipeline
 
 
 def _get_run_batch_postprocess():
     """Lazy-load barpath_core.run_batch_postprocess so the GUI starts faster."""
-    global _RUN_BATCH_POSTPROCESS
-    if _RUN_BATCH_POSTPROCESS is None:
+    global _run_batch_postprocess
+    if _run_batch_postprocess is None:
         from barpath_core import run_batch_postprocess
 
-        _RUN_BATCH_POSTPROCESS = run_batch_postprocess
-    return _RUN_BATCH_POSTPROCESS
+        _run_batch_postprocess = run_batch_postprocess
+    return _run_batch_postprocess
 
 
 def _get_run_pipeline_from_folder():
     """Lazy-load barpath_core.run_pipeline_from_folder so the GUI starts faster."""
-    global _RUN_PIPELINE_FROM_FOLDER
-    if _RUN_PIPELINE_FROM_FOLDER is None:
+    global _run_pipeline_from_folder
+    if _run_pipeline_from_folder is None:
         from barpath_core import run_pipeline_from_folder
 
-        _RUN_PIPELINE_FROM_FOLDER = run_pipeline_from_folder
-    return _RUN_PIPELINE_FROM_FOLDER
+        _run_pipeline_from_folder = run_pipeline_from_folder
+    return _run_pipeline_from_folder
 
 
 class BarpathTogaApp(toga.App):
@@ -78,12 +78,12 @@ class BarpathTogaApp(toga.App):
 
     def startup(self) -> None:  # type: ignore[override]
         # --- State ---
-        self.model_dir: Optional[Path] = None
-        self.model_files: List[Path] = []
-        self.selected_model: Optional[Path] = None
+        self.model_dir: Path | None = None
+        self.model_files: list[Path] = []
+        self.selected_model: Path | None = None
 
-        self.input_videos: List[Path] = []
-        self.input_folders: List[Path] = []
+        self.input_videos: list[Path] = []
+        self.input_folders: list[Path] = []
         # "videos", "folders", or "" (nothing added yet)
         self.input_mode: str = ""
         self.output_dir: Path = Path("outputs")
@@ -93,8 +93,18 @@ class BarpathTogaApp(toga.App):
         self.technique_analysis: bool = True
         self.use_filenames_in_legend: bool = False
 
+        self.lifter: str = "generic"
+        self.fast_analysis_enabled: bool = True
+        self.smart_analysis_enabled: bool = True
+
+        # Skip/rerun decisions for batch processing
+        self._skip_all_existing: bool = False
+        self._rerun_all_existing: bool = False
+        self._force_rerun: bool = False
+        self._skip_existing: bool = False
+
         self._is_running: bool = False
-        self._pipeline_task: Optional[asyncio.Task[Any]] = None
+        self._pipeline_task: asyncio.Task[Any] | None = None
         self._cancel_event = threading.Event()
 
         # Thread-safe queue used to ferry progress messages from the
@@ -108,6 +118,11 @@ class BarpathTogaApp(toga.App):
         self._thread_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="barpath-pipeline"
         )
+
+        # Preview state: webcam live preview with YOLO + MediaPipe overlay
+        self._preview_running: bool = False
+        self._preview_thread: threading.Thread | None = None
+        self._preview_stop_event = threading.Event()
 
         # Supported video extensions for OpenFileDialog (Toga expects list of extensions)
         self.video_extensions = [
@@ -405,6 +420,59 @@ class BarpathTogaApp(toga.App):
             )
         )
 
+        content.add(
+            toga.Label(
+                "Analysis Options",
+                style=Pack(font_weight="bold", margin=(14, 0, 6, 0)),
+            )
+        )
+
+        content.add(
+            toga.Label(
+                "Select Lifter (Baseline)",
+                style=Pack(font_weight="bold", margin=(10, 0, 6, 0)),
+            )
+        )
+
+        self.lifter_dropdown = toga.Selection(
+            items=["generic"],
+            on_change=self._on_lifter_dropdown_change,
+            style=Pack(flex=1, margin_bottom=4),
+        )
+        content.add(self.lifter_dropdown)
+
+        self.lifter_hint_label = toga.Label(
+            "Lifter determines which pro baseline to compare against for Fast Analysis. "
+            "Models are loaded from models/analysis/{lifter}/{lift_type}/",
+            style=Pack(font_size=9, color="#5B6472", margin_bottom=10),
+        )
+        content.add(self.lifter_hint_label)
+
+        analysis_row = toga.Box(style=Pack(direction="column", margin_bottom=6))
+        self.fast_analysis_switch = toga.Switch(
+            "Fast Analysis (DTW similarity)",
+            value=True,
+            on_change=self._on_fast_analysis_change,
+            style=Pack(margin_bottom=4),
+        )
+        self.smart_analysis_switch = toga.Switch(
+            "Smart Analysis (RF fault detection)",
+            value=True,
+            on_change=self._on_smart_analysis_change,
+            style=Pack(margin_bottom=4),
+        )
+        analysis_row.add(self.fast_analysis_switch)
+        analysis_row.add(self.smart_analysis_switch)
+        content.add(analysis_row)
+
+        content.add(
+            toga.Label(
+                "Fast Analysis compares bar path shape to pro baselines using DTW. "
+                "Smart Analysis detects specific faults using a trained Random Forest model.",
+                style=Pack(font_size=9, color="#5B6472", margin_top=4, margin_bottom=6),
+            )
+        )
+
         # ------------------------------------------------------------------
         # Multi-video graph options
         # ------------------------------------------------------------------
@@ -470,10 +538,17 @@ class BarpathTogaApp(toga.App):
             enabled=False,
             style=Pack(margin_right=6),
         )
+        self.preview_button = toga.Button(
+            "Preview (Alpha)",
+            on_press=self.on_toggle_preview,
+            enabled=True,
+            style=Pack(margin_right=6),
+        )
 
         controls.add(self.run_button)
         controls.add(self.view_results_button)
         controls.add(self.cancel_button)
+        controls.add(self.preview_button)
         content.add(controls)
 
         # Progress
@@ -714,6 +789,13 @@ class BarpathTogaApp(toga.App):
             )
 
         self._log(f"  Lift Type:    [cyan]{self.lift_type}[/cyan]")
+        self._log(f"  Lifter:       [cyan]{self.lifter}[/cyan]")
+        self._log(
+            f"  Fast Analysis: [cyan]{'enabled' if self.fast_analysis_enabled else 'disabled'}[/cyan]"
+        )
+        self._log(
+            f"  Smart Analysis: [cyan]{'enabled' if self.smart_analysis_enabled else 'disabled'}[/cyan]"
+        )
         self._log(f"  Output Dir:   [cyan]{self._effective_output_dir()}[/cyan]")
         self._log("")
 
@@ -725,6 +807,10 @@ class BarpathTogaApp(toga.App):
         models_dir = Path(__file__).parent / "models"
         if models_dir.exists() and models_dir.is_dir():
             self._populate_model_files(models_dir)
+
+        analysis_models_dir = models_dir / "analysis"
+        if analysis_models_dir.exists() and analysis_models_dir.is_dir():
+            self._populate_lifter_options(analysis_models_dir)
 
     def _populate_model_files(self, directory: Path) -> None:
         self.model_dir = directory
@@ -740,12 +826,27 @@ class BarpathTogaApp(toga.App):
         candidates = pt_files + onnx_files + engine_files + openvino_dirs
         self.model_files = sorted(candidates, key=lambda p: p.name.lower())
 
-        # If selection no longer valid, reset
         if self.model_files:
             if self.selected_model not in self.model_files:
                 self.selected_model = self.model_files[0]
         else:
             self.selected_model = None
+
+    def _populate_lifter_options(self, analysis_dir: Path) -> None:
+        """Populate the lifter dropdown from available analysis models."""
+        lifters = set(["generic"])
+
+        if analysis_dir.exists():
+            for item in analysis_dir.iterdir():
+                if item.is_dir() and item.name not in ("generic",):
+                    lifters.add(item.name)
+
+        lifter_list = sorted(lifters)
+
+        if hasattr(self, "lifter_dropdown"):
+            self.lifter_dropdown.items = lifter_list
+            if self.lifter in lifter_list:
+                self.lifter_dropdown.value = self.lifter
 
     def _refresh_settings_buttons(self) -> None:
         """Rebuild the model dropdown items and sync lift button styles."""
@@ -780,7 +881,7 @@ class BarpathTogaApp(toga.App):
                     pass
 
         # --- Lift buttons ---
-        for lift in ("none", "clean", "snatch"):
+        for lift in ("none", "clean", "snatch", "jerk"):
             if lift not in self._lift_buttons:  # type: ignore[attr-defined]
                 btn = toga.Button(
                     lift.capitalize(),
@@ -790,7 +891,7 @@ class BarpathTogaApp(toga.App):
                 self._lift_buttons[lift] = btn  # type: ignore[attr-defined]
                 self.lift_button_row.add(btn)
 
-        for lift in ("none", "clean", "snatch"):
+        for lift in ("none", "clean", "snatch", "jerk"):
             btn = self._lift_buttons.get(lift)  # type: ignore[attr-defined]
             if btn is not None:
                 btn.style.update(
@@ -869,7 +970,24 @@ class BarpathTogaApp(toga.App):
     def _on_use_filenames_change(self, widget: Any) -> None:
         self.use_filenames_in_legend = bool(widget.value)
 
-    def _resolve_selected_model(self) -> Optional[Path]:
+    def _on_lifter_dropdown_change(self, widget: Any) -> None:
+        """Called when the user picks an entry in the lifter dropdown."""
+        selected = widget.value
+        if selected:
+            self.lifter = selected
+            self._log(f"[green]✓[/green] Selected lifter: [cyan]{selected}[/cyan]")
+
+    def _on_fast_analysis_change(self, widget: Any) -> None:
+        self.fast_analysis_enabled = bool(widget.value)
+        status = "enabled" if self.fast_analysis_enabled else "disabled"
+        self._log(f"[green]✓[/green] Fast Analysis {status}")
+
+    def _on_smart_analysis_change(self, widget: Any) -> None:
+        self.smart_analysis_enabled = bool(widget.value)
+        status = "enabled" if self.smart_analysis_enabled else "disabled"
+        self._log(f"[green]✓[/green] Smart Analysis {status}")
+
+    def _resolve_selected_model(self) -> Path | None:
         if self.selected_model is None:
             return None
         return self.selected_model
@@ -1053,6 +1171,85 @@ class BarpathTogaApp(toga.App):
                 toga.ErrorDialog("Error", f"Could not select output directory: {e}")
             )
 
+    async def _check_existing_outputs(
+        self, input_videos: list[Path], output_base: Path, use_filenames: bool
+    ) -> tuple[list[Path], list[Path]]:
+        """
+        Check for existing output folders for ALL videos upfront.
+
+        Returns:
+            Tuple of (videos_to_process, videos_to_skip)
+        """
+        existing_videos: list[tuple[Path, Path]] = []  # (video, output_dir)
+        new_videos: list[Path] = []
+
+        # Check all videos upfront
+        for idx, video in enumerate(input_videos, 1):
+            if len(input_videos) > 1:
+                folder_name = video.stem if use_filenames else f"lift_{idx}"
+                video_output_dir = output_base / folder_name
+            else:
+                video_output_dir = output_base
+
+            # Check if output exists
+            has_output = video_output_dir.exists() and (
+                (video_output_dir / "final_analysis.csv").exists()
+                or (video_output_dir / "raw_data.pkl").exists()
+            )
+
+            if has_output:
+                existing_videos.append((video, video_output_dir))
+            else:
+                new_videos.append(video)
+
+        if not existing_videos:
+            return input_videos, []
+
+        # Show single dialog for all existing videos
+        if len(existing_videos) == 1:
+            message = (
+                f"Output already exists for:\n\n"
+                f"  {existing_videos[0][0].name}\n\n"
+                f"Skip this video or reprocess it?"
+            )
+        else:
+            video_list = "\n".join([f"  • {v.name}" for v, _ in existing_videos[:5]])
+            if len(existing_videos) > 5:
+                video_list += f"\n  ... and {len(existing_videos) - 5} more"
+            message = (
+                f"Output already exists for {len(existing_videos)} video(s):\n\n"
+                f"{video_list}\n\n"
+                f"Skip all existing or reprocess all?"
+            )
+
+        try:
+            # Ask: Skip or Reprocess?
+            skip_all = await self.main_window.dialog(  # type: ignore
+                toga.ConfirmDialog(
+                    "Existing Outputs Found",
+                    f"{message}\n\n"
+                    f"Click 'Yes' to SKIP existing videos.\n"
+                    f"Click 'No' to REPROCESS all videos.",
+                )
+            )
+
+            if skip_all:
+                # User chose to skip all existing
+                self._log(
+                    f"[yellow]Skipping {len(existing_videos)} already processed video(s)[/yellow]"
+                )
+                self._log(f"[cyan]Processing {len(new_videos)} video(s)[/cyan]")
+                return new_videos, [v for v, _ in existing_videos]
+            else:
+                # User chose to reprocess all
+                self._log(f"[cyan]Reprocessing all {len(input_videos)} video(s)[/cyan]")
+                return input_videos, []
+
+        except Exception as e:
+            # On error, default to processing all
+            self._log(f"[yellow]Warning: Could not show dialog: {e}[/yellow]")
+            return input_videos, []
+
     # ----------------------------
     # Event handlers: Analyze
     # ----------------------------
@@ -1078,7 +1275,7 @@ class BarpathTogaApp(toga.App):
             )
             return
 
-        selected_model: Optional[Path] = None
+        selected_model: Path | None = None
         if not using_folders:
             selected_model = self._resolve_selected_model()
             if not selected_model:
@@ -1101,6 +1298,67 @@ class BarpathTogaApp(toga.App):
         self.cancel_button.enabled = True
         self.progress_bar.value = 0
         self.progress_label.text = "Starting pipeline..."
+
+        # Reset skip/rerun decisions
+        self._skip_all_existing = False
+        self._rerun_all_existing = False
+
+        # For video processing, check for existing outputs asynchronously
+        if not using_folders:
+            # Create async task to check existing and then start pipeline
+            asyncio.create_task(self._check_existing_and_run(selected_model))
+        else:
+            # For folder reprocessing, start directly
+            self._start_pipeline(
+                selected_model, using_folders, self.input_videos, self.input_folders
+            )
+
+    async def _check_existing_and_run(self, selected_model: Path | None) -> None:
+        """Check for existing outputs and start pipeline after user decision."""
+        try:
+            output_base = self._effective_output_dir()
+            use_filenames = self.use_filenames_in_legend
+
+            # Check for existing outputs
+            videos_to_process, videos_to_skip = await self._check_existing_outputs(
+                self.input_videos, output_base, use_filenames
+            )
+
+            if videos_to_skip:
+                self._log(
+                    f"[yellow]Skipping {len(videos_to_skip)} already processed video(s)[/yellow]"
+                )
+
+            if not videos_to_process:
+                self._log("[yellow]No videos to process.[/yellow]")
+                self._is_running = False
+                self.run_button.enabled = True
+                self.cancel_button.enabled = False
+                return
+
+            # Start pipeline with filtered list
+            self._start_pipeline(
+                selected_model,
+                False,  # using_folders
+                videos_to_process,
+                self.input_folders,
+            )
+        except Exception as e:
+            self._log(
+                f"[bold red]ERROR[/bold red] Failed to check existing outputs: {e}"
+            )
+            self._is_running = False
+            self.run_button.enabled = True
+            self.cancel_button.enabled = False
+
+    def _start_pipeline(
+        self,
+        selected_model: Path | None,
+        using_folders: bool,
+        videos_to_process: list[Path],
+        folders_to_process: list[Path],
+    ) -> None:
+        """Start the pipeline with the given inputs."""
         self._cancel_event.clear()
 
         # Drain any leftover messages from a previous run
@@ -1117,8 +1375,8 @@ class BarpathTogaApp(toga.App):
         #    The worker function drains the run_pipeline generator and pushes
         #    every (step, progress, message) tuple onto _progress_queue.
         #    It never touches Toga widgets directly.
-        input_videos_snapshot = list(self.input_videos)
-        input_folders_snapshot = list(self.input_folders)
+        input_videos_snapshot = list(videos_to_process)
+        input_folders_snapshot = list(folders_to_process)
         selected_model_snapshot = selected_model
         encode_video_snapshot = self.encode_video
         lift_type_snapshot = self.lift_type
@@ -1147,12 +1405,12 @@ class BarpathTogaApp(toga.App):
 
     def _pipeline_worker(
         self,
-        input_videos: List[Path],
-        selected_model: Optional[Path],
+        input_videos: list[Path],
+        selected_model: Path | None,
         encode_video: bool,
         lift_type: str,
         use_filenames_in_legend: bool = False,
-        input_folders: Optional[List[Path]] = None,
+        input_folders: list[Path] | None = None,
         using_folders: bool = False,
     ) -> None:
         """
@@ -1184,7 +1442,7 @@ class BarpathTogaApp(toga.App):
 
     def _pipeline_worker_videos(
         self,
-        input_videos: List[Path],
+        input_videos: list[Path],
         selected_model: Path,
         encode_video: bool,
         lift_type: str,
@@ -1195,8 +1453,9 @@ class BarpathTogaApp(toga.App):
         is_batch = len(input_videos) > 1
         total_videos = len(input_videos)
 
-        completed_video_dirs: List[Path] = []
-        completed_video_labels: List[str] = []
+        completed_video_dirs: list[Path] = []
+        completed_video_labels: list[str] = []
+        skipped_insufficient: list[tuple[Path, str]] = []  # (video, reason)
 
         try:
             for video_idx, input_video in enumerate(input_videos, 1):
@@ -1228,33 +1487,88 @@ class BarpathTogaApp(toga.App):
                     )
                 )
 
-                for step_name, progress_value, message in run_pipeline(
-                    input_video=str(input_video),
-                    model_path=str(selected_model),
-                    output_video=(
-                        str(output_video_path) if output_video_path else None
-                    ),
-                    lift_type=lift_type,
-                    output_dir=str(video_output_dir),
-                    encode_video=encode_video,
-                    technique_analysis=(lift_type != "none"),
-                    cancel_event=self._cancel_event,
-                ):
-                    self._progress_queue.put((step_name, progress_value, message))
+                try:
+                    for step_name, progress_value, message in run_pipeline(
+                        input_video=str(input_video),
+                        model_path=str(selected_model),
+                        output_video=(
+                            str(output_video_path) if output_video_path else None
+                        ),
+                        lift_type=lift_type,
+                        output_dir=str(video_output_dir),
+                        encode_video=encode_video,
+                        technique_analysis=(lift_type != "none"),
+                        cancel_event=self._cancel_event,
+                        lifter=self.lifter,
+                        fast_analysis=self.fast_analysis_enabled,
+                        smart_analysis=self.smart_analysis_enabled,
+                    ):
+                        # Check for insufficient data signal
+                        if step_name == "_insufficient_data_":
+                            # Skip this video due to insufficient data
+                            self._progress_queue.put(
+                                (
+                                    "_video_skipped_",
+                                    None,
+                                    f"[yellow]Skipped {input_video.name}: {message}[/yellow]",
+                                )
+                            )
+                            skipped_insufficient.append((input_video, message))
+                            # Clean up empty output directory
+                            try:
+                                if video_output_dir.exists() and not any(
+                                    video_output_dir.iterdir()
+                                ):
+                                    video_output_dir.rmdir()
+                            except Exception:
+                                pass
+                            break  # Exit the for loop for this video
 
-                completed_video_dirs.append(video_output_dir)
-                if use_filenames_in_legend:
-                    completed_video_labels.append(input_video.stem)
-                else:
-                    completed_video_labels.append(f"Lift {video_idx}")
+                        self._progress_queue.put((step_name, progress_value, message))
+                    else:
+                        # Only mark as completed if we didn't break due to insufficient data
+                        completed_video_dirs.append(video_output_dir)
+                        if use_filenames_in_legend:
+                            completed_video_labels.append(input_video.stem)
+                        else:
+                            completed_video_labels.append(f"Lift {video_idx}")
 
+                        self._progress_queue.put(
+                            (
+                                "_video_done_",
+                                None,
+                                f"[green]✓[/green] Completed: [dim]{input_video.name}[/dim]",
+                            )
+                        )
+
+                except Exception as e:
+                    # Catch any other exceptions during pipeline execution
+                    self._progress_queue.put(
+                        (
+                            "_video_error_",
+                            None,
+                            f"[red]Error processing {input_video.name}: {str(e)}[/red]",
+                        )
+                    )
+                    continue
+
+            # Report skipped videos at the end
+            if skipped_insufficient:
                 self._progress_queue.put(
                     (
-                        "_video_done_",
+                        "_banner_",
                         None,
-                        f"[green]✓[/green] Completed: [dim]{input_video.name}[/dim]",
+                        f"[yellow]Skipped {len(skipped_insufficient)} video(s) due to insufficient data[/yellow]",
                     )
                 )
+                for video, reason in skipped_insufficient:
+                    self._progress_queue.put(
+                        (
+                            "_info_",
+                            None,
+                            f"  • {video.name}: {reason}",
+                        )
+                    )
 
             if (
                 not self._cancel_event.is_set()
@@ -1293,7 +1607,7 @@ class BarpathTogaApp(toga.App):
 
     def _pipeline_worker_folders(
         self,
-        input_folders: List[Path],
+        input_folders: list[Path],
         encode_video: bool,
         lift_type: str,
         use_filenames_in_legend: bool,
@@ -1303,8 +1617,8 @@ class BarpathTogaApp(toga.App):
         is_batch = len(input_folders) > 1
         total_folders = len(input_folders)
 
-        completed_video_dirs: List[Path] = []
-        completed_video_labels: List[str] = []
+        completed_video_dirs: list[Path] = []
+        completed_video_labels: list[str] = []
 
         try:
             for folder_idx, folder in enumerate(input_folders, 1):
@@ -1322,9 +1636,9 @@ class BarpathTogaApp(toga.App):
 
                 for step_name, progress_value, message in run_pipeline_from_folder(
                     output_folder=folder,
-                    lift_type=lift_type,
+                    lift_type="none",
                     encode_video=encode_video,
-                    technique_analysis=(lift_type != "none"),
+                    technique_analysis=True,
                     cancel_event=self._cancel_event,
                 ):
                     self._progress_queue.put((step_name, progress_value, message))
@@ -1428,6 +1742,10 @@ class BarpathTogaApp(toga.App):
                             )
                             self.progress_label.text = "Cancelled"
                             self.progress_bar.value = 0
+                            self._is_running = False
+                            self.run_button.enabled = True
+                            self.cancel_button.enabled = False
+                            self._pipeline_task = None
                             return
                         elif item.startswith("_ERROR_:"):
                             error_body = item[len("_ERROR_:") :]
@@ -1528,12 +1846,187 @@ class BarpathTogaApp(toga.App):
             self.cancel_button.enabled = False
 
     # ----------------------------
+    # Live webcam preview (YOLO + MediaPipe)
+    # ----------------------------
+
+    def on_toggle_preview(self, widget: toga.Widget) -> None:
+        """Toggle the live webcam preview on/off."""
+        if self._preview_running:
+            self._stop_preview()
+        else:
+            self._start_preview()
+
+    def _start_preview(self) -> None:
+        """Start the live preview in a background thread."""
+        model_path = self._resolve_selected_model()
+        if model_path is None:
+            self._log("[red]![/red] No model selected for preview")
+            return
+
+        self._preview_stop_event.clear()
+        self._preview_running = True
+        self.preview_button.text = "Stop Preview"
+        self._log(
+            "[cyan]Starting preview...[/cyan] Press 'q' in the preview window to stop."
+        )
+
+        self._preview_thread = threading.Thread(
+            target=self._run_preview,
+            args=(str(model_path),),
+            daemon=True,
+            name="barpath-preview",
+        )
+        self._preview_thread.start()
+
+    def _stop_preview(self) -> None:
+        """Signal the preview thread to stop."""
+        self._preview_stop_event.set()
+        self._preview_running = False
+        self.preview_button.text = "Preview (Alpha)"
+        self._log("[cyan]Preview stopped.[/cyan]")
+
+    def _run_preview(self, model_path: str) -> None:
+        """
+        Background thread that captures webcam frames, runs YOLO + MediaPipe,
+        and displays the annotated feed in an OpenCV window.
+
+        Press 'q' in the preview window to stop.
+        """
+        import cv2
+        import time
+
+        import mediapipe as mp
+        from ultralytics import YOLO  # type: ignore
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python import vision as mp_vision
+        from pipeline.step1_helpers.landmarks import get_pose_landmarker_model_path
+
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            self._preview_stop_event.set()
+            self._preview_running = False
+            return
+
+        pose_model_path = get_pose_landmarker_model_path()
+        base_options = mp_python.BaseOptions(model_asset_path=str(pose_model_path))
+        options = mp_vision.PoseLandmarkerOptions(
+            base_options=base_options,
+            running_mode=mp_vision.RunningMode.VIDEO,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+            output_segmentation_masks=False,
+        )
+        pose_landmarker = mp_vision.PoseLandmarker.create_from_options(options)
+        yolo_model = YOLO(model_path, task="detect")
+
+        cv2.namedWindow("Barpath Preview", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Barpath Preview", 960, 540)
+
+        frame_times = []
+        frame_count = 0
+        timestamp_ms = 0
+
+        while not self._preview_stop_event.is_set():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            h, w = frame.shape[:2]
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+            pose_results = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
+            yolo_results = yolo_model(frame, verbose=False, conf=0.25)
+
+            if yolo_results and len(yolo_results) > 0:
+                for result in yolo_results:
+                    boxes = result.boxes
+                    if boxes is not None:
+                        for box in boxes:
+                            x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(
+                                frame,
+                                "Barbell",
+                                (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.6,
+                                (0, 255, 0),
+                                2,
+                            )
+
+            if pose_results and pose_results.pose_landmarks:
+                landmarks = pose_results.pose_landmarks[0]
+                landmark_pixels = {}
+                for idx, lm in enumerate(landmarks):
+                    px = int(lm.x * w)
+                    py = int(lm.y * h)
+                    vis = lm.visibility
+                    if vis > 0.1:
+                        landmark_pixels[idx] = (px, py)
+
+                POSE_CONNECTIONS = [
+                    (11, 12),
+                    (11, 23),
+                    (12, 24),
+                    (11, 13),
+                    (13, 15),
+                    (12, 14),
+                    (14, 16),
+                    (23, 24),
+                    (23, 25),
+                    (25, 27),
+                    (24, 26),
+                    (26, 28),
+                ]
+                for i1, i2 in POSE_CONNECTIONS:
+                    if i1 in landmark_pixels and i2 in landmark_pixels:
+                        p1 = landmark_pixels[i1]
+                        p2 = landmark_pixels[i2]
+                        cv2.line(frame, p1, p2, (255, 255, 255), 3)
+
+                for idx, (px, py) in landmark_pixels.items():
+                    cv2.circle(frame, (px, py), 4, (255, 0, 0), -1)
+
+            current_time = time.time()
+            frame_times.append(current_time)
+            if len(frame_times) > 30:
+                frame_times.pop(0)
+            if len(frame_times) >= 2:
+                fps = len(frame_times) / (frame_times[-1] - frame_times[0] + 0.001)
+                cv2.putText(
+                    frame,
+                    f"FPS: {fps:.1f}",
+                    (15, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    (0, 255, 255),
+                    2,
+                )
+
+            cv2.imshow("Barpath Preview", frame)
+            timestamp_ms += 33
+            frame_count += 1
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+
+        cap.release()
+        cv2.destroyWindow("Barpath Preview")
+        pose_landmarker.close()
+
+        self._preview_stop_event.set()
+        self._preview_running = False
+
+    # ----------------------------
     # View analysis (unchanged logic, lightly styled)
     # ----------------------------
     # Utility
     # ----------------------------
 
-    def _validate_environment(self) -> Tuple[bool, str]:
+    def _validate_environment(self) -> tuple[bool, str]:
         if not self.input_videos:
             return False, "No input videos selected"
         if not self._resolve_selected_model():

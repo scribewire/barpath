@@ -32,9 +32,9 @@ extras_dict = {
     # Development dependencies
     "dev": [
         "pytest>=7.0.0",
-        "black>=22.0.0",
-        "flake8>=4.0.0",
-        "mypy>=0.950",
+        "ruff>=0.4.0",
+        "basedpyright>=1.15.0",
+        "opencv-stubs>=0.1.0",
     ],
 }
 

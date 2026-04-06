@@ -1,0 +1,456 @@
+"""
+Step 5: Render final analysis video with overlays.
+
+This module renders the visualization video with:
+- Colored bar path (phase-based or similarity-based)
+- Skeleton overlay
+- Legend and HUD elements
+- Optional temporal similarity heatmap
+"""
+
+import argparse
+import gc
+import os
+import subprocess
+from typing import Any, Optional, cast
+
+import cv2
+import numpy as np
+import pandas as pd
+from config import (
+    BARBELL_BOX_THICKNESS,
+    GC_INTERVAL_FRAMES,
+    LANDMARK_RADIUS,
+    PHASE_COLORS_BGR,
+    SKELETON_LINE_THICKNESS,
+)
+from utils import (
+    COLOR_SCHEME,
+    draw_legend,
+    get_connection_color,
+    parse_barbell_box,
+    parse_landmarks_from_string,
+)
+
+# Phase color schemes for different lift types
+PHASE_COLOR_SCHEMES = {
+    "snatch": {
+        0: (0, 0, 255),  # Red - Pull
+        1: (0, 165, 255),  # Orange - Pull-under
+        2: (0, 255, 0),  # Green - Recovery
+    },
+    "clean": {
+        0: (0, 0, 255),  # Red - Pull
+        1: (0, 165, 255),  # Orange - Pull-under
+        2: (0, 255, 0),  # Green - Recovery
+    },
+    "jerk": {
+        0: (255, 0, 0),  # Blue - Dip
+        1: (255, 255, 0),  # Cyan/Yellow - Drive
+        2: (0, 255, 0),  # Green - Recovery
+    },
+}
+
+# Phase names for legend
+PHASE_NAMES = {
+    "snatch": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
+    "clean": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
+    "jerk": {0: "Dip", 1: "Drive", 2: "Recovery"},
+}
+
+
+LEGEND_COLORS = {
+    "Barbell Box": COLOR_SCHEME["Barbell Box"],
+    "Pull": PHASE_COLORS_BGR[0],
+    "Pull-under": PHASE_COLORS_BGR[1],
+    "Recovery": PHASE_COLORS_BGR[2],
+    "Dip": (255, 0, 0),
+    "Drive": (255, 255, 0),
+}
+
+SKELETON_CONNECTIONS = [
+    ("left_shoulder", "right_shoulder"),
+    ("left_shoulder", "left_hip"),
+    ("right_shoulder", "right_hip"),
+    ("left_hip", "right_hip"),
+    ("left_shoulder", "left_elbow"),
+    ("left_elbow", "left_wrist"),
+    ("right_shoulder", "right_elbow"),
+    ("right_elbow", "right_wrist"),
+    ("left_hip", "left_knee"),
+    ("left_knee", "left_ankle"),
+    ("right_hip", "right_knee"),
+    ("right_knee", "right_ankle"),
+]
+
+
+def similarity_to_color(similarity: float) -> tuple:
+    """
+    Convert similarity value (0-1) to BGR color.
+
+    0.0 = red (maximum deviance)
+    0.5 = yellow (moderate)
+    1.0 = green (high similarity)
+    """
+    similarity = max(0.0, min(1.0, similarity))
+
+    if similarity < 0.5:
+        t = similarity * 2
+        r = 255
+        g = int(255 * t)
+        b = 0
+    else:
+        t = (similarity - 0.5) * 2
+        r = int(255 * (1 - t))
+        g = 255
+        b = 0
+
+    return (b, g, r)
+
+
+def step_5_render_video(
+    df: pd.DataFrame,
+    video_path: str,
+    output_video_path: str,
+    draw_pose: bool = True,
+    temporal_similarity: Optional[np.ndarray] = None,
+    overall_similarity: Optional[float] = None,
+    lifter_name: Optional[str] = None,
+    lift_type: str = "snatch",
+):
+    """
+    Render the final visualization video.
+
+    Args:
+        df: DataFrame with kinematic data
+        video_path: Path to source video
+        output_video_path: Path to save output video
+        draw_pose: Whether to draw skeleton overlay
+        temporal_similarity: Per-frame similarity values (0-1) for coloring
+        overall_similarity: Overall similarity score for HUD
+        lifter_name: Name of baseline lifter for HUD
+        lift_type: Type of lift (snatch, clean, jerk) for phase naming
+    """
+    print("--- Step 5: Rendering Final Video ---")
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Could not open video file {video_path}")
+
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # type: ignore
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
+
+    pose_enabled = draw_pose
+
+    position_sources = [
+        ("barbell_x_smooth", "barbell_y_smooth", "smoothed"),
+        ("barbell_x_stable", "barbell_y_stable", "stabilized"),
+    ]
+    selected_source = None
+    for x_col, y_col, label in position_sources:
+        if x_col in df.columns and y_col in df.columns:
+            selected_source = (x_col, y_col, label)
+            break
+    if selected_source is None:
+        cap.release()
+        raise ValueError(
+            "Missing barbell position columns in CSV. Please re-run Step 2."
+        )
+
+    position_x_col, position_y_col, source_label = selected_source
+    if "bar_phase" not in df.columns:
+        cap.release()
+        raise ValueError("Missing bar_phase column in CSV. Please re-run Step 2.")
+
+    print(f"Rendering bar path using {source_label} coordinates.")
+
+    path_df = df[[position_x_col, position_y_col, "bar_phase"]].dropna()
+    path_indices = np.asarray(
+        cast(Any, path_df.index).to_numpy(dtype=float), dtype=float
+    )
+    path_points = np.asarray(
+        cast(Any, path_df[[position_x_col, position_y_col]]).to_numpy(dtype=float),
+        dtype=float,
+    )
+    path_phases = np.asarray(
+        cast(Any, path_df["bar_phase"]).to_numpy(dtype=float), dtype=float
+    )
+
+    first_idx = np.asarray(cast(Any, df.index).to_numpy(), dtype=float)
+    first_analyzed_frame = int(first_idx.min()) if first_idx.size > 0 else 0
+    last_analyzed_frame = int(first_idx.max()) if first_idx.size > 0 else 0
+    extra_frames = int(fps)
+
+    start_frame = first_analyzed_frame
+    end_frame = min(last_analyzed_frame + extra_frames, total_frames)
+    frames_to_render = end_frame - start_frame
+
+    print(
+        f"Rendering frames {start_frame} to {end_frame} ({frames_to_render} total frames)..."
+    )
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    last_shake_x = 0.0
+    last_shake_y = 0.0
+
+    use_similarity_coloring = (
+        temporal_similarity is not None and len(temporal_similarity) > 0
+    )
+
+    for frame_idx in range(frames_to_render):
+        frame_count = start_frame + frame_idx
+        points_to_draw = None
+        success, frame = cap.read()
+        if not success:
+            print(f"Warning: Could not read frame {frame_count}")
+            break
+
+        if frame_count in df.index:
+            row = df.loc[frame_count]
+
+            if not pd.isna(row.get("total_shake_x")):
+                last_shake_x = float(row["total_shake_x"])
+                last_shake_y = float(row["total_shake_y"])
+
+            current_shake_x = last_shake_x
+            current_shake_y = last_shake_y
+
+            max_path_index = int(
+                np.searchsorted(path_indices, frame_count, side="right")
+            )
+
+            draw_skeleton = pose_enabled
+            draw_box = True
+
+            landmarks_str = (
+                str(row.get("landmarks_str", "{}")) if pose_enabled else "{}"
+            )
+            barbell_box_str = str(row.get("barbell_box_str", ""))
+
+        else:
+            current_shake_x = last_shake_x
+            current_shake_y = last_shake_y
+
+            max_path_index = len(path_points)
+
+            draw_skeleton = False
+            draw_box = False
+
+            landmarks_str = "{}"
+            barbell_box_str = ""
+
+        if max_path_index >= 2:
+            points_to_draw = path_points[:max_path_index].copy()
+            phases_to_draw = path_phases[:max_path_index]
+
+            points_to_draw[:, 0] += current_shake_x  # type: ignore
+            points_to_draw[:, 1] += current_shake_y  # type: ignore
+            points_to_draw = points_to_draw.astype(np.int32)
+
+            for i in range(len(points_to_draw) - 1):
+                p1 = (points_to_draw[i, 0], points_to_draw[i, 1])
+                p2 = (points_to_draw[i + 1, 0], points_to_draw[i + 1, 1])
+
+                if use_similarity_coloring:
+                    frame_idx_for_sim = (
+                        int(path_indices[i]) if i < len(path_indices) else i
+                    )
+                    if temporal_similarity is not None and frame_idx_for_sim < len(
+                        temporal_similarity
+                    ):
+                        sim_val = temporal_similarity[frame_idx_for_sim]  # type: ignore
+                    else:
+                        sim_val = 0.5
+                    color = similarity_to_color(sim_val)
+                else:
+                    phase_index = int(phases_to_draw[i]) % 3
+                    phase_scheme = PHASE_COLOR_SCHEMES.get(
+                        lift_type, PHASE_COLOR_SCHEMES["snatch"]
+                    )
+                    color = phase_scheme.get(phase_index, (255, 255, 255))
+
+                cv2.line(frame, p1, p2, color, 3)
+
+        if draw_box:
+            barbell_box = parse_barbell_box(barbell_box_str)
+            if barbell_box:
+                x1, y1, x2, y2 = barbell_box
+                cv2.rectangle(
+                    frame,
+                    (x1, y1),
+                    (x2, y2),
+                    LEGEND_COLORS["Barbell Box"],
+                    BARBELL_BOX_THICKNESS,
+                )
+
+        if draw_skeleton:
+            landmarks = parse_landmarks_from_string(landmarks_str)
+
+            if landmarks:
+                landmark_pixels = {}
+                for name, (x, y, z, vis) in landmarks.items():
+                    if vis > 0.1:
+                        px = int(x * frame_width)
+                        py = int(y * frame_height)
+                        landmark_pixels[name] = (px, py)
+
+                for lm1_name, lm2_name in SKELETON_CONNECTIONS:
+                    if lm1_name in landmark_pixels and lm2_name in landmark_pixels:
+                        p1 = landmark_pixels[lm1_name]
+                        p2 = landmark_pixels[lm2_name]
+                        color = get_connection_color(lm1_name, lm2_name, LEGEND_COLORS)
+                        cv2.line(frame, p1, p2, color, SKELETON_LINE_THICKNESS)
+
+                for name, (px, py) in landmark_pixels.items():
+                    cv2.circle(frame, (px, py), LANDMARK_RADIUS, (255, 255, 255), -1)
+
+        # Build dynamic legend based on lift type
+        phase_names = PHASE_NAMES.get(lift_type, PHASE_NAMES["snatch"])
+        phase_scheme = PHASE_COLOR_SCHEMES.get(lift_type, PHASE_COLOR_SCHEMES["snatch"])
+        dynamic_legend = {
+            "Barbell Box": COLOR_SCHEME["Barbell Box"],
+            phase_names[0]: phase_scheme[0],
+            phase_names[1]: phase_scheme[1],
+            phase_names[2]: phase_scheme[2],
+        }
+
+        last_y = draw_legend(frame, dynamic_legend)
+
+        if use_similarity_coloring and overall_similarity is not None:
+            sim_text = f"Similarity: {overall_similarity * 100:.1f}%"
+            cv2.putText(
+                frame,
+                sim_text,
+                (15, last_y + 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+            )
+
+            if lifter_name:
+                lifter_text = f"Baseline: {lifter_name.replace('_', ' ').title()}"
+                cv2.putText(
+                    frame,
+                    lifter_text,
+                    (15, last_y + 55),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (200, 200, 200),
+                    1,
+                )
+
+        out.write(frame)
+
+        progress_fraction = (frame_idx + 1) / frames_to_render
+        yield (
+            "step5",
+            progress_fraction,
+            f"Rendering video: frame {frame_count} ({frame_idx + 1}/{frames_to_render})",
+        )
+
+        del frame
+        if points_to_draw is not None:
+            del points_to_draw
+        if frame_idx % GC_INTERVAL_FRAMES == 0:
+            gc.collect()
+
+    cap.release()
+    out.release()
+
+    start_time = start_frame / fps
+    duration = frames_to_render / fps
+
+    temp_video_path = output_video_path + ".temp.mp4"
+    os.replace(output_video_path, temp_video_path)
+
+    try:
+        print("Muxing audio from original video...")
+
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(start_time),
+            "-i",
+            video_path,
+            "-i",
+            temp_video_path,
+            "-t",
+            str(duration),
+            "-map",
+            "1:v:0",
+            "-map",
+            "0:a:0?",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-shortest",
+            output_video_path,
+        ]
+
+        result = subprocess.run(
+            ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+
+        if result.returncode == 0:
+            os.remove(temp_video_path)
+            print(f"Step 5 Complete. Final video saved to '{output_video_path}'")
+        else:
+            os.replace(temp_video_path, output_video_path)
+            print("Warning: ffmpeg audio muxing failed. Video saved without audio.")
+            print(f"ffmpeg stderr: {result.stderr}")
+
+    except FileNotFoundError:
+        os.replace(temp_video_path, output_video_path)
+        print("Warning: ffmpeg not found. Video saved without audio.")
+    except Exception as e:
+        if os.path.exists(temp_video_path):
+            os.replace(temp_video_path, output_video_path)
+        print(f"Warning: Error during audio muxing: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Step 5: Render final analysis video.")
+    parser.add_argument(
+        "--input_video", required=True, help="Path to the original source video file."
+    )
+    parser.add_argument(
+        "--input_csv",
+        default="final_analysis.csv",
+        help="Path to the final analysis CSV from Step 2.",
+    )
+    parser.add_argument(
+        "--output_video", required=True, help="Path to save the final visualized video."
+    )
+    args = parser.parse_args()
+
+    if not os.path.exists(args.input_video):
+        print(f"Error: Input video not found at {args.input_video}")
+        return
+    if not os.path.exists(args.input_csv):
+        print(f"Error: Input CSV not found at {args.input_csv}")
+        return
+
+    try:
+        df = pd.read_csv(args.input_csv)
+        if "frame" in df.columns:
+            df = df.set_index("frame")
+        print(f"Loaded CSV with {len(df)} frames and {len(df.columns)} columns")
+    except Exception as e:
+        print(f"Error loading CSV file {args.input_csv}: {e}")
+        return
+
+    for _ in step_5_render_video(df, args.input_video, args.output_video):
+        pass
+
+
+if __name__ == "__main__":
+    main()

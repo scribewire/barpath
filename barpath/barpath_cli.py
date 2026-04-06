@@ -29,7 +29,7 @@ from rich.table import Table
 sys.path.insert(0, str(Path(__file__).parent))
 
 # Import the core pipeline runner
-from barpath_core import run_pipeline
+from barpath.barpath_core import run_pipeline
 
 
 def _is_openvino_model_dir(path_str: str) -> bool:
@@ -105,14 +105,23 @@ def print_rich_help(console, parser):
     [dim]# 3. Snatch analysis — reports Pull / Pull-under / Recovery phases[/dim]
     python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type snatch --output_video out.mp4
 
-    [dim]# 4. OpenVINO model (Intel CPU optimization, YOLO26 export)[/dim]
+    [dim]# 4. Jerk analysis — reports Dip / Drive / Recovery phases[/dim]
+    python barpath/barpath_cli.py --input_video jerk.mp4 --model models/yolo26n.pt --lift_type jerk --output_video out.mp4
+
+    [dim]# 5. OpenVINO model (Intel CPU optimization, YOLO26 export)[/dim]
     python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26_openvino_export --lift_type none --no-video
 
-    [dim]# 5. Batch processing multiple videos[/dim]
+    [dim]# 6. Batch processing multiple videos[/dim]
     python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 vid3.mp4 --model models/yolo26n.pt --lift_type clean --no-video
 
-    [dim]# 6. Custom output directory[/dim]
+    [dim]# 7. Custom output directory[/dim]
     python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --output_dir my_results/
+
+    [dim]# 8. Skip already processed videos[/dim]
+    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 --model models/yolo26n.pt --skip-existing
+
+    [dim]# 9. Force reprocess all videos (overwrite existing)[/dim]
+    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 --model models/yolo26n.pt --force
     """
     console.print(
         Panel(example_text.strip(), title="Sample Commands", border_style="green")
@@ -139,18 +148,18 @@ def main():
     )
 
     # Main Arguments
-    parser.add_argument(
+    _ = parser.add_argument(
         "--input_video",
         required=True,
         nargs="+",  # KEY: Accept one or more arguments
         help="Path to the source video file(s) (e.g., 'videos/my_clean.mp4' or multiple files for batch processing)",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--model",
         required=True,
         help="Path to the trained YOLO model (e.g., 'models/yolo26n.pt', 'models/best.onnx', 'models/best.engine', or an OpenVINO export directory). YOLO26 NMS-free models are fully supported.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--output_video",
         required=False,
         default="outputs/output.mp4",
@@ -158,22 +167,55 @@ def main():
     )
 
     # Pipeline Control Arguments
-    parser.add_argument(
+    _ = parser.add_argument(
         "--lift_type",
-        choices=["clean", "snatch", "none"],
+        choices=["clean", "snatch", "jerk", "none"],
         default="none",
         help="The type of lift to critique. Select 'none' to skip critique.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--no-video",
         action="store_true",
         help="If set, skips Step 4 (video rendering), which is computationally expensive.",
     )
 
-    parser.add_argument(
+    _ = parser.add_argument(
         "--output_dir",
         default="outputs",
         help="Directory to save outputs (graphs, analysis, video).",
+    )
+
+    _ = parser.add_argument(
+        "--lifter",
+        default="generic",
+        help=(
+            "Lifter name for model selection (e.g., 'liao_hui', 'lu_xiaojun', 'generic'). "
+            "Determines which pro baseline to compare against for Fast Analysis."
+        ),
+    )
+
+    _ = parser.add_argument(
+        "--no-fast",
+        action="store_true",
+        help="Disable Fast Analysis (DTW-based bar path similarity).",
+    )
+
+    _ = parser.add_argument(
+        "--no-smart",
+        action="store_true",
+        help="Disable Smart Analysis (RF-based fault detection).",
+    )
+
+    _ = parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force reprocessing of videos even if output folders already exist (skip confirmation).",
+    )
+
+    _ = parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Automatically skip videos that have already been processed (skip confirmation).",
     )
 
     # Check for help flag manually
@@ -285,7 +327,92 @@ def main():
     else:
         console.print("  Output Video: [yellow][SKIPPED - using --no-video][/yellow]")
     console.print(f"  Lift Type:    [cyan]{args.lift_type}[/cyan]")
-    console.print(f"  Output Dir:   [cyan]{args.output_dir}[/cyan]\n")
+    console.print(f"  Lifter:       [cyan]{args.lifter}[/cyan]")
+    console.print(f"  Output Dir:   [cyan]{args.output_dir}[/cyan]")
+
+    if args.no_fast:
+        console.print("  Fast Analysis: [yellow][DISABLED][/yellow]")
+    if args.no_smart:
+        console.print("  Smart Analysis: [yellow][DISABLED][/yellow]")
+    console.print()
+
+    # Pre-check all videos for existing outputs
+    videos_to_process: list[Path] = []
+    videos_to_skip: list[tuple[Path, Path]] = []  # (video, output_dir)
+
+    if not args.force:
+        console.print("[bold]Checking for existing outputs...[/bold]")
+        for video in input_videos:
+            if is_batch:
+                video_output_dir = Path(args.output_dir) / video.stem
+            else:
+                video_output_dir = Path(args.output_dir)
+
+            has_output = video_output_dir.exists() and (
+                (video_output_dir / "final_analysis.csv").exists()
+                or (video_output_dir / "raw_data.pkl").exists()
+            )
+
+            if has_output:
+                videos_to_skip.append((video, video_output_dir))
+            else:
+                videos_to_process.append(video)
+
+        if videos_to_skip and not args.skip_existing:
+            console.print()
+            console.print(
+                f"[yellow]Found {len(videos_to_skip)} video(s) with existing output:[/yellow]"
+            )
+            for video, out_dir in videos_to_skip:
+                console.print(f"  • {video.name} → {out_dir}")
+            console.print()
+            console.print("  [1] Skip all existing (process only new videos)")
+            console.print("  [2] Rerun all existing (overwrite outputs)")
+            console.print("  [3] Cancel")
+            console.print()
+
+            while True:
+                try:
+                    choice = input("  Enter choice [1-3]: ").strip()
+                    if choice == "1":
+                        console.print(
+                            f"[yellow]Skipping {len(videos_to_skip)} existing video(s)[/yellow]"
+                        )
+                        console.print(
+                            f"[cyan]Processing {len(videos_to_process)} video(s)[/cyan]"
+                        )
+                        break
+                    elif choice == "2":
+                        videos_to_process = input_videos  # Process all
+                        videos_to_skip = []
+                        console.print(
+                            f"[cyan]Reprocessing all {len(input_videos)} video(s)[/cyan]"
+                        )
+                        break
+                    elif choice == "3":
+                        console.print("[yellow]Cancelled.[/yellow]")
+                        sys.exit(0)
+                    else:
+                        console.print("[red]Invalid choice. Enter 1-3.[/red]")
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\n[yellow]Cancelled.[/yellow]")
+                    sys.exit(0)
+        elif videos_to_skip and args.skip_existing:
+            console.print(
+                f"[yellow]Skipping {len(videos_to_skip)} existing video(s)[/yellow]"
+            )
+            console.print(f"[cyan]Processing {len(videos_to_process)} video(s)[/cyan]")
+        else:
+            videos_to_process = input_videos
+    else:
+        videos_to_process = input_videos
+        console.print("[cyan]Force mode: processing all videos[/cyan]")
+
+    if not videos_to_process:
+        console.print("[yellow]No videos to process.[/yellow]")
+        sys.exit(0)
+
+    console.print()
 
     # Set up progress bar with rich
     with Progress(
@@ -298,26 +425,29 @@ def main():
         console=console,
     ) as progress:
         # Map step names to task IDs (created dynamically)
-        try:
-            # Process each video
-            for video_idx, input_video in enumerate(input_videos, 1):
-                console.print(
-                    f"\n[bold cyan]Processing video {video_idx}/{len(input_videos)}: {input_video.name}[/bold cyan]"
-                )
+        # Track videos skipped due to insufficient data
+        skipped_insufficient: list[tuple[Path, str]] = []
 
+        try:
+            # Process each video (already filtered for existing outputs)
+            for video_idx, input_video in enumerate(videos_to_process, 1):
                 # Determine output directory for this video
                 if is_batch:
-                    # Create subfolder for each video
-                    video_output_dir = os.path.join(args.output_dir, input_video.stem)
-                    os.makedirs(video_output_dir, exist_ok=True)
+                    video_output_dir = Path(args.output_dir) / input_video.stem
                 else:
-                    # Single video: use main output directory
-                    video_output_dir = args.output_dir
+                    video_output_dir = Path(args.output_dir)
+
+                # Create output directory
+                video_output_dir.mkdir(parents=True, exist_ok=True)
+
+                console.print(
+                    f"\n[bold cyan]Processing video {video_idx}/{len(videos_to_process)}: {input_video.name}[/bold cyan]"
+                )
 
                 # Determine output video path
                 if not args.no_video:
                     if is_batch:
-                        video_output_path = os.path.join(video_output_dir, "output.mp4")
+                        video_output_path = str(video_output_dir / "output.mp4")
                     else:
                         video_output_path = args.output_video
                 else:
@@ -327,74 +457,113 @@ def main():
                 task_map = {}
 
                 # Run the pipeline and consume progress updates
-                for step_name, prog_value, message in run_pipeline(
-                    input_video=str(input_video),
-                    model_path=args.model,
-                    output_video=video_output_path,
-                    lift_type=args.lift_type,
-                    output_dir=video_output_dir,
-                    encode_video=not args.no_video,
-                    technique_analysis=(args.lift_type != "none"),
-                ):
-                    # Create task on first encounter of each step
-                    if step_name not in task_map and step_name != "complete":
-                        if step_name == "step1":
-                            task_map[step_name] = progress.add_task(
-                                f"[cyan][{video_idx}/{len(input_videos)}] Step 1: Collecting data...",
-                                total=100,
+                try:
+                    for step_name, prog_value, message in run_pipeline(
+                        input_video=str(input_video),
+                        model_path=args.model,
+                        output_video=video_output_path,
+                        lift_type=args.lift_type,
+                        output_dir=str(video_output_dir),
+                        encode_video=not args.no_video,
+                        technique_analysis=(args.lift_type != "none"),
+                        lifter=args.lifter,
+                        fast_analysis=not args.no_fast,
+                        smart_analysis=not args.no_smart,
+                    ):
+                        # Check for insufficient data signal
+                        if step_name == "_insufficient_data_":
+                            console.print(
+                                f"[yellow]Skipping {input_video.name}: {message}[/yellow]"
                             )
-                        elif step_name == "step2":
-                            task_map[step_name] = progress.add_task(
-                                f"[cyan][{video_idx}/{len(input_videos)}] Step 2: Analyzing data...",
-                                total=None,
-                            )
-                        elif step_name == "step3":
-                            task_map[step_name] = progress.add_task(
-                                f"[cyan][{video_idx}/{len(input_videos)}] Step 3: Generating graphs...",
-                                total=None,
-                            )
-                        elif step_name == "step4":
-                            task_map[step_name] = progress.add_task(
-                                f"[cyan][{video_idx}/{len(input_videos)}] Step 4: Rendering video...",
-                                total=100 if not args.no_video else None,
-                            )
-                        elif step_name == "step5":
-                            task_map[step_name] = progress.add_task(
-                                f"[cyan][{video_idx}/{len(input_videos)}] Step 5: Critiquing lift...",
-                                total=None,
-                            )
+                            skipped_insufficient.append((input_video, message))
+                            # Clean up empty output directory
+                            try:
+                                if video_output_dir.exists() and not any(
+                                    video_output_dir.iterdir()
+                                ):
+                                    video_output_dir.rmdir()
+                            except Exception:
+                                pass
+                            break  # Exit the for loop for this video
 
-                    # Update the corresponding task
-                    if step_name in task_map:
-                        task_id = task_map[step_name]
+                        # Create task on first encounter of each step
+                        if step_name not in task_map and step_name != "complete":
+                            if step_name == "step1":
+                                task_map[step_name] = progress.add_task(
+                                    f"[cyan][{video_idx}/{len(videos_to_process)}] Step 1: Collecting data...",
+                                    total=100,
+                                )
+                            elif step_name == "step2":
+                                task_map[step_name] = progress.add_task(
+                                    f"[cyan][{video_idx}/{len(videos_to_process)}] Step 2: Analyzing data...",
+                                    total=None,
+                                )
+                            elif step_name == "step3":
+                                task_map[step_name] = progress.add_task(
+                                    f"[cyan][{video_idx}/{len(videos_to_process)}] Step 3: Generating graphs...",
+                                    total=None,
+                                )
+                            elif step_name == "step4":
+                                task_map[step_name] = progress.add_task(
+                                    f"[cyan][{video_idx}/{len(videos_to_process)}] Step 4: Analyzing technique...",
+                                    total=None,
+                                )
+                            elif step_name == "step5":
+                                task_map[step_name] = progress.add_task(
+                                    f"[cyan][{video_idx}/{len(videos_to_process)}] Step 5: Rendering video...",
+                                    total=100 if not args.no_video else None,
+                                )
 
-                        if prog_value is not None:
-                            # Update progress bar
-                            progress.update(
-                                task_id,
-                                completed=prog_value * 100,
-                                description=f"[cyan][{video_idx}/{len(input_videos)}] {message}",
-                            )
-                        else:
-                            # Just update the description for steps without progress
-                            progress.update(
-                                task_id,
-                                description=f"[green]✓[/green] [{video_idx}/{len(input_videos)}] {message}",
-                            )
-                            progress.stop_task(task_id)
-                    elif step_name == "complete":
-                        # Pipeline complete
-                        pass
+                        # Update the corresponding task
+                        if step_name in task_map:
+                            task_id = task_map[step_name]
+
+                            if prog_value is not None:
+                                # Update progress bar
+                                progress.update(
+                                    task_id,
+                                    completed=prog_value * 100,
+                                    description=f"[cyan][{video_idx}/{len(videos_to_process)}] {message}",
+                                )
+                            else:
+                                # Just update the description for steps without progress
+                                progress.update(
+                                    task_id,
+                                    description=f"[green]✓[/green] [{video_idx}/{len(videos_to_process)}] {message}",
+                                )
+                                progress.stop_task(task_id)
+                        elif step_name == "complete":
+                            # Pipeline complete
+                            pass
+                    else:
+                        # Only mark as completed if we didn't break due to insufficient data
+                        pass  # Video completed successfully
+
+                except Exception as e:
+                    # Catch any other exceptions during pipeline execution
+                    console.print(
+                        f"[red]Error processing {input_video.name}: {str(e)}[/red]"
+                    )
+                    continue
 
             # Final summary
             console.print("\n[bold green]✓ All Videos Processed![/bold green]")
+
+            # Report skipped videos due to insufficient data
+            if skipped_insufficient:
+                console.print(
+                    f"\n[yellow]Skipped {len(skipped_insufficient)} video(s) due to insufficient data:[/yellow]"
+                )
+                for video, reason in skipped_insufficient:
+                    console.print(f"  • {video.name}: {reason}")
+
             console.print("\n[bold]Generated files:[/bold]")
             if is_batch:
                 console.print(f"  • Output Dir:      [cyan]{args.output_dir}/[/cyan]")
                 console.print(
                     "  • [cyan]Results saved in subfolders for each video[/cyan]"
                 )
-                for vid in input_videos:
+                for vid in videos_to_process:
                     subfolder = os.path.join(args.output_dir, vid.stem)
                     console.print(f"    - {vid.name} → {subfolder}/")
             else:
@@ -405,9 +574,14 @@ def main():
                 console.print(
                     f"  • Analysis CSV:    [cyan]{os.path.join(args.output_dir, 'final_analysis.csv')}[/cyan]"
                 )
-                console.print(
-                    "  • Phases:          [cyan]Pull → Pull-under → Recovery[/cyan]"
-                )
+                # Dynamic phase display based on lift type
+                if args.lift_type == "jerk":
+                    phase_text = "Dip → Drive → Recovery"
+                elif args.lift_type in ("clean", "snatch"):
+                    phase_text = "Pull → Pull-under → Recovery"
+                else:
+                    phase_text = "N/A"
+                console.print(f"  • Phases:          [cyan]{phase_text}[/cyan]")
                 if not args.no_video:
                     console.print(
                         f"  • Output video:    [cyan]{args.output_video}[/cyan]"

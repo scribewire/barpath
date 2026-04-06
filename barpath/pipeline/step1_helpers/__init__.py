@@ -11,6 +11,7 @@ from .landmarks import (
     extract_world_landmarks,
     get_ankle_positions,
     get_landmark_enums,
+    get_pose_landmarker_model_path,
     process_pose_results,
 )
 from .stabilization import (
@@ -32,6 +33,7 @@ __all__ = [
     "update_features",
     # Landmarks
     "get_landmark_enums",
+    "get_pose_landmarker_model_path",
     "extract_landmarks",
     "extract_world_landmarks",
     "process_pose_results",

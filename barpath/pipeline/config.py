@@ -12,9 +12,6 @@ so they can be adjusted in one place and easily tested.
 # Frame decoding queue size (buffer ahead of inference)
 DECODE_QUEUE_SIZE = 8
 
-# Target frames per second for analysis (higher FPS videos will be subsampled)
-TARGET_ANALYSIS_FPS = 30.0
-
 # YOLO detection confidence threshold
 YOLO_CONFIDENCE_THRESHOLD = 0.25
 
@@ -51,6 +48,8 @@ LANDMARKS_TO_TRACK = {
     "right_elbow",
     "left_wrist",
     "right_wrist",
+    "left_eye",
+    "right_eye",
 }
 
 # Smoothing window sizes (Savitzky-Golay)
@@ -63,21 +62,13 @@ PHASE_VEL_THRESHOLD_FACTOR = 0.05  # fraction of max velocity
 PHASE_HIP_SMOOTH_WINDOW = 9
 PHASE_HIP_DROP_STD_FACTOR = 0.1
 
+# Jerk-specific phase detection thresholds
+JERK_DIP_VELOCITY_THRESHOLD = 20.0  # px/s threshold for downward movement
+JERK_DRIVE_VELOCITY_THRESHOLD = 20.0  # px/s threshold for upward movement
+JERK_MIN_KNEE_BEND_ANGLE = 5.0  # minimum knee angle change (degrees) to confirm dip
+
 # Truncation settings
 TRUNCATION_BUFFER_SECONDS = 1.0  # seconds before knee pass to keep
-
-# Perspective correction
-PERSPECTIVE_SIDE_ANGLE_THRESHOLD_DEG = 10.0
-PERSPECTIVE_IQR_MULTIPLIER = 1.5
-PERSPECTIVE_SCALE_SG_WINDOW = 31
-PERSPECTIVE_SCALE_SG_POLY = 3
-PERSPECTIVE_PATH_SG_WINDOW = 25
-PERSPECTIVE_PATH_SG_POLY = 3
-PERSPECTIVE_MIN_VALID_FRAMES = 30  # minimum frames required for scale methods
-PERSPECTIVE_YAW_SG_WINDOW = 15  # Savitzky-Golay window for smoothing yaw estimation
-PERSPECTIVE_YAW_SG_POLY = 2
-PERSPECTIVE_ORIGIN_SEARCH_FRAMES = 10  # frames to search for reliable origin
-PERSPECTIVE_ORIGIN_MIN_VALID = 5  # minimum valid barbell positions for origin
 
 # Barbell endcap real-world width (metres)
 BARBELL_ENDCAP_WIDTH_M = 0.05  # 50mm
@@ -137,9 +128,6 @@ DTW_SIMILARITY_K = 5.0
 
 # Memory management: run garbage collection every N frames
 GC_INTERVAL_FRAMES = 50
-
-# FPS smoothing factor for display
-FPS_SMOOTHING = 0.2
 
 # Phase colors in BGR (OpenCV format)
 PHASE_COLORS_BGR = {
