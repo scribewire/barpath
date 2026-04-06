@@ -197,6 +197,27 @@ def calculate_lifter_angle(landmarks: dict) -> float:
         return np.nan
 
 
+def detect_facing_direction(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detect if lifter is facing toward or away from camera based on eye visibility.
+
+    If either eye (left or right) is detected with sufficient visibility (> 0.1),
+    the lifter is facing forward (toward camera).
+    If neither eye is detected, the lifter is facing backward (away from camera).
+
+    Args:
+        df: DataFrame with left_eye_vis and right_eye_vis columns
+
+    Returns:
+        DataFrame with 'facing_forward' column added (True = facing camera, False = facing away)
+    """
+    df = df.copy()
+    left_eye_visible = df["left_eye_vis"] > 0.1
+    right_eye_visible = df["right_eye_vis"] > 0.1
+    df["facing_forward"] = left_eye_visible | right_eye_visible
+    return df
+
+
 def calculate_hip_y_average(df: pd.DataFrame, frame_height: int) -> pd.DataFrame:
     """
     Calculate average hip Y position in pixel space.

@@ -5,41 +5,44 @@ This step processes video frames to extract:
 - Barbell position (via YOLO detection)
 - Pose landmarks (via MediaPipe)
 - Camera stabilization (via optical flow)
+
+Updated for mediapipe 0.10.x Tasks API.
 """
 
 import argparse
 import pickle
 import queue
 import threading
-import time
 from pathlib import Path
 
 import cv2
 import mediapipe as mp
 import numpy as np
 import torch
-from config import (
+from config import (  # type: ignore[import-untyped]
     DECODE_QUEUE_SIZE,
     MEDIAPIPE_DETECTION_CONFIDENCE,
-    MEDIAPIPE_MODEL_COMPLEXITY,
     MEDIAPIPE_TRACKING_CONFIDENCE,
     STAB_MIN_FEATURES,
     YOLO_CONFIDENCE_THRESHOLD,
 )
-from hardware_detection import detect_intel_gpu, detect_nvidia_gpu
-from step1_helpers import (
+from hardware_detection import detect_intel_gpu, detect_nvidia_gpu  # type: ignore[import-untyped]
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
+from step1_helpers import (  # type: ignore[import-untyped]
     StabilizationParams,
     create_background_mask,
     detect_features,
     estimate_motion,
     get_ankle_positions,
     get_landmark_enums,
+    get_pose_landmarker_model_path,
     process_pose_results,
     track_features,
     update_features,
 )
 from ultralytics import YOLO  # type: ignore
-from utils import LANDMARK_NAMES
+from utils import LANDMARK_NAMES  # type: ignore[import-untyped]
 
 LANDMARKS_TO_TRACK = LANDMARK_NAMES
 LANDMARK_ENUMS = get_landmark_enums(LANDMARKS_TO_TRACK)
@@ -120,15 +123,19 @@ def step_1_collect_data(
     if total_frames == 0:
         raise ValueError(f"Video file {video_path} has no frames.")
 
-    mp_pose_solution = mp.solutions.pose  # type: ignore
-    pose = None
+    pose_landmarker = None
     if lift_type != "none":
-        pose = mp_pose_solution.Pose(
-            min_detection_confidence=MEDIAPIPE_DETECTION_CONFIDENCE,
+        pose_model_path = get_pose_landmarker_model_path()
+        base_options = mp_python.BaseOptions(model_asset_path=str(pose_model_path))
+        options = mp_vision.PoseLandmarkerOptions(
+            base_options=base_options,
+            running_mode=mp_vision.RunningMode.VIDEO,
+            min_pose_detection_confidence=MEDIAPIPE_DETECTION_CONFIDENCE,
+            min_pose_presence_confidence=MEDIAPIPE_TRACKING_CONFIDENCE,
             min_tracking_confidence=MEDIAPIPE_TRACKING_CONFIDENCE,
-            enable_segmentation=True,
-            model_complexity=MEDIAPIPE_MODEL_COMPLEXITY,
+            output_segmentation_masks=True,
         )
+        pose_landmarker = mp_vision.PoseLandmarker.create_from_options(options)
 
     stab_params = StabilizationParams()
 
@@ -164,8 +171,8 @@ def step_1_collect_data(
             else:
                 print("Using CPU for inference")
     except Exception as e:
-        if pose:
-            pose.close()
+        if pose_landmarker:
+            pose_landmarker.close()
         raise RuntimeError(f"Failed to load model: {e}")
 
     frame_queue: "queue.Queue[object]" = queue.Queue(maxsize=DECODE_QUEUE_SIZE)
@@ -181,10 +188,6 @@ def step_1_collect_data(
 
     raw_data_list: list[dict] = []
     last_known_barbell_center = None
-
-    last_iter_timestamp = time.perf_counter()
-    smoothed_fps: float | None = None
-    fps_smoothing = 0.2
 
     frames_processed = 0
 
@@ -210,8 +213,10 @@ def step_1_collect_data(
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         results_pose = None
-        if pose:
-            results_pose = pose.process(frame_rgb)
+        if pose_landmarker:
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+            timestamp_ms = int((frame_count / fps) * 1000)
+            results_pose = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
 
         _infer_kwargs: dict = {"verbose": False, "conf": YOLO_CONFIDENCE_THRESHOLD}
         if yolo_device is not None:
@@ -253,12 +258,13 @@ def step_1_collect_data(
             if last_known_barbell_center is None:
                 feet_pos_px = None
                 if results_pose and results_pose.pose_landmarks:
-                    feet_pos_px = get_ankle_positions(
-                        results_pose.pose_landmarks,
-                        mp_pose_solution,
-                        frame_width,
-                        frame_height,
-                    )
+                    pose_landmarks_list = results_pose.pose_landmarks
+                    if len(pose_landmarks_list) > 0:
+                        feet_pos_px = get_ankle_positions(
+                            pose_landmarks_list[0],
+                            frame_width,
+                            frame_height,
+                        )
 
                 if feet_pos_px is not None:
                     best_endcap = min(
@@ -329,28 +335,17 @@ def step_1_collect_data(
         raw_data_list.append(frame_data)
         frames_processed += 1
 
-        now_ts = time.perf_counter()
-        frame_duration = max(now_ts - last_iter_timestamp, 1e-6)
-        inst_fps = 1.0 / frame_duration
-        if smoothed_fps is None:
-            smoothed_fps = inst_fps
-        else:
-            smoothed_fps = (fps_smoothing * inst_fps) + (
-                (1 - fps_smoothing) * smoothed_fps
-            )
-        last_iter_timestamp = now_ts
-
         progress_fraction = frames_processed / total_frames
         yield (
             "step1",
             progress_fraction,
-            f"Collecting data: frame {frames_processed}/{total_frames} ({smoothed_fps:.1f} FPS)",
+            f"Collecting data: frame {frames_processed}/{total_frames}",
         )
 
     producer_thread.join(timeout=5)
 
-    if pose:
-        pose.close()
+    if pose_landmarker:
+        pose_landmarker.close()
 
     output_data = {
         "metadata": {

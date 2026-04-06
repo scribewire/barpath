@@ -11,15 +11,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
 
 
 class MarkdownRenderer:
     """Handles Markdown to HTML conversion and analysis rendering."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the markdown renderer."""
-        self._template_cache: Optional[str] = None
+        self._template_cache: str | None = None
 
     def render_markdown_file(self, markdown_path: Path) -> str:
         """Render a markdown file to HTML using the analysis template.

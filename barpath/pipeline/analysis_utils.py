@@ -13,21 +13,6 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 
-def make_odd_window(n: int) -> int:
-    """
-    Ensure window size is odd (required for Savitzky-Golay filter).
-
-    Args:
-        n: Input window size
-
-    Returns:
-        n if odd, n-1 if even (minimum 3)
-    """
-    if n < 3:
-        return 3
-    return n if n % 2 == 1 else n - 1
-
-
 def calculate_sg_window(
     data_length: int, default_window: int, poly_order: int = 3
 ) -> int:
@@ -66,7 +51,7 @@ def safe_savgol_smooth(series: pd.Series, window: int = 11, poly: int = 3) -> pd
     """
     Apply Savitzky-Golay smoothing with automatic window adjustment.
 
-    Handles NaN values by interpolation and automatically clamps the window
+    Handles NaN and Inf values by interpolation and automatically clamps the window
     to be valid for the data length.
 
     Args:
@@ -77,7 +62,19 @@ def safe_savgol_smooth(series: pd.Series, window: int = 11, poly: int = 3) -> pd
     Returns:
         Smoothed series with same index as input
     """
-    filled = series.interpolate(method="linear").bfill().ffill()
+    # Replace Inf values with NaN first
+    series_clean = series.replace([np.inf, -np.inf], np.nan)
+
+    # Interpolate to fill NaN values
+    filled = series_clean.interpolate(method="linear").bfill().ffill()
+
+    # Check if we still have NaN values (e.g., all values were NaN)
+    if filled.isna().all():
+        return series_clean
+
+    # Replace any remaining NaN with 0 (edge case for all-NaN series)
+    filled = filled.fillna(0)
+
     n = len(filled)
 
     w = calculate_sg_window(n, window, poly)
@@ -85,7 +82,14 @@ def safe_savgol_smooth(series: pd.Series, window: int = 11, poly: int = 3) -> pd
     if n < w or w < poly + 1:
         return filled
 
-    return pd.Series(savgol_filter(filled, w, poly), index=series.index)
+    try:
+        smoothed = savgol_filter(filled.values, w, poly)
+        return pd.Series(smoothed, index=series.index)
+    except ValueError as e:
+        print(
+            f"Warning: Savitzky-Golay smoothing failed: {e}. Returning unsmoothed data."
+        )
+        return filled
 
 
 def calculate_max_specific_power(

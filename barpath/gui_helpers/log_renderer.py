@@ -12,15 +12,14 @@ from __future__ import annotations
 import html
 import re
 from pathlib import Path
-from typing import List
 
 
 class LogRenderer:
     """Handles Rich markup to HTML conversion and log rendering."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the log renderer with empty log lines."""
-        self._log_html_lines: List[str] = []
+        self._log_html_lines: list[str] = []
         self._log_seq: int = 0
         self._template_cache: str | None = None
 

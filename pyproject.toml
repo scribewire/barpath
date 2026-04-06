@@ -1,0 +1,12 @@
+[tool.basedpyright]
+typeCheckingMode = "standard"
+reportUninitializedInstanceVariable = "none"
+reportUnusedCallResult = "none"
+reportImplicitStringConcatenation = "none"
+reportUnknownParameterType = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportMissingTypeStubs = "none"
+reportMissingImports = "none"
+reportAttributeAccessIssue = "none"

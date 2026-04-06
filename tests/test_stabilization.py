@@ -26,6 +26,8 @@ try:
     import cv2
     import mediapipe as mp
     import numpy as np
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
 except ImportError as e:
     print(f"Missing dependency: {e}")
     print("Install with: pip install opencv-python numpy mediapipe")
@@ -55,12 +57,30 @@ def test_stabilization(video_path, max_frames=300):
     print(f"Video: {frame_width}x{frame_height} @ {fps:.1f} fps")
     print(f"Processing {total_frames} frames...")
 
-    # Initialize MediaPipe Pose with segmentation
-    mp_pose = mp.solutions.pose.Pose(  # type: ignore[attr-defined]
-        min_detection_confidence=0.5,
+    models_dir = Path(__file__).parent.parent / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    model_path = models_dir / "pose_landmarker_heavy.task"
+
+    if not model_path.exists():
+        print(f"Downloading pose landmarker model to {model_path}...")
+        from urllib.request import urlretrieve
+
+        urlretrieve(
+            "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task",
+            str(model_path),
+        )
+        print("Download complete.")
+
+    base_options = mp_python.BaseOptions(model_asset_path=str(model_path))
+    options = mp_vision.PoseLandmarkerOptions(
+        base_options=base_options,
+        running_mode=mp_vision.RunningMode.VIDEO,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
         min_tracking_confidence=0.5,
-        enable_segmentation=True,
+        output_segmentation_masks=True,
     )
+    pose_landmarker = mp_vision.PoseLandmarker.create_from_options(options)
 
     # Stabilization parameters (same as improved implementation)
     prev_gray = None
@@ -97,14 +117,20 @@ def test_stabilization(video_path, max_frames=300):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Get segmentation mask
-        results = mp_pose.process(frame_rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+        timestamp_ms = int((frame_idx / fps) * 1000)
+        results = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
+
         segmentation_mask = None
         has_person = False
 
-        if results and results.segmentation_mask is not None:
-            segmentation_mask = (results.segmentation_mask > 0.5).astype(np.uint8)
-            has_person = True
+        if results and results.segmentation_masks:
+            seg_masks = results.segmentation_masks
+            if len(seg_masks) > 0:
+                mask = seg_masks[0]
+                mask_array = np.array(mask)
+                segmentation_mask = (mask_array > 0.5).astype(np.uint8)
+                has_person = True
 
         # Create background mask
         background_mask = None
@@ -232,7 +258,7 @@ def test_stabilization(video_path, max_frames=300):
             print(f"  Processed {frame_idx + 1}/{total_frames} frames...")
 
     cap.release()
-    mp_pose.close()
+    pose_landmarker.close()
 
     return diagnostics
 

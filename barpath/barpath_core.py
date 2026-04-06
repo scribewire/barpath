@@ -5,8 +5,8 @@ This module orchestrates the 5-step barpath analysis pipeline:
 1. Collect raw data from video
 2. Analyze and enrich the data
 3. Generate kinematic graphs
-4. Render visualization video
-5. Provide technique critique
+4. Provide technique critique (ML-based analysis)
+5. Render visualization video
 
 The runner yields progress updates that can be consumed by CLI or GUI frontends.
 
@@ -15,18 +15,23 @@ collection) and re-runs steps 2-5 from an existing output folder that
 already contains a ``raw_data.pkl``.
 """
 
+from __future__ import annotations
+
 import importlib.util
 import os
 import pickle
 import sys
+import threading
+from collections.abc import Generator, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 print("barpath_core: Starting imports...", flush=True)
 
 
-def _is_openvino_model_dir(path_str: str) -> bool:
+def _is_openvino_model_dir(path_str: str | Path) -> bool:
     """Return True when the provided path looks like an OpenVINO export directory."""
     path = Path(path_str)
     if not path.is_dir():
@@ -38,8 +43,20 @@ pipeline_dir = Path(__file__).parent / "pipeline"
 sys.path.insert(0, str(pipeline_dir))
 print(f"barpath_core: Added {pipeline_dir} to sys.path", flush=True)
 
+if TYPE_CHECKING:
+    from barpath.pipeline.step2_helpers.kinematics import InsufficientDataError
+else:
+    try:
+        from barpath.pipeline.step2_helpers.kinematics import InsufficientDataError
+    except ImportError:
 
-def _import_step_function(step_file, function_name):
+        class InsufficientDataError(Exception):
+            """Fallback error when step2 helpers cannot be imported."""
+
+            pass
+
+
+def _import_step_function(step_file: Path, function_name: str) -> Any:
     """Dynamically import a function from a step file."""
     print(f"barpath_core: Loading {function_name} from {step_file}...", flush=True)
     try:
@@ -67,35 +84,39 @@ step_2_analyze_data = _import_step_function(
 step_3_generate_graphs = _import_step_function(
     pipeline_dir / "3_generate_graphs.py", "step_3_generate_graphs"
 )
-plot_superimposed_paths_compensated = _import_step_function(
-    pipeline_dir / "3_generate_graphs.py", "plot_superimposed_paths_compensated"
-)
-plot_superimposed_paths_smoothed = _import_step_function(
-    pipeline_dir / "3_generate_graphs.py", "plot_superimposed_paths_smoothed"
-)
-step_4_render_video = _import_step_function(
-    pipeline_dir / "4_render_video.py", "step_4_render_video"
+plot_superimposed_paths = _import_step_function(
+    pipeline_dir / "3_generate_graphs.py", "plot_superimposed_paths"
 )
 critique_lift = _import_step_function(
-    pipeline_dir / "5_critique_lift.py", "critique_lift"
+    pipeline_dir / "4_critique_lift.py", "critique_lift"
+)
+step_5_render_video = _import_step_function(
+    pipeline_dir / "5_render_video.py", "step_5_render_video"
 )
 print("barpath_core: All step functions loaded!", flush=True)
 
 
 def run_pipeline_from_folder(
-    output_folder,
-    lift_type="none",
-    encode_video=True,
-    technique_analysis=True,
-    raw_data_path="raw_data.pkl",
-    analysis_csv_path="final_analysis.csv",
-    cancel_event=None,
-):
+    output_folder: str | Path,
+    lift_type: str = "none",
+    encode_video: bool = True,
+    technique_analysis: bool = True,
+    raw_data_path: str = "raw_data.pkl",
+    analysis_csv_path: str = "final_analysis.csv",
+    cancel_event: threading.Event | None = None,
+    lifter: str = "generic",
+    fast_analysis: bool = True,
+    smart_analysis: bool = True,
+) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Re-run steps 2-5 of the barpath pipeline from an existing output folder.
+
+    Settings (lift_type, lifter, fast_analysis, smart_analysis) are read from
+    raw_data.pkl metadata if available. Pass ``"none"`` for lift_type to keep
+    the stored value; the other parameters are read from the pickle when present.
     """
 
-    def check_cancel():
+    def check_cancel() -> None:
         if cancel_event and cancel_event.is_set():
             raise InterruptedError("Pipeline cancelled by user")
 
@@ -114,8 +135,7 @@ def run_pipeline_from_folder(
 
     if not pkl_path.exists():
         raise FileNotFoundError(
-            f"raw_data.pkl not found in '{output_folder}'. "
-            "This folder has not been processed by step 1 yet."
+            f"raw_data.pkl not found in '{output_folder}'. This folder has not been processed by step 1 yet."
         )
 
     output_folder.mkdir(parents=True, exist_ok=True)
@@ -125,6 +145,16 @@ def run_pipeline_from_folder(
 
     with open(pkl_path, "rb") as f:
         input_data = pickle.load(f)
+
+    stored_meta = input_data.get("metadata", {})
+    if lift_type == "none" and "lift_type" in stored_meta:
+        lift_type = stored_meta["lift_type"]
+    if "lifter" in stored_meta:
+        lifter = stored_meta["lifter"]
+    if "fast_analysis" in stored_meta:
+        fast_analysis = stored_meta["fast_analysis"]
+    if "smart_analysis" in stored_meta:
+        smart_analysis = stored_meta["smart_analysis"]
 
     if lift_type != "none":
         input_data.setdefault("metadata", {})["lift_type"] = lift_type
@@ -140,58 +170,26 @@ def run_pipeline_from_folder(
     yield ("step3", None, "Generating kinematic graphs...")
 
     df = pd.read_csv(str(csv_path))
-    check_cancel()
-    step_3_generate_graphs(df, str(output_folder))
+    step_3_generate_graphs(df, str(output_folder), lift_type)
 
     yield ("step3", None, f"Graphs generated in {output_folder}/")
 
     check_cancel()
-    if encode_video:
-        with open(pkl_path, "rb") as f:
-            _pkl_meta = pickle.load(f).get("metadata", {})
-        source_video = _pkl_meta.get("source_video") or _pkl_meta.get("input_video")
 
-        if source_video and os.path.exists(source_video):
-            df = pd.read_csv(str(csv_path))
-            if "frame" in df.columns:
-                df = df.set_index("frame")
+    # Reuse df for steps 4 and 5 (frame-indexed)
+    df_indexed = df.set_index("frame") if "frame" in df.columns else df
+    del df
 
-            output_video_path = output_folder / "output.mp4"
-            pose_overlay_enabled = lift_type != "none"
-
-            for update in step_4_render_video(
-                df, source_video, str(output_video_path), draw_pose=pose_overlay_enabled
-            ):
-                check_cancel()
-                yield update
-        else:
-            if source_video:
-                yield (
-                    "step4",
-                    None,
-                    f"Video rendering skipped — source video not found: {source_video}",
-                )
-            else:
-                yield (
-                    "step4",
-                    None,
-                    "Video rendering skipped — source video path not stored in raw_data.pkl",
-                )
-    else:
-        yield ("step4", None, "Video rendering skipped")
-
-    check_cancel()
+    analysis_result = None
     if technique_analysis and lift_type != "none":
-        yield ("step5", None, f"Analyzing {lift_type} technique...")
-
-        df = pd.read_csv(str(csv_path))
-        if "frame" in df.columns:
-            df = df.set_index("frame")
+        yield ("step4", None, f"Analyzing {lift_type} technique...")
 
         check_cancel()
-        critiques = critique_lift(df, lift_type, str(output_folder))
+        analysis_result = critique_lift(
+            df_indexed, lift_type, str(output_folder), lifter, fast_analysis, smart_analysis
+        )
 
-        if not critiques:
+        if not analysis_result:
             message = "Analysis complete (No phases detected?)"
         else:
             message = (
@@ -199,26 +197,73 @@ def run_pipeline_from_folder(
                 f"{os.path.join(str(output_folder), 'analysis.md')}"
             )
 
-        yield ("step5", None, message)
+        yield ("step4", None, message)
     else:
-        yield ("step5", None, "Technique analysis skipped")
+        yield ("step4", None, "Technique analysis skipped")
+
+    check_cancel()
+    if encode_video:
+        source_video = stored_meta.get("source_video") or stored_meta.get("input_video")
+
+        if source_video and os.path.exists(source_video):
+            output_video_path = output_folder / "output.mp4"
+            pose_overlay_enabled = lift_type != "none"
+
+            temporal_similarity = None
+            overall_similarity = None
+            lifter_name = None
+
+            if analysis_result and analysis_result.get("fast_analysis"):
+                fast_result = analysis_result["fast_analysis"]
+                if fast_result.get("available"):
+                    temporal_similarity = fast_result.get("temporal_similarity")
+                    overall_similarity = fast_result.get("similarity")
+                    lifter_name = analysis_result.get("lifter")
+
+            for update in step_5_render_video(
+                df_indexed,
+                source_video,
+                str(output_video_path),
+                draw_pose=pose_overlay_enabled,
+                temporal_similarity=temporal_similarity,
+                overall_similarity=overall_similarity,
+                lifter_name=lifter_name,
+                lift_type=lift_type,
+            ):
+                check_cancel()
+                yield update
+        else:
+            if source_video:
+                yield (
+                    "step5",
+                    None,
+                    f"Video rendering skipped — source video not found: {source_video}",
+                )
+            else:
+                yield (
+                    "step5",
+                    None,
+                    "Video rendering skipped — source video path not stored in raw_data.pkl",
+                )
+    else:
+        yield ("step5", None, "Video rendering skipped")
 
     yield ("complete", 1.0, "Pipeline complete!")
 
 
 def run_batch_postprocess(
-    video_output_dirs,
-    video_labels,
-    batch_output_dir,
-    use_filenames=False,
-    analysis_csv_name="final_analysis.csv",
-    cancel_event=None,
-):
+    video_output_dirs: Sequence[str | Path],
+    video_labels: Sequence[str],
+    batch_output_dir: str | Path,
+    use_filenames: bool = False,
+    analysis_csv_name: str = "final_analysis.csv",
+    cancel_event: threading.Event | None = None,
+) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Run post-processing steps that operate across all videos in a batch.
     """
 
-    def check_cancel():
+    def check_cancel() -> None:
         if cancel_event and cancel_event.is_set():
             raise InterruptedError("Pipeline cancelled by user")
 
@@ -251,7 +296,7 @@ def run_batch_postprocess(
     os.makedirs(batch_output_dir, exist_ok=True)
 
     try:
-        plot_superimposed_paths_compensated(
+        plot_superimposed_paths(
             video_data_list,
             output_dir=str(batch_output_dir),
             use_filenames=use_filenames,
@@ -259,55 +304,36 @@ def run_batch_postprocess(
         yield (
             "batch",
             None,
-            f"Compensated superimposed graph saved to "
-            f"{batch_output_dir}/superimposed_bar_paths_compensated.png",
+            f"Superimposed bar-path graph saved to {batch_output_dir}/",
         )
     except Exception as exc:
         yield (
             "batch",
             None,
-            f"Warning: could not generate compensated superimposed graph: {exc}",
-        )
-
-    check_cancel()
-
-    try:
-        plot_superimposed_paths_smoothed(
-            video_data_list,
-            output_dir=str(batch_output_dir),
-            use_filenames=use_filenames,
-        )
-        yield (
-            "batch",
-            None,
-            f"Smoothed superimposed graph saved to "
-            f"{batch_output_dir}/superimposed_bar_paths_smoothed.png",
-        )
-    except Exception as exc:
-        yield (
-            "batch",
-            None,
-            f"Warning: could not generate smoothed superimposed graph: {exc}",
+            f"Warning: could not generate superimposed graph: {exc}",
         )
 
 
 def run_pipeline(
-    input_video,
-    model_path,
-    output_video=None,
-    lift_type="none",
-    output_dir="outputs",
-    encode_video=True,
-    technique_analysis=True,
-    raw_data_path="raw_data.pkl",
-    analysis_csv_path="final_analysis.csv",
-    cancel_event=None,
-):
+    input_video: str | Path,
+    model_path: str | Path,
+    output_video: str | None = None,
+    lift_type: str = "none",
+    output_dir: str = "outputs",
+    encode_video: bool = True,
+    technique_analysis: bool = True,
+    raw_data_path: str = "raw_data.pkl",
+    analysis_csv_path: str = "final_analysis.csv",
+    cancel_event: threading.Event | None = None,
+    lifter: str = "generic",
+    fast_analysis: bool = True,
+    smart_analysis: bool = True,
+) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Run the complete barpath analysis pipeline.
     """
 
-    def check_cancel():
+    def check_cancel() -> None:
         if cancel_event and cancel_event.is_set():
             raise InterruptedError("Pipeline cancelled by user")
 
@@ -324,8 +350,7 @@ def run_pipeline(
             )
         if not bin_files:
             raise FileNotFoundError(
-                f"OpenVINO directory '{model_path}' does not contain a .bin weights file. "
-                f"OpenVINO models require both .xml (model definition) and .bin (weights) files."
+                f"OpenVINO directory '{model_path}' does not contain a .bin weights file. OpenVINO models require both .xml (model definition) and .bin (weights) files."
             )
     elif not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
@@ -358,25 +383,26 @@ def run_pipeline(
         check_cancel()
         yield update
 
-    try:
-        with open(raw_data_path, "rb") as _f:
-            _pkl = pickle.load(_f)
-        _pkl.setdefault("metadata", {})["source_video"] = _source_video_abs
-        with open(raw_data_path, "wb") as _f:
-            pickle.dump(_pkl, _f)
-        del _pkl
-    except Exception as _e:
-        print(f"  Warning: could not patch source_video into pickle: {_e}")
+    # Patch metadata into pickle (read once)
+    with open(raw_data_path, "rb") as _f:
+        _pkl = pickle.load(_f)
+    _pkl_meta = _pkl.setdefault("metadata", {})
+    _pkl_meta["source_video"] = _source_video_abs
+    _pkl_meta["lifter"] = lifter
+    _pkl_meta["fast_analysis"] = fast_analysis
+    _pkl_meta["smart_analysis"] = smart_analysis
+    with open(raw_data_path, "wb") as _f:
+        pickle.dump(_pkl, _f)
 
     check_cancel()
     yield ("step2", None, "Starting data analysis...")
 
-    with open(raw_data_path, "rb") as f:
-        input_data = pickle.load(f)
-
-    check_cancel()
-    step_2_analyze_data(input_data, analysis_csv_path)
-    del input_data
+    try:
+        step_2_analyze_data(_pkl, analysis_csv_path)
+    except InsufficientDataError as e:
+        yield ("_insufficient_data_", None, str(e))
+        return
+    del _pkl
 
     yield ("step2", None, f"Analysis complete. Saved to {analysis_csv_path}")
 
@@ -384,63 +410,83 @@ def run_pipeline(
     yield ("step3", None, "Generating kinematic graphs...")
 
     df = pd.read_csv(analysis_csv_path)
-
-    check_cancel()
-    step_3_generate_graphs(df, output_dir)
+    step_3_generate_graphs(df, output_dir, lift_type)
 
     yield ("step3", None, f"Graphs generated in {output_dir}/")
 
     check_cancel()
-    if encode_video:
-        df = pd.read_csv(analysis_csv_path)
-        if "frame" in df.columns:
-            df = df.set_index("frame")
 
-        pose_overlay_enabled = lift_type != "none"
-        for update in step_4_render_video(
-            df, input_video, output_video, draw_pose=pose_overlay_enabled
-        ):
-            check_cancel()
-            yield update
-    else:
-        yield ("step4", None, "Video rendering skipped")
+    # Reuse df for steps 4 and 5 (frame-indexed)
+    df_indexed = df.set_index("frame") if "frame" in df.columns else df
+    del df
 
-    check_cancel()
+    analysis_result = None
     if technique_analysis and lift_type != "none":
-        yield ("step5", None, f"Analyzing {lift_type} technique...")
-
-        df = pd.read_csv(analysis_csv_path)
-        if "frame" in df.columns:
-            df = df.set_index("frame")
+        yield ("step4", None, f"Analyzing {lift_type} technique...")
 
         check_cancel()
-        critiques = critique_lift(df, lift_type, output_dir)
+        analysis_result = critique_lift(
+            df_indexed, lift_type, output_dir, lifter, fast_analysis, smart_analysis
+        )
 
-        if not critiques:
+        if not analysis_result:
             message = "Analysis complete (No phases detected?)"
         else:
             message = f"Analysis complete. Report saved to {os.path.join(output_dir, 'analysis.md')}"
 
-        yield ("step5", None, message)
+        yield ("step4", None, message)
     else:
-        yield ("step5", None, "Technique analysis skipped")
+        yield ("step4", None, "Technique analysis skipped")
+
+    check_cancel()
+    if encode_video:
+        pose_overlay_enabled = lift_type != "none"
+
+        temporal_similarity = None
+        overall_similarity = None
+        lifter_name = None
+
+        if analysis_result and analysis_result.get("fast_analysis"):
+            fast_result = analysis_result["fast_analysis"]
+            if fast_result.get("available"):
+                temporal_similarity = fast_result.get("temporal_similarity")
+                overall_similarity = fast_result.get("similarity")
+                lifter_name = analysis_result.get("lifter")
+
+        for update in step_5_render_video(
+            df_indexed,
+            input_video,
+            output_video,
+            draw_pose=pose_overlay_enabled,
+            temporal_similarity=temporal_similarity,
+            overall_similarity=overall_similarity,
+            lifter_name=lifter_name,
+            lift_type=lift_type,
+        ):
+            check_cancel()
+            yield update
+    else:
+        yield ("step5", None, "Video rendering skipped")
 
     yield ("complete", 1.0, "Pipeline complete!")
 
 
 def run_pipeline_simple(
-    input_video,
-    model_path,
-    output_video=None,
-    lift_type="none",
-    output_dir="outputs",
-    encode_video=True,
-    technique_analysis=True,
-):
+    input_video: str | Path,
+    model_path: str | Path,
+    output_video: str | None = None,
+    lift_type: str = "none",
+    output_dir: str = "outputs",
+    encode_video: bool = True,
+    technique_analysis: bool = True,
+    lifter: str = "generic",
+    fast_analysis: bool = True,
+    smart_analysis: bool = True,
+) -> dict[str, Any]:
     """
     Simple wrapper that runs the pipeline and consumes all progress updates.
     """
-    results = {
+    results: dict[str, Any] = {
         "step1": None,
         "step2": None,
         "step3": None,
@@ -451,7 +497,7 @@ def run_pipeline_simple(
     }
 
     try:
-        for step_name, progress, message in run_pipeline(
+        for step_name, _progress, message in run_pipeline(
             input_video=input_video,
             model_path=model_path,
             output_video=output_video,
@@ -459,6 +505,9 @@ def run_pipeline_simple(
             output_dir=output_dir,
             encode_video=encode_video,
             technique_analysis=technique_analysis,
+            lifter=lifter,
+            fast_analysis=fast_analysis,
+            smart_analysis=smart_analysis,
         ):
             results[step_name] = message
             print(f"[{step_name}] {message}")

@@ -282,7 +282,7 @@ def detect_installed_runtimes() -> Dict[str, bool]:
 
     # Try to import ONNX Runtime
     try:
-        import onnxruntime as ort  # noqa: F401
+        import onnxruntime as ort  # type: ignore[import-untyped]  # noqa: F401
 
         runtimes["onnxruntime"] = True
     except ImportError:
@@ -290,7 +290,7 @@ def detect_installed_runtimes() -> Dict[str, bool]:
 
     # Try to import OpenVINO
     try:
-        import openvino as ov  # noqa: F401
+        import openvino as ov  # type: ignore[import-untyped]  # noqa: F401
 
         runtimes["openvino"] = True
     except ImportError:
@@ -298,7 +298,7 @@ def detect_installed_runtimes() -> Dict[str, bool]:
 
     # Try to import TensorRT (optional dependency)
     try:
-        import tensorrt as trt  # type: ignore[attr-defined]  # noqa: F401
+        import tensorrt as trt  # type: ignore[import-untyped]  # noqa: F401
 
         runtimes["tensorrt"] = True
     except ImportError:

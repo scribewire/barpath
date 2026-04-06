@@ -31,6 +31,7 @@ ENV/
 .idea/
 *.swp
 *.swo
+opencode.json
 
 # Project specific
 *.mp4
@@ -38,6 +39,7 @@ test_videos/
 outputs/
 datasets/
 build/
+AGENTS.md
 
 # OS
 .DS_Store

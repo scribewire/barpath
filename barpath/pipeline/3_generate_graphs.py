@@ -31,10 +31,23 @@ from config import (
 )
 
 
-def _phase_legend_handles():
+PHASE_LABELS_BY_LIFT = {
+    "snatch": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
+    "clean": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
+    "jerk": {0: "Dip", 1: "Drive", 2: "Recovery"},
+}
+
+
+def _get_phase_labels(lift_type: str = "snatch") -> dict:
+    """Get phase labels for a specific lift type."""
+    return PHASE_LABELS_BY_LIFT.get(lift_type.lower(), PHASE_LABELS_BY_LIFT["snatch"])
+
+
+def _phase_legend_handles(lift_type: str = "snatch"):
     """Return a list of legend patch handles for the three phases."""
+    labels = _get_phase_labels(lift_type)
     return [
-        mpatches.Patch(color=PHASE_COLORS[i], label=PHASE_LABELS[i])
+        mpatches.Patch(color=PHASE_COLORS[i], label=labels[i])
         for i in sorted(PHASE_COLORS)
     ]
 
@@ -237,102 +250,6 @@ def _draw_start_end_markers(ax, x_vals, y_vals):
 # ---------------------------------------------------------------------------
 # Per-graph generators
 # ---------------------------------------------------------------------------
-
-
-def plot_barbell_lateral_corrected(df, output_dir):
-    """
-    Plot perspective-corrected bar path in real-world centimetres.
-
-    Uses barbell_x_corrected_cm / barbell_y_corrected_cm produced by the
-    shoulder-geometry px→m conversion in step 2.  Both axes are in the same
-    physical unit (cm) so the aspect ratio is always believable.
-    """
-    path_cols = ["barbell_x_corrected_cm", "barbell_y_corrected_cm", "bar_phase"]
-    if not all(col in df.columns for col in path_cols):
-        print("Skipping corrected path plot (no correction data available)")
-        return
-
-    path_data_df = df[path_cols].dropna()
-    if len(path_data_df) < 2:
-        print("Skipping corrected path plot (insufficient data points)")
-        return
-
-    x_vals = path_data_df["barbell_x_corrected_cm"].values
-    y_vals = path_data_df["barbell_y_corrected_cm"].values
-    phase_vals = path_data_df["bar_phase"].values.astype(int)
-
-    # ------------------------------------------------------------------
-    # Figure sizing: derive a sensible figure height from the data range
-    # so the plot is neither too tall nor too wide.
-    # ------------------------------------------------------------------
-    x_range = x_vals.max() - x_vals.min()
-    y_range = y_vals.max() - y_vals.min()
-    # Give at least 5 cm of padding on each axis for readability
-    x_span = max(x_range, 5.0)
-    y_span = max(y_range, 5.0)
-    # Base width ~6 inches; height scaled to match the data aspect ratio
-    fig_width = 6.0
-    fig_height = max(4.0, min(12.0, fig_width * (y_span / x_span)))
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-
-    _plot_phase_path(ax, x_vals, y_vals, phase_vals)
-    _draw_start_end_markers(ax, x_vals, y_vals)
-
-    ax.set_title(
-        "Angle-Compensated Bar Path\n(Pull / Pull-under / Recovery)",
-        fontsize=15,
-        fontweight="bold",
-    )
-    ax.set_xlabel("Horizontal Displacement (cm)", fontsize=12)
-    ax.set_ylabel("Vertical Displacement (cm)", fontsize=12)
-    ax.grid(True, alpha=0.3)
-
-    # Y axis: upward = positive (bar rises), so invert because y_corrected_cm
-    # increases downward in image-space.
-    ax.invert_yaxis()
-    ax.set_aspect("equal")
-
-    _set_path_axis_limits(ax, x_vals, y_vals, inverted_y=True)
-
-    # Annotation box: camera yaw + scale info
-    annotation_lines = []
-    if "camera_yaw_deg" in df.columns:
-        camera_yaw_series = df["camera_yaw_deg"].dropna()
-        if len(camera_yaw_series) > 0:
-            yaw_val = camera_yaw_series.iloc[0]
-            if not pd.isna(yaw_val):
-                annotation_lines.append(f"Camera yaw: {float(yaw_val):.1f}\u00b0")
-    if "px_to_m_scale" in df.columns:
-        scale_series = df["px_to_m_scale"].dropna()
-        if len(scale_series) > 0:
-            median_scale_mm = float(scale_series.median()) * 1000.0
-            annotation_lines.append(f"Scale: {median_scale_mm:.2f} mm/px")
-
-    if annotation_lines:
-        ax.text(
-            0.02,
-            0.98,
-            "\n".join(annotation_lines),
-            transform=ax.transAxes,
-            verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="lightblue", alpha=0.7),
-            fontsize=9,
-        )
-
-    # Legend: phase patches + start/end markers
-    phase_handles = _phase_legend_handles()
-    existing_handles, existing_labels = ax.get_legend_handles_labels()
-    marker_handles = [
-        h
-        for h, lbl in zip(existing_handles, existing_labels)
-        if lbl in ("Start", "End")
-    ]
-    ax.legend(handles=phase_handles + marker_handles, loc="best", fontsize=9)
-
-    output_path = Path(output_dir) / "barbell_lateral_corrected_path.png"
-    plt.savefig(output_path, dpi=GRAPH_DPI, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  ✓ Generated: {output_path}")
 
 
 def _plot_xy_path(df, x_col, y_col, title, filename, output_dir):
@@ -684,16 +601,6 @@ def _uniform_scale_to_reference(
     return 1.0
 
 
-def _get_lift_yaw(df: pd.DataFrame) -> float:
-    """Return the camera yaw (degrees) stored in df, or NaN if unavailable."""
-    if "camera_yaw_deg" not in df.columns:
-        return float("nan")
-    valid = df["camera_yaw_deg"].dropna()
-    if valid.empty:
-        return float("nan")
-    return float(valid.iloc[0])
-
-
 def _find_pull_under_anchor(phase_vals: np.ndarray) -> int:
     """
     Return the index (into phase_vals) of the first frame where the phase
@@ -936,123 +843,15 @@ def _compute_scaled_paths_and_similarity(lift_paths):
     return scaled_paths, similarity_scores, scale_factors
 
 
-def plot_superimposed_paths_compensated(
-    video_data_list, output_dir, use_filenames=False
+def plot_superimposed_paths(
+    video_data_list, output_dir, use_filenames=False,
+    filename="superimposed_bar_paths.png",
+    title="Superimposed Bar Paths\n(origin-normalised at pull-under start; non-reference lifts uniformly scaled to reference)",
 ):
     """
-    Superimposed bar-path graph using real-world centimetre traces.
+    Superimposed bar-path graph using smoothed pixel-space traces.
 
-    Every lift uses its ``barbell_x/y_corrected_cm`` columns when they exist
-    and contain at least one non-NaN value.  These columns are now produced
-    for all lifts — angled-view lifts use the shoulder-width scale (Path A)
-    and side-on lifts use the hip-to-shoulder vertical scale (Path B) — so
-    all traces are in the same physical unit (cm) and can be directly compared.
-
-    A lift falls back to its smoothed pixel columns only if the corrected_cm
-    columns are missing or entirely NaN (e.g. world_landmarks were absent).
-    Lifts where neither column set exists are silently skipped.
-
-    The Y axis is labelled "cm" whenever at least one lift has corrected data,
-    and "px" only if every lift fell back to pixels.
-
-    Non-reference lifts are uniformly scaled to best match the reference
-    lift's phase-transition marker positions (no distortion — both x and y
-    are multiplied by the same scalar).  DTW similarity percentages vs the
-    reference are shown in the legend.
-
-    Parameters
-    ----------
-    video_data_list : list of (label, df) tuples
-    output_dir : str or Path
-    use_filenames : bool
-    """
-    if not video_data_list:
-        print("Skipping compensated superimposed path: no data provided.")
-        return
-
-    SMOOTH_COLS = ["barbell_x_smooth", "barbell_y_smooth", "bar_phase"]
-    CORR_COLS = [
-        "barbell_x_corrected_cm",
-        "barbell_y_corrected_cm",
-        "bar_phase",
-    ]
-
-    raw_lift_paths = []
-    any_cm = False
-
-    for lift_idx, (file_label, df) in enumerate(video_data_list):
-        # Use corrected_cm for any lift that has valid (non-NaN) cm data,
-        # regardless of camera yaw — side-on lifts now produce cm columns too.
-        use_corrected = (
-            all(c in df.columns for c in CORR_COLS)
-            and df["barbell_x_corrected_cm"].notna().any()
-        )
-
-        if use_corrected:
-            x_col, y_col, phase_col = CORR_COLS
-            y_trunc_col = "barbell_y_corrected_cm"
-            any_cm = True
-            method = (
-                df["scale_method"].iloc[0]
-                if "scale_method" in df.columns
-                else "unknown"
-            )
-            print(
-                f"  Lift {lift_idx + 1} ({file_label}): using corrected_cm [{method}]"
-            )
-        elif (
-            all(c in df.columns for c in SMOOTH_COLS)
-            and df["barbell_x_smooth"].notna().any()
-        ):
-            x_col, y_col, phase_col = SMOOTH_COLS
-            y_trunc_col = "barbell_y_smooth"
-            print(
-                f"  Lift {lift_idx + 1} ({file_label}): falling back to smoothed px (no cm data)"
-            )
-        else:
-            print(f"  Skipping lift {lift_idx + 1}: no usable path columns.")
-            continue
-
-        result = _extract_lift_path(df, x_col, y_col, phase_col, y_trunc_col)
-        if result is None:
-            print(f"  Skipping lift {lift_idx + 1}: insufficient data points.")
-            continue
-
-        raw_lift_paths.append((file_label, result[0], result[1], result[2]))
-
-    if not raw_lift_paths:
-        print(
-            "Skipping compensated superimposed path: all lifts had insufficient data."
-        )
-        return
-
-    # Scale non-reference lifts and compute DTW similarity
-    lift_paths, similarity_scores, scale_factors = _compute_scaled_paths_and_similarity(
-        raw_lift_paths
-    )
-
-    unit_label = "cm" if any_cm else "px"
-    title = (
-        "Superimposed Bar Paths — Real-World Scale\n"
-        "(origin-normalised at pull-under start; non-reference lifts uniformly scaled to reference)"
-    )
-
-    _draw_superimposed_figure(
-        lift_paths,
-        output_dir,
-        filename="superimposed_bar_paths_compensated.png",
-        title=title,
-        unit_label=unit_label,
-        use_filenames=use_filenames,
-        similarity_scores=similarity_scores,
-    )
-
-
-def plot_superimposed_paths_smoothed(video_data_list, output_dir, use_filenames=False):
-    """
-    Superimposed bar-path graph using the smoothed pixel-space traces for
-    every lift, regardless of whether angle-compensated data is available.
-
+    All lifts use their smoothed pixel columns for comparison.
     Non-reference lifts are uniformly scaled to best match the reference
     lift's phase-transition marker positions.  DTW similarity percentages
     vs the reference are shown in the legend.
@@ -1062,14 +861,17 @@ def plot_superimposed_paths_smoothed(video_data_list, output_dir, use_filenames=
     video_data_list : list of (label, df) tuples
     output_dir : str or Path
     use_filenames : bool
+    filename : str — output PNG filename
+    title : str — graph title
     """
     if not video_data_list:
-        print("Skipping smoothed superimposed path: no data provided.")
+        print("Skipping superimposed path: no data provided.")
         return
 
     SMOOTH_COLS = ["barbell_x_smooth", "barbell_y_smooth", "bar_phase"]
 
     raw_lift_paths = []
+
     for lift_idx, (file_label, df) in enumerate(video_data_list):
         if not all(c in df.columns for c in SMOOTH_COLS):
             print(f"  Skipping lift {lift_idx + 1}: smoothed columns not found.")
@@ -1092,7 +894,7 @@ def plot_superimposed_paths_smoothed(video_data_list, output_dir, use_filenames=
         raw_lift_paths.append((file_label, result[0], result[1], result[2]))
 
     if not raw_lift_paths:
-        print("Skipping smoothed superimposed path: all lifts had insufficient data.")
+        print("Skipping superimposed path: all lifts had insufficient data.")
         return
 
     # Scale non-reference lifts and compute DTW similarity
@@ -1103,8 +905,8 @@ def plot_superimposed_paths_smoothed(video_data_list, output_dir, use_filenames=
     _draw_superimposed_figure(
         lift_paths,
         output_dir,
-        filename="superimposed_bar_paths_smoothed.png",
-        title="Superimposed Bar Paths — Smoothed\n(origin-normalised; non-reference lifts uniformly scaled to reference)",
+        filename=filename,
+        title=title,
         unit_label="px",
         use_filenames=use_filenames,
         similarity_scores=similarity_scores,
@@ -1116,9 +918,14 @@ def plot_superimposed_paths_smoothed(video_data_list, output_dir, use_filenames=
 # ---------------------------------------------------------------------------
 
 
-def step_3_generate_graphs(df, output_dir):
+def step_3_generate_graphs(df, output_dir, lift_type: str = "snatch"):
     """
     Takes the final analysis DataFrame and generates all kinematic graphs.
+
+    Args:
+        df: DataFrame with analysis data
+        output_dir: Directory to save graph files
+        lift_type: Type of lift (snatch, clean, jerk) for phase labeling
     """
     print("--- Step 3: Generating Kinematic Graphs ---")
     if df.empty:
@@ -1148,21 +955,27 @@ def step_3_generate_graphs(df, output_dir):
             "Smoothed Vertical Velocity (px/s)",
             "vel_y_smooth",
             "Velocity (px/s)",
+            True,
         ),
         (
             "Smoothed Vertical Acceleration (px/s²)",
             "accel_y_smooth",
             "Acceleration (px/s²)",
+            True,
         ),
         (
             "Smoothed Vertical Specific Power",
             "specific_power_y_smooth",
             "Specific Power (px²/s³)",
+            True,
         ),
     ]
 
-    for title, col, y_label in kinematics:
-        result = _plot_timeseries(df, col, title, y_label, output_dir)
+    for title, col, y_label, negate in kinematics:
+        plot_df = df.copy()
+        if negate and col in plot_df.columns:
+            plot_df[col] = -plot_df[col]
+        result = _plot_timeseries(plot_df, col, title, y_label, output_dir)
         if result:
             graph_files.append(result)
         else:
@@ -1199,18 +1012,6 @@ def step_3_generate_graphs(df, output_dir):
         graph_files.append(result)
     else:
         skipped.append("Unsmoothed Bar Path")
-
-    # ------------------------------------------------------------------
-    # 4. Perspective-corrected lateral path (optional)
-    # ------------------------------------------------------------------
-    if (
-        "barbell_x_corrected_cm" in df.columns
-        and df["barbell_x_corrected_cm"].notna().any()
-    ):
-        try:
-            plot_barbell_lateral_corrected(df, output_dir)
-        except Exception as e:
-            print(f"Warning: Could not generate corrected path graph: {e}")
 
     # ------------------------------------------------------------------
     # Summary

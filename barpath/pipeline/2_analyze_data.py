@@ -8,7 +8,6 @@ This step takes the raw data pickle from Step 1 and:
 4. Truncates data to relevant timeframe
 5. Calculates kinematics (velocity, acceleration, power)
 6. Detects lift phases
-7. Applies perspective correction (if world landmarks available)
 """
 
 import argparse
@@ -31,9 +30,9 @@ from step2_helpers import (
     calculate_hip_y_average,
     calculate_joint_angles,
     calculate_lifter_angle,
-    calculate_perspective_correction,
     calculate_stabilized_position,
     calculate_time_and_kinematics,
+    detect_facing_direction,
     drop_intermediate_columns,
     smooth_barbell_position,
     truncate_at_knee_pass,
@@ -80,6 +79,7 @@ def step_2_analyze_data(input_data, output_path):
     df["frame_height"] = frame_height
 
     df = unpack_landmarks(df)
+    df = detect_facing_direction(df)
     df = calculate_joint_angles(df, frame_width, frame_height)
     df["lifter_angle"] = df["landmarks"].apply(
         lambda x: calculate_lifter_angle(x) if isinstance(x, dict) else np.nan
@@ -96,7 +96,7 @@ def step_2_analyze_data(input_data, output_path):
 
     phases = None
     if lift_type in ("clean", "snatch"):
-        from step5_helpers.classics_phase_detection import identify_classics_phases
+        from step2_helpers.classics_phase_detection import identify_classics_phases
 
         phases = identify_classics_phases(df)
 
@@ -108,41 +108,12 @@ def step_2_analyze_data(input_data, output_path):
                 "Warning: Could not identify classics phases. "
                 "Falling back to kinematic 3-phase detection."
             )
-        df = assign_phases_kinematic(df, fps)
+        # Use appropriate phase detection based on lift type
+        df = assign_phases_kinematic(df, fps, lift_type)
 
-    has_world_landmarks = bool(
-        "world_landmarks" in df.columns and int(df["world_landmarks"].notna().sum()) > 0
-    )
-
-    if has_world_landmarks:
-        print("Calculating perspective-corrected bar path...")
-        df = calculate_perspective_correction(df, frame_width, frame_height)
-
-        valid_frames = df["barbell_x_corrected_cm"].notna().sum()
-        if valid_frames > 10:
-            print(
-                f"  Perspective correction calculated for {valid_frames}/{len(df)} frames"
-            )
-            corrected_x_range = (
-                df["barbell_x_corrected_cm"].max() - df["barbell_x_corrected_cm"].min()
-            )
-            corrected_y_range = (
-                df["barbell_y_corrected_cm"].max() - df["barbell_y_corrected_cm"].min()
-            )
-            print(
-                f"  Corrected bar path range: horizontal = {corrected_x_range:.1f} cm, vertical = {corrected_y_range:.1f} cm"
-            )
-            avg_yaw = df["camera_yaw_deg"].dropna()
-            if len(avg_yaw) > 0:
-                avg_yaw_val = float(avg_yaw.iloc[0])
-                if not pd.isna(avg_yaw_val):
-                    print(f"  Estimated camera yaw: {avg_yaw_val:.1f} deg")
-        elif valid_frames > 0:
-            print(
-                f"  Warning: Only {valid_frames} frames with perspective correction (need >10)"
-            )
-    else:
-        print("Skipping perspective correction (no world landmarks available)")
+    # Normalize the optional kinematic phase label column so downstream access is typed safely.
+    if "bar_phase" in df.columns:
+        df["bar_phase"] = pd.to_numeric(df["bar_phase"], errors="coerce")
 
     if phases is not None and lift_type in ("clean", "snatch"):
         print("\n--- Maximum Specific Power Analysis ---")
@@ -152,13 +123,15 @@ def step_2_analyze_data(input_data, output_path):
 
         max_power_result = calculate_max_specific_power(df, phases)
         if max_power_result is not None:
-            if max_power_result.get("max_power_real") is not None:
+            max_power_real = max_power_result.get("max_power_real")
+            max_power_px = max_power_result.get("max_power_px")
+            if max_power_real is not None:
                 print(
-                    f"Peak power output (pull->pull-under): {max_power_result['max_power_real']:.2f} W/kg"
+                    f"Peak power output (pull->pull-under): {float(max_power_real):.2f} W/kg"
                 )
-            else:
+            elif max_power_px is not None:
                 print(
-                    f"Peak power output (pull->pull-under): {max_power_result['max_power_px']:.2f} px^2/s^3 "
+                    f"Peak power output (pull->pull-under): {float(max_power_px):.2f} px^2/s^3 "
                     "(endcap detection failed)"
                 )
 
