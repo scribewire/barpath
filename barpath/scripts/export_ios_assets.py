@@ -4,7 +4,7 @@ import json
 import pickle
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MODELS = ROOT / "barpath" / "models"
 OUT = ROOT / "outputs" / "plans" / "ios" / "barpath" / "barpath" / "Resources"
 
@@ -35,11 +35,7 @@ def export_baselines() -> None:
 
 
 def export_fault_definitions() -> None:
-    sys_path = ROOT / "barpath"
-    import sys
-
-    sys.path.insert(0, str(sys_path))
-    from pipeline.step4_helpers.compiled_analyzer import FAULT_DEFS
+    from barpath.pipeline.step4_helpers.compiled_analyzer import FAULT_DEFS
 
     fault_list = []
     for fid, fdef in FAULT_DEFS.items():
