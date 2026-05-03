@@ -94,6 +94,7 @@ class BarpathTogaApp(toga.App):
         self.use_filenames_in_legend: bool = False
 
         self.lifter: str = "generic"
+        self.selected_backend: str = "auto"
 
         # Skip/rerun decisions for batch processing
         self._skip_all_existing: bool = False
@@ -400,6 +401,26 @@ class BarpathTogaApp(toga.App):
             style=Pack(font_size=9, color="#5B6472", margin_bottom=10),
         )
         content.add(self.model_hint_label)
+
+        # Backend selection
+        content.add(
+            toga.Label(
+                "Backend", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))
+            )
+        )
+        self.backend_dropdown = toga.Selection(
+            items=["Auto (detect hardware)", "PyTorch/CUDA", "OpenVINO (Intel)"],
+            value="Auto (detect hardware)",
+            on_change=self._on_backend_dropdown_change,
+            style=Pack(flex=1, margin_bottom=4),
+        )
+        content.add(self.backend_dropdown)
+
+        self.backend_hint_label = toga.Label(
+            "'Auto' detects Intel GPU and uses OpenVINO if available, otherwise PyTorch/CUDA.",
+            style=Pack(font_size=9, color="#5B6472", margin_bottom=10),
+        )
+        content.add(self.backend_hint_label)
 
         # Lift type selector (horizontal buttons)
         content.add(
@@ -779,6 +800,7 @@ class BarpathTogaApp(toga.App):
             )
 
         self._log(f"  Lift Type:    [cyan]{self.lift_type}[/cyan]")
+        self._log(f"  Backend:      [cyan]{self.selected_backend}[/cyan]")
         self._log(f"  Lifter:       [cyan]{self.lifter}[/cyan]")
         self._log(
             f"  Technique Analysis: [cyan]{'enabled' if self.technique_analysis else 'disabled'}[/cyan]"
@@ -944,6 +966,17 @@ class BarpathTogaApp(toga.App):
         if match is not None:
             self.selected_model = match
             self._log(f"[green]✓[/green] Selected model: [cyan]{match.name}[/cyan]")
+
+    def _on_backend_dropdown_change(self, widget: Any) -> None:
+        """Called when user picks a backend in Settings."""
+        selected = widget.value
+        backend_map = {
+            "Auto (detect hardware)": "auto",
+            "PyTorch/CUDA": "pytorch",
+            "OpenVINO (Intel)": "openvino",
+        }
+        self.selected_backend = backend_map.get(selected, "auto")
+        self._log(f"[green]✓[/green] Backend: [cyan]{self.selected_backend}[/cyan]")
 
     def _set_selected_model(self, model_path: Path) -> None:
         self.selected_model = model_path
@@ -1485,6 +1518,7 @@ class BarpathTogaApp(toga.App):
                         ),
                         cancel_event=self._cancel_event,
                         lifter=self.lifter,
+                        backend=self.selected_backend,
                     ):
                         # Check for insufficient data signal
                         if step_name == "_insufficient_data_":
@@ -1905,7 +1939,12 @@ class BarpathTogaApp(toga.App):
             output_segmentation_masks=False,
         )
         pose_landmarker = mp_vision.PoseLandmarker.create_from_options(options)
-        yolo_model = YOLO(model_path, task="detect")
+
+        # Resolve backend for preview mode
+        from barpath.backend_resolver import resolve_backend
+        backend_name, resolved_path = resolve_backend(model_path, self.selected_backend)
+        self._log(f"Preview backend: {backend_name}")
+        yolo_model = YOLO(resolved_path, task="detect")
 
         # Initialize live lift recognizer with the lift detection model
         lift_model_path = str(
