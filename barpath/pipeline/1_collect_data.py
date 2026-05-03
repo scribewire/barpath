@@ -19,8 +19,10 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import torch
+from backend_resolver import resolve_backend, _is_openvino_model_dir
 from config import (  # type: ignore[import-untyped]
     DECODE_QUEUE_SIZE,
+    DEFAULT_BACKEND,
     MEDIAPIPE_DETECTION_CONFIDENCE,
     MEDIAPIPE_TRACKING_CONFIDENCE,
     STAB_MIN_FEATURES,
@@ -107,6 +109,7 @@ def step_1_collect_data(
     model_path,
     output_path,
     lift_type="none",
+    backend=None,
 ):
     print("--- Step 1: Collecting Raw Data ---")
 
@@ -141,8 +144,13 @@ def step_1_collect_data(
 
     try:
         model_path_obj = Path(model_path)
-        model_path_str, is_openvino = _get_model_path(model_path_obj)
-        print(f"Loading model: {model_path_str}")
+        # Resolve backend based on preference (defaults to "auto" from config)
+        backend_pref = backend if backend is not None else DEFAULT_BACKEND
+        backend_name, resolved_path = resolve_backend(model_path_obj, backend_pref)
+        print(f"Backend: {backend_name}, Model: {resolved_path}")
+
+        # Keep is_openvino flag for existing Intel GPU acceleration logic
+        is_openvino = _is_openvino_model_dir(model_path_obj)
 
         is_tensorrt_engine = (
             model_path_obj.is_file() and model_path_obj.suffix.lower() == ".engine"
@@ -150,9 +158,9 @@ def step_1_collect_data(
         if is_tensorrt_engine:
             print("Detected TensorRT engine model (.engine).")
 
-        yolo_model = YOLO(model_path_str, task="detect")
+        yolo_model = YOLO(resolved_path, task="detect")
 
-        nms_free = _is_yolo26_model(model_path_str)
+        nms_free = _is_yolo26_model(resolved_path)
         if nms_free:
             print("YOLO26 NMS-free architecture detected.")
 

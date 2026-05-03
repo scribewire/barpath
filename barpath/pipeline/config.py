@@ -5,6 +5,9 @@ All magic numbers, thresholds, and tunable parameters are defined here
 so they can be adjusted in one place and easily tested.
 """
 
+# Backend selection (Phase 2: OpenVINO dual backend)
+DEFAULT_BACKEND = "auto"  # Options: "auto", "pytorch", "openvino"
+
 # ---------------------------------------------------------------------------
 # Step 1: Data Collection
 # ---------------------------------------------------------------------------
