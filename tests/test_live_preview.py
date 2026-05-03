@@ -1,9 +1,7 @@
-import os
 import sys
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Tuple
 import pandas as pd
-import numpy as np
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))

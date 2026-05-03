@@ -1,11 +1,8 @@
 """Tests for realtime_processing package __init__.py re-exports."""
 
 import ast
-import subprocess
-import sys
 from pathlib import Path
 
-import pytest
 
 PACKAGE_INIT = Path("barpath/pipeline/realtime_processing/__init__.py")
 

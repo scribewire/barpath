@@ -49,12 +49,6 @@ class CircularFrameBuffer:
             
         self._last_timestamp_ms = frame.timestamp_ms
         
-        # Calculate the time span of current buffer
-        if len(self._frames) > 0:
-            span_ms = self._last_timestamp_ms - self._frames[0].timestamp_ms
-        else:
-            span_ms = 0.0
-            
         # Add new frame
         self._frames.append(frame)
         
