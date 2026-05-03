@@ -1,0 +1,13 @@
+{
+  "lifter": "lu",
+  "lift_type": "snatch",
+  "n_source_lifts": 8,
+  "scale": 0.0869297478820366,
+  "top_k": 5,
+  "channel_weights": [
+    0.5,
+    0.3,
+    0.2
+  ],
+  "trajectory_length": 222
+}

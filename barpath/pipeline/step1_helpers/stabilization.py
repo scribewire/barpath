@@ -5,7 +5,7 @@ This module contains functions for estimating camera motion (shake/stabilization
 using optical flow and background feature tracking.
 """
 
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -77,13 +77,17 @@ def detect_features(
     if params is None:
         params = StabilizationParams()
 
+    kwargs: dict[str, Any] = {}
+    if background_mask is not None:
+        kwargs["mask"] = background_mask
+
     features = cv2.goodFeaturesToTrack(
         gray,
         maxCorners=params.feature_max_corners,
         qualityLevel=params.feature_quality_level,
         minDistance=params.feature_min_distance,
-        mask=background_mask,
         blockSize=params.feature_block_size,
+        **kwargs,
     )
 
     return features

@@ -18,7 +18,7 @@ A comprehensive guide to using barpath for AI-powered weightlifting technique an
 7. [Tips for Best Results](#tips-for-best-results)
 8. [Troubleshooting](#troubleshooting)
 
-> **What's new:** ML-based technique analysis with Fast Analysis (DTW similarity) and Smart Analysis (Random Forest fault detection), lifter selection for pro baselines, similarity-based video overlay coloring, and reorganized pipeline (analysis before video rendering).
+> **What's new:** Unified Technique Analysis using CompiledAnalyzer (rule-based + pro baseline comparison), automatic lift type detection (`auto`), Clean & Jerk splitting (`clean_jerk`), per-lifter baselines with pooled fallback, 6-phase coloring for Clean & Jerk, and reorganized pipeline (analysis before video rendering).
 
 ---
 
@@ -47,16 +47,19 @@ The GUI features a clean tabbed interface with four main sections:
 - Automatically detects available YOLO26 models from `barpath/models` directory
 - Select a model from available options (displayed as horizontally scrollable buttons)
 - Choose lift type:
+  - **auto**: Automatically detects the lift type after Step 2 (default)
   - **clean**: Power clean analysis with Pull/Pull-under/Recovery phases, power calculation, and technique critique
   - **snatch**: Snatch analysis with Pull/Pull-under/Recovery phases, power calculation, and technique critique
+  - **jerk**: Jerk analysis with Dip/Drive/Recovery phases and technique critique
+  - **clean_jerk**: Clean & Jerk — splits into two segments, 6-phase detection, unified report
   - **none**: Kinematics only, no lift-specific analysis or critique
-- **Lifter Selection**: Choose which pro baseline to compare against for Fast Analysis
+- **Lifter Selection**: Choose which pro baseline to compare against for Technique Analysis
   - Options are populated from `barpath/models/analysis/` directory
-  - Default is "generic" (uses all available pro lifts)
-  - Select specific lifters (e.g., "liao_hui", "lu_xiaojun") for more targeted comparison
+  - Default is "generic" (uses pooled pro lifter data)
+  - Select specific lifters (e.g., "liao_hui", "lu_xiaojun") for more targeted baselines
+  - Falls back to the pooled report if per-lifter baselines are not found
 - **Analysis Options**:
-  - **Fast Analysis (DTW similarity)**: Toggle on/off — compares bar path shape to pro baselines
-  - **Smart Analysis (RF fault detection)**: Toggle on/off — detects specific technique faults
+  - **Technique Analysis**: Toggle on/off — detects specific technique faults using biomechanical rules and pro baselines
 - **Disabled automatically** when "Reanalyze" (folders) mode is active — settings are not needed because the model and video are not re-run
 
 #### **▶️ Analyze Tab**
@@ -103,24 +106,25 @@ Required Arguments:
                                'models/yolo26_openvino_model/' (OpenVINO directory)
 
 Optional Arguments:
-  --lift_type {clean,snatch,none}
-                             Type of lift to analyze (default: none)
-                             'clean'  - Power clean: Pull/Pull-under/Recovery phases,
-                                        power calculation, technique critique
-                             'snatch' - Snatch: Pull/Pull-under/Recovery phases,
-                                        power calculation, technique critique
-                             'none'   - Kinematics only, no lift-specific analysis
+  --lift_type {auto,clean,snatch,jerk,clean_jerk,none}
+                              Type of lift to analyze (default: auto)
+                              'auto'        - Automatically detects lift type after Step 2
+                              'clean'       - Power clean: Pull/Pull-under/Recovery phases,
+                                              power calculation, technique critique
+                              'snatch'      - Snatch: Pull/Pull-under/Recovery phases,
+                                              power calculation, technique critique
+                              'jerk'        - Jerk: Dip/Drive/Recovery phases and technique critique
+                              'clean_jerk'  - Clean & Jerk: 6-phase detection, unified report
+                              'none'        - Kinematics only, no lift-specific analysis
 
   --lifter NAME              Lifter name for model selection (default: generic)
                              Determines which pro baseline to compare against
                              Examples: 'liao_hui', 'lu_xiaojun', 'generic'
                              Models are loaded from models/analysis/{lifter}/{lift_type}/
 
-  --no-fast                   Disable Fast Analysis (DTW bar path similarity)
-                             Use to skip similarity scoring and comparison to pro baselines
-
-  --no-smart                  Disable Smart Analysis (RF fault detection)
-                             Use to skip specific fault detection
+  --lifter NAME              Lifter name for baseline selection (default: generic)
+                              Determines which pro baseline to compare against
+                              Falls back to pooled report if lifter-specific baselines not found
 
   --output_video PATH        Path to save annotated video output
                              (Default: outputs/output.mp4 for single video,
@@ -214,7 +218,7 @@ python barpath/pipeline/3_generate_graphs.py \
   --input final_analysis.csv \
   --output_dir graphs
 
-# Step 4: ML-based technique analysis (Fast + Smart Analysis)
+# Step 4: Technique analysis
 python barpath/pipeline/4_critique_lift.py \
   --input final_analysis.csv \
   --lift_type clean \
@@ -410,49 +414,15 @@ barpath analyzes lift technique using **rule-based checks**:
 
 ---
 
-## ML-Based Technique Analysis
+## Technique Analysis
 
-barpath now includes **ML-based technique analysis** that replaces the old rule-based critique system. This provides more nuanced, probability-weighted feedback based on comparison to professional lifters.
-
-### Two Analysis Methods
-
-| | Fast Analysis | Smart Analysis |
-|---|---|---|
-| **Purpose** | Holistic bar path similarity score + temporal deviance curve | Specific fault detection with probability-weighted critiques |
-| **Algorithm** | Dynamic Time Warping (DTW) | Multi-Label Random Forest Classifier |
-| **Training data** | Pro lifts (stored as reference trajectories) | Pro lifts (all faults = 0) + hand-labeled error lifts |
-| **Output** | 0–100% similarity score + per-frame similarity curve | Dict of fault probabilities (e.g., `{"early_arm_bend": 0.92}`) |
-| **Speed** | Very fast (~1-5ms per comparison) | Fast (~200ms) |
-| **Data source** | `final_analysis.csv` | `final_analysis.csv` |
-
-### Fast Analysis (DTW Similarity)
-
-**What it does:**
-- Compares your bar path shape to stored pro reference trajectories
-- Produces an overall similarity score (0-100%)
-- Generates a per-frame similarity curve showing where your lift deviates from pro technique
+barpath includes **Technique Analysis** powered by a CompiledAnalyzer that combines rule-based biomechanical checks with comparison against professional lifter baselines. This provides specific, confidence-weighted fault detection and coaching feedback.
 
 **How it works:**
-1. Extracts your normalized multi-channel kinematic trajectory (vertical position, velocity, acceleration) from the CSV
-2. Compares against all pro reference trajectories using Dynamic Time Warping
-3. Takes the top-k closest matches (default k=5)
-4. Computes similarity from the best match's normalized DTW distance
-
-**Video overlay:**
-When Fast Analysis is available, the video overlay shows:
-- **Similarity-colored bar path**: Green = similar to pro, Yellow = moderate, Red = deviant
-- **Similarity HUD**: Overall score and baseline lifter name displayed on screen
-
-**Model files:**
-- `fast_analysis_trajectories.npy` — Pro reference trajectories
-- `fast_analysis_config.json` — Scale parameter, top_k setting
-
-### Smart Analysis (Random Forest Fault Detection)
-
-**What it does:**
-- Detects specific technique faults with probability scores
-- Provides coaching-style feedback for each detected fault
-- Multi-label: multiple faults can be detected in a single lift
+1. Extracts biomechanical features from `final_analysis.csv` (bar path shape, velocity profiles, joint angles, phase timings)
+2. Compares against pro baselines using configurable thresholds and ratios
+3. Detects specific faults with confidence scores based on deviation from pro ranges
+4. Generates coaching-style recommendations for each detected issue
 
 **Fault taxonomy:**
 
@@ -480,9 +450,7 @@ When Fast Analysis is available, the video overlay shows:
 | `excessive_forward_lean` | Excessive Forward Lean | Recovery |
 
 **Model files:**
-- `smart_analysis_model.pkl` — Trained MultiOutputClassifier
-- `smart_analysis_features.json` — Feature ordering
-- `smart_analysis_faults.json` — Fault definitions with coaching cues
+- `compiled_analyzer_config.json` — Analyzer configuration
 
 ### Lifter Selection
 
@@ -503,11 +471,11 @@ python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt -
 
 ### Training Custom Models
 
-To train your own analysis models, use the training scripts in `outputs/`:
+To train your own analysis baselines, use the training scripts in `outputs/`:
 
 ```bash
-# Smart Analysis (fault detection baselines)
-python outputs/smart_analysis_training.py \
+# Technique Analysis baseline generation
+python outputs/technique_analysis_training.py \
     --pro_dir data/pro \
     --output_dir barpath/models/analysis \
     --lift_type clean
@@ -598,23 +566,14 @@ After processing 2 or more videos (or reanalyzing 2 or more folders), barpath au
 
 | File | Description |
 |------|-------------|
-| `superimposed_bar_paths.png` | All lifts overlaid in pixel space; non-reference lifts uniformly scaled; DTW similarity % in legend |
+| `superimposed_bar_paths.png` | All lifts overlaid in pixel space; non-reference lifts uniformly scaled |
 
 **How the overlay works:**
 1. Each lift's path is **origin-normalised** at its pull-under start point (the first frame where phase transitions from Pull → Pull-under), so all paths share a common reference origin at (0, 0).
 2. Non-reference lifts are **uniformly scaled** — a single scale factor is found by least-squares minimisation of the distance between matching phase-transition markers (e.g. Pull→Pull-under and Pull-under→Recovery points). If no matching markers exist, arc-length ratio is used as a fallback. Both x and y are multiplied by the same factor (no distortion of the path shape).
-3. A **DTW (Dynamic Time Warping) similarity percentage** is computed for each non-reference lift vs the reference and shown in the legend:
+3. Paths are overlaid with phase-based color coding for visual comparison.
 
-   | Score | Interpretation |
-   |-------|---------------|
-   | ~95–100% | Near-identical paths (e.g. same lift from two camera angles) |
-   | ~75–90% | Similar technique with minor style differences |
-   | ~55–75% | Noticeable shape differences |
-   | < 55% | Substantially different paths |
-
-   The percentage is calculated as `100 × exp(−5 × d_norm)` where `d_norm` is the mean per-step DTW deviation normalised by the bounding-box diagonal of the reference path. Scores are computed on the *scaled* paths so the comparison reflects shape similarity rather than absolute size.
-
-**Example legend entry:** `Lift 2  [95.1% match]`
+**Example legend entry:** `Lift 2`
 
 ### Hardware Acceleration with OpenVINO
 
@@ -686,36 +645,20 @@ outputs/
 
 ### Analysis Report (`analysis.md`)
 
-The analysis report now includes ML-based technique analysis:
+The analysis report includes Technique Analysis results:
 
 **Structure:**
-1. **Bar Path Similarity (Fast Analysis)** — Overall score with star rating (⭐–⭐⭐⭐⭐⭐)
-   - Similarity by phase table (Pull, Pull-under, Recovery)
-   - Green/yellow/red indicators for each phase
-2. **Technique Critique (Smart Analysis)** — Flagged faults with confidence percentages
+1. **Technique Critique** — Flagged faults with confidence percentages
    - Fault name, phase, and coaching-style description
    - "All Checks" section showing probability for each fault type
-3. **Kinematic Summary** — Total lift time, peak velocity, peak acceleration
-4. **Footer** — BARPATH version, baseline lifter, number of reference trajectories
+2. **Kinematic Summary** — Total lift time, peak velocity, peak acceleration
+3. **Footer** — BARPATH version, baseline lifter
 
 **Example output:**
 ```markdown
 # Analysis Report: Clean
 
-## Bar Path Similarity (Fast Analysis)
-
-**Overall Score:** 78.3% ⭐⭐⭐ (Good)
-**Baseline:** Generic
-
-**Similarity by Phase:**
-
-| Phase | Avg Similarity | Min | Max |
-|-------|----------------|-----|-----|
-| Pull | 🟢 82.1% | 65.3% | 95.2% |
-| Pull-under | 🟡 68.4% | 52.1% | 85.6% |
-| Recovery | 🟢 79.8% | 71.2% | 91.3% |
-
-## Technique Critique (Smart Analysis)
+## Technique Critique
 
 **Detected Issues:**
 
@@ -758,7 +701,7 @@ These are generated automatically after batch processing 2 or more videos (or re
 
 | Graph | Description | Axes |
 |-------|-------------|------|
-| `superimposed_bar_paths.png` | All lifts overlaid in pixel space; non-reference lifts uniformly scaled; DTW % in legend | px (lateral) vs px (vertical) |
+| `superimposed_bar_paths.png` | All lifts overlaid in pixel space; non-reference lifts uniformly scaled | px (lateral) vs px (vertical) |
 
 **All path graphs:**
 - Include generous horizontal padding (≥ 30% of the vertical range on each side) so the legend and axis labels are never crowded
@@ -917,7 +860,7 @@ To get the best results from barpath analysis, follow these recording guidelines
    ```bash
    python barpath/barpath_cli.py --input_video attempt1.mp4 attempt2.mp4 attempt3.mp4 --model models/yolo26n.pt --lift_type clean --no-video
    ```
-   The superimposed graphs are generated automatically. Look for DTW similarity scores close to 100% across attempts — high variance in technique shows as lower scores.
+    The superimposed graphs are generated automatically for visual comparison of bar path shape and consistency across attempts.
 
 7. **Re-run analysis after code updates** — Use "Add Folders (Reanalyze)" in the GUI (or `run_pipeline_from_folder` in code) to re-run steps 2–5 on any previously processed folder without repeating the slow step 1 video decoding. This is especially useful when:
    - You want to change the `lift_type` without re-processing the video
@@ -1026,39 +969,30 @@ pip install onnxruntime
 - Each lift must have a valid `final_analysis.csv` in its output folder
 - Check the Analyze tab log for "Skipping superimposed graphs: fewer than 2 lifts with valid data"
 
-**DTW similarity score is unexpectedly low**
-- The score is normalised by the reference path's bounding-box diagonal; a very small reference path makes the score sensitive to small absolute differences
-- Large differences in recording angle or athlete body position between takes can reduce similarity even for technically consistent lifting
+**Paths look misaligned in superimposed graphs**
+- Ensure lifts are recorded from similar camera angles for meaningful visual comparison
+- Large differences in recording angle or athlete body position between takes can make overlay comparison difficult
 
-### ML Analysis Issues
+### Technique Analysis Issues
 
-**"Fast Analysis not available (no DTW model found)"**
-- Check that analysis models exist: `ls barpath/models/analysis/generic/clean/`
-- Required files: `fast_analysis_trajectories.npy`, `fast_analysis_config.json`
-- Train models using: `python outputs/smart_analysis_training.py --lift_type clean`
+**"Technique Analysis not available (no baseline found)"**
+- Check that baseline files exist: `ls barpath/models/analysis/generic/clean/`
+- Required files: `pro_baseline_report.json` (pooled) or `pro_baseline_report_{lifter}.json` (per-lifter)
+- Train baselines using: `python outputs/technique_analysis_training.py --lift_type clean`
 
-**"Smart Analysis not available (no RF model found)"**
-- Check that analysis models exist: `ls barpath/models/analysis/generic/clean/`
-- Required files: `smart_analysis_model.pkl`, `smart_analysis_features.json`, `smart_analysis_faults.json`
-- Train models using: `python outputs/smart_analysis_training.py --lift_type clean`
+**"No faults detected"**
+- Technique Analysis may return no faults if the lift is within pro baseline ranges for all checked criteria
+- Ensure `--lifter` and `--lift_type` match available baselines
+- Verify `final_analysis.csv` contains valid kinematic data
 
-**dtw-python not installed**
-- Install with: `pip install dtw-python`
-- Fast Analysis will be skipped if not installed
-
-**scikit-learn not installed**
-- Install with: `pip install scikit-learn`
-- Smart Analysis will be skipped if not installed
-
-**Video shows phase-based coloring instead of similarity coloring**
-- Fast Analysis must complete successfully to enable similarity coloring
-- Check that `--lifter` and `--lift_type` match available models
-- Use `--no-fast` to explicitly disable Fast Analysis
-
-**All fault probabilities are 0% or 50%**
-- Model may not be properly trained
+**All fault probabilities are 0% or near 0%**
+- Baseline may be too permissive or trained on insufficient data
 - Check `training_metadata.json` for sample counts
-- Ensure training data includes both pro and error lifts
+- Ensure training data includes both pro and error lifts with diverse technique profiles
+
+**"CompiledAnalyzer import error"**
+- Ensure all dependencies are installed: `pip install -r requirements.txt`
+- Technique Analysis requires `numpy`, `pandas`, and `scipy`
 
 ---
 

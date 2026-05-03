@@ -1,11 +1,10 @@
-"""
-Core pipeline runner for barpath analysis.
+"""Core pipeline runner for barpath analysis.
 
 This module orchestrates the 5-step barpath analysis pipeline:
 1. Collect raw data from video
 2. Analyze and enrich the data
 3. Generate kinematic graphs
-4. Provide technique critique (ML-based analysis)
+4. Provide technique analysis (compiled rule-based analyzer)
 5. Render visualization video
 
 The runner yields progress updates that can be consumed by CLI or GUI frontends.
@@ -40,8 +39,11 @@ def _is_openvino_model_dir(path_str: str | Path) -> bool:
 
 
 pipeline_dir = Path(__file__).parent / "pipeline"
-sys.path.insert(0, str(pipeline_dir))
-print(f"barpath_core: Added {pipeline_dir} to sys.path", flush=True)
+barpath_dir = Path(__file__).parent
+for p in [str(pipeline_dir), str(barpath_dir)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+print(f"barpath_core: Added {pipeline_dir} and {barpath_dir} to sys.path", flush=True)
 
 if TYPE_CHECKING:
     from barpath.pipeline.step2_helpers.kinematics import InsufficientDataError
@@ -60,10 +62,12 @@ def _import_step_function(step_file: Path, function_name: str) -> Any:
     """Dynamically import a function from a step file."""
     print(f"barpath_core: Loading {function_name} from {step_file}...", flush=True)
     try:
-        spec = importlib.util.spec_from_file_location("step_module", step_file)
+        module_name = step_file.stem
+        spec = importlib.util.spec_from_file_location(module_name, step_file)
         if spec is None or spec.loader is None:
             raise ImportError(f"Could not load {step_file}")
         module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
         print(f"barpath_core: Executing module {step_file}...", flush=True)
         spec.loader.exec_module(module)
         result = getattr(module, function_name)
@@ -96,6 +100,36 @@ step_5_render_video = _import_step_function(
 print("barpath_core: All step functions loaded!", flush=True)
 
 
+def _detect_lift_type_auto(csv_path: str | Path) -> str:
+    """Auto-detect lift type from analysis CSV using the lift detection model."""
+    try:
+        from lift_detection_features import (
+            load_lift_detection_model,
+            predict_lift_type,
+        )
+
+        model_path = str(
+            barpath_dir / "models" / "lift_detection" / "lift_detection_model.pkl"
+        )
+        model_data = load_lift_detection_model(model_path)
+        if model_data is None:
+            print("Warning: lift detection model not found, defaulting to 'clean'.")
+            return "clean"
+
+        df = pd.read_csv(str(csv_path))
+        result = predict_lift_type(df, model_data)
+        if result:
+            detected = result["predicted_class"]
+            if result.get("is_clean_jerk", False):
+                detected = "clean_jerk"
+            print(f"Auto-detected lift type: {detected}")
+            return detected
+        return "clean"
+    except Exception as e:
+        print(f"Warning: auto-detection failed ({e}), defaulting to 'clean'.")
+        return "clean"
+
+
 def run_pipeline_from_folder(
     output_folder: str | Path,
     lift_type: str = "none",
@@ -105,15 +139,12 @@ def run_pipeline_from_folder(
     analysis_csv_path: str = "final_analysis.csv",
     cancel_event: threading.Event | None = None,
     lifter: str = "generic",
-    fast_analysis: bool = True,
-    smart_analysis: bool = True,
 ) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Re-run steps 2-5 of the barpath pipeline from an existing output folder.
 
-    Settings (lift_type, lifter, fast_analysis, smart_analysis) are read from
-    raw_data.pkl metadata if available. Pass ``"none"`` for lift_type to keep
-    the stored value; the other parameters are read from the pickle when present.
+    Settings (lift_type, lifter) are read from raw_data.pkl metadata if available.
+    Pass ``"none"`` for lift_type to keep the stored value.
     """
 
     def check_cancel() -> None:
@@ -151,10 +182,6 @@ def run_pipeline_from_folder(
         lift_type = stored_meta["lift_type"]
     if "lifter" in stored_meta:
         lifter = stored_meta["lifter"]
-    if "fast_analysis" in stored_meta:
-        fast_analysis = stored_meta["fast_analysis"]
-    if "smart_analysis" in stored_meta:
-        smart_analysis = stored_meta["smart_analysis"]
 
     if lift_type != "none":
         input_data.setdefault("metadata", {})["lift_type"] = lift_type
@@ -165,6 +192,23 @@ def run_pipeline_from_folder(
     del input_data
 
     yield ("step2", None, f"Analysis complete. Saved to {csv_path}")
+
+    # Auto-detection after step 2
+    if lift_type == "auto":
+        detected_lift = _detect_lift_type_auto(str(csv_path))
+        # Re-run step 2 with detected lift type for proper phase detection
+        if detected_lift != "auto":
+            with open(pkl_path, "rb") as f:
+                input_data = pickle.load(f)
+            input_data.setdefault("metadata", {})["lift_type"] = detected_lift
+            step_2_analyze_data(input_data, str(csv_path))
+            del input_data
+            yield (
+                "step2",
+                None,
+                f"Re-analyzed with detected lift type: {detected_lift}",
+            )
+        lift_type = detected_lift
 
     check_cancel()
     yield ("step3", None, "Generating kinematic graphs...")
@@ -186,7 +230,7 @@ def run_pipeline_from_folder(
 
         check_cancel()
         analysis_result = critique_lift(
-            df_indexed, lift_type, str(output_folder), lifter, fast_analysis, smart_analysis
+            df_indexed, lift_type, str(output_folder), lifter
         )
 
         if not analysis_result:
@@ -209,25 +253,11 @@ def run_pipeline_from_folder(
             output_video_path = output_folder / "output.mp4"
             pose_overlay_enabled = lift_type != "none"
 
-            temporal_similarity = None
-            overall_similarity = None
-            lifter_name = None
-
-            if analysis_result and analysis_result.get("fast_analysis"):
-                fast_result = analysis_result["fast_analysis"]
-                if fast_result.get("available"):
-                    temporal_similarity = fast_result.get("temporal_similarity")
-                    overall_similarity = fast_result.get("similarity")
-                    lifter_name = analysis_result.get("lifter")
-
             for update in step_5_render_video(
                 df_indexed,
                 source_video,
                 str(output_video_path),
                 draw_pose=pose_overlay_enabled,
-                temporal_similarity=temporal_similarity,
-                overall_similarity=overall_similarity,
-                lifter_name=lifter_name,
                 lift_type=lift_type,
             ):
                 check_cancel()
@@ -326,8 +356,6 @@ def run_pipeline(
     analysis_csv_path: str = "final_analysis.csv",
     cancel_event: threading.Event | None = None,
     lifter: str = "generic",
-    fast_analysis: bool = True,
-    smart_analysis: bool = True,
 ) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Run the complete barpath analysis pipeline.
@@ -389,8 +417,6 @@ def run_pipeline(
     _pkl_meta = _pkl.setdefault("metadata", {})
     _pkl_meta["source_video"] = _source_video_abs
     _pkl_meta["lifter"] = lifter
-    _pkl_meta["fast_analysis"] = fast_analysis
-    _pkl_meta["smart_analysis"] = smart_analysis
     with open(raw_data_path, "wb") as _f:
         pickle.dump(_pkl, _f)
 
@@ -405,6 +431,26 @@ def run_pipeline(
     del _pkl
 
     yield ("step2", None, f"Analysis complete. Saved to {analysis_csv_path}")
+
+    # Auto-detection after step 2
+    if lift_type == "auto":
+        detected_lift = _detect_lift_type_auto(analysis_csv_path)
+        # Re-run step 2 with detected lift type for proper phase detection
+        if detected_lift != "auto":
+            with open(raw_data_path, "rb") as _f:
+                _pkl = pickle.load(_f)
+            _pkl.setdefault("metadata", {})["lift_type"] = detected_lift
+            try:
+                step_2_analyze_data(_pkl, analysis_csv_path)
+            except InsufficientDataError:
+                pass
+            del _pkl
+            yield (
+                "step2",
+                None,
+                f"Re-analyzed with detected lift type: {detected_lift}",
+            )
+        lift_type = detected_lift
 
     check_cancel()
     yield ("step3", None, "Generating kinematic graphs...")
@@ -425,9 +471,7 @@ def run_pipeline(
         yield ("step4", None, f"Analyzing {lift_type} technique...")
 
         check_cancel()
-        analysis_result = critique_lift(
-            df_indexed, lift_type, output_dir, lifter, fast_analysis, smart_analysis
-        )
+        analysis_result = critique_lift(df_indexed, lift_type, output_dir, lifter)
 
         if not analysis_result:
             message = "Analysis complete (No phases detected?)"
@@ -442,25 +486,11 @@ def run_pipeline(
     if encode_video:
         pose_overlay_enabled = lift_type != "none"
 
-        temporal_similarity = None
-        overall_similarity = None
-        lifter_name = None
-
-        if analysis_result and analysis_result.get("fast_analysis"):
-            fast_result = analysis_result["fast_analysis"]
-            if fast_result.get("available"):
-                temporal_similarity = fast_result.get("temporal_similarity")
-                overall_similarity = fast_result.get("similarity")
-                lifter_name = analysis_result.get("lifter")
-
         for update in step_5_render_video(
             df_indexed,
             input_video,
             output_video,
             draw_pose=pose_overlay_enabled,
-            temporal_similarity=temporal_similarity,
-            overall_similarity=overall_similarity,
-            lifter_name=lifter_name,
             lift_type=lift_type,
         ):
             check_cancel()
@@ -480,8 +510,6 @@ def run_pipeline_simple(
     encode_video: bool = True,
     technique_analysis: bool = True,
     lifter: str = "generic",
-    fast_analysis: bool = True,
-    smart_analysis: bool = True,
 ) -> dict[str, Any]:
     """
     Simple wrapper that runs the pipeline and consumes all progress updates.
@@ -506,8 +534,6 @@ def run_pipeline_simple(
             encode_video=encode_video,
             technique_analysis=technique_analysis,
             lifter=lifter,
-            fast_analysis=fast_analysis,
-            smart_analysis=smart_analysis,
         ):
             results[step_name] = message
             print(f"[{step_name}] {message}")

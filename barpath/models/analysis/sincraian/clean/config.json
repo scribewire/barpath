@@ -1,0 +1,13 @@
+{
+  "lifter": "sincraian",
+  "lift_type": "clean",
+  "n_source_lifts": 13,
+  "scale": 0.10253416095638948,
+  "top_k": 5,
+  "channel_weights": [
+    0.5,
+    0.3,
+    0.2
+  ],
+  "trajectory_length": 235
+}
