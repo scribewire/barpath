@@ -97,6 +97,25 @@ PHASE_LABELS = {
     2: "Recovery",
 }
 
+# 6-phase colors for clean+jerk (phases 3-5 are jerk phases)
+PHASE_COLORS_6 = {
+    0: "#e02020",  # Clean Pull - vivid red
+    1: "#f07800",  # Clean Pull-under - vivid orange
+    2: "#18a020",  # Clean Recovery - vivid green
+    3: "#2060c0",  # Jerk Dip - blue
+    4: "#9467bd",  # Jerk Drive - purple
+    5: "#17becf",  # Jerk Recovery - cyan
+}
+
+PHASE_LABELS_6 = {
+    0: "Clean Pull",
+    1: "Clean Pull-under",
+    2: "Clean Recovery",
+    3: "Jerk Dip",
+    4: "Jerk Drive",
+    5: "Jerk Recovery",
+}
+
 PHASE_FILL_ALPHA = 0.12
 
 # Start/end marker colors
@@ -134,6 +153,16 @@ PHASE_COLORS_BGR = {
     0: (32, 32, 224),  # Pull - vivid red
     1: (0, 120, 240),  # Pull-under - vivid orange
     2: (32, 160, 24),  # Recovery - vivid green
+}
+
+# 6-phase colors in BGR for clean+jerk
+PHASE_COLORS_6_BGR = {
+    0: (32, 32, 224),  # Clean Pull - red
+    1: (0, 120, 240),  # Clean Pull-under - orange
+    2: (32, 160, 24),  # Clean Recovery - green
+    3: (224, 96, 32),  # Jerk Dip - blue
+    4: (240, 32, 150),  # Jerk Drive - purple
+    5: (240, 200, 32),  # Jerk Recovery - cyan
 }
 
 # Skeleton line thickness

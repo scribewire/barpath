@@ -1,0 +1,66 @@
+{
+  "version": "2.0.0",
+  "generated_date": "2026-04-14T16:00:57.618611",
+  "total_lifts": 298,
+  "gender": "male",
+  "lift_distribution": {
+    "snatch": 118,
+    "clean": 111,
+    "jerk": 69
+  },
+  "feature_importance": {
+    "shape_path_tortuosity": 0.13245423741591306,
+    "s_curve_score": 0.12469946292357731,
+    "shape_path_efficiency": 0.1245499428039389,
+    "dip_depth_norm": 0.11420844214093137,
+    "shape_y_start": 0.10717736416114013,
+    "elbow_angle_variance": 0.0722771150983829,
+    "vel_max": 0.06942645842825874,
+    "vel_range": 0.06788844020285374,
+    "vel_std": 0.04732501383525031,
+    "vel_mean": 0.043099125584981544,
+    "phase_first_peak_pos": 0.027863465958235027,
+    "phase_peak_gap": 0.0096982939139768,
+    "min_knee_angle_catch": 0.00939643900666763,
+    "phase_n_peaks": 0.006438668335766608,
+    "cj_n_major_peaks": 0.006051362681337667,
+    "cj_two_phase_detected": 0.00558128799237014,
+    "min_elbow_angle_early": 0.004612693051408344,
+    "cj_phase_gap": 0.0038524024707306194,
+    "max_vel_y": 0.003729757438792017,
+    "phase_n_valleys": 0.00290579013200083,
+    "mean_vel_y_first_half": 0.002772761273138308,
+    "shape_y_kurtosis": 0.0023886546890884664,
+    "shape_y_skewness": 0.001984008118432795,
+    "pull_duration_frac": 0.0018780647750953109,
+    "phase_last_peak_pos": 0.0017522935574511233,
+    "phase_two_distinct_peaks": 0.0016122640426994483,
+    "shape_y_min_position": 0.0013479634336773468,
+    "trajectory_length": 0.0012622152733889932,
+    "turnover_duration_frac": 0.0008747430182722714,
+    "phase_y_min_pos": 0.0006540059441255078
+  },
+  "biomechanical_signatures": {
+    "snatch_male": {
+      "n_samples": 118,
+      "avg_s_curve_score": 0.07457062723084983,
+      "avg_peaks": 1.0847457627118644,
+      "avg_cj_phase_gap": 0.0034281202773128036,
+      "trajectory_pattern": "Linear trajectory"
+    },
+    "clean_male": {
+      "n_samples": 111,
+      "avg_s_curve_score": 0.1697567139359178,
+      "avg_peaks": 1.1081081081081081,
+      "avg_cj_phase_gap": 0.01838860836666284,
+      "trajectory_pattern": "Linear trajectory"
+    },
+    "jerk_male": {
+      "n_samples": 69,
+      "avg_s_curve_score": 0.26744915757814225,
+      "avg_peaks": 2.5652173913043477,
+      "avg_cj_phase_gap": 0.2076822154853362,
+      "trajectory_pattern": "Linear trajectory"
+    }
+  }
+}

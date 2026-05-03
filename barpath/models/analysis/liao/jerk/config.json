@@ -1,0 +1,13 @@
+{
+  "lifter": "liao",
+  "lift_type": "jerk",
+  "n_source_lifts": 5,
+  "scale": 0.09929513631063819,
+  "top_k": 5,
+  "channel_weights": [
+    0.5,
+    0.3,
+    0.2
+  ],
+  "trajectory_length": 82
+}

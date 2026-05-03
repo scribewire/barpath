@@ -96,8 +96,8 @@ def print_rich_help(console, parser):
     # Examples
     console.print("[bold]Examples:[/bold]")
     example_text = """
-    [dim]# 1. Quick analysis with clean lift using YOLO26 (no video output)[/dim]
-    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type clean --no-video
+    [dim]# 1. Auto-detect lift type (default)[/dim]
+    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type auto --no-video
 
     [dim]# 2. Full clean analysis with video output (YOLO26)[/dim]
     python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type clean --output_video out.mp4
@@ -108,19 +108,22 @@ def print_rich_help(console, parser):
     [dim]# 4. Jerk analysis — reports Dip / Drive / Recovery phases[/dim]
     python barpath/barpath_cli.py --input_video jerk.mp4 --model models/yolo26n.pt --lift_type jerk --output_video out.mp4
 
-    [dim]# 5. OpenVINO model (Intel CPU optimization, YOLO26 export)[/dim]
+    [dim]# 5. Clean & Jerk analysis — splits into two segments[/dim]
+    python barpath/barpath_cli.py --input_video clean_jerk.mp4 --model models/yolo26n.pt --lift_type clean_jerk --output_video out.mp4
+
+    [dim]# 6. OpenVINO model (Intel CPU optimization, YOLO26 export)[/dim]
     python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26_openvino_export --lift_type none --no-video
 
-    [dim]# 6. Batch processing multiple videos[/dim]
-    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 vid3.mp4 --model models/yolo26n.pt --lift_type clean --no-video
+    [dim]# 7. Batch processing multiple videos[/dim]
+    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 vid3.mp4 --model models/yolo26n.pt --lift_type auto --no-video
 
-    [dim]# 7. Custom output directory[/dim]
+    [dim]# 8. Custom output directory[/dim]
     python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --output_dir my_results/
 
-    [dim]# 8. Skip already processed videos[/dim]
+    [dim]# 9. Skip already processed videos[/dim]
     python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 --model models/yolo26n.pt --skip-existing
 
-    [dim]# 9. Force reprocess all videos (overwrite existing)[/dim]
+    [dim]# 10. Force reprocess all videos (overwrite existing)[/dim]
     python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 --model models/yolo26n.pt --force
     """
     console.print(
@@ -169,14 +172,14 @@ def main():
     # Pipeline Control Arguments
     _ = parser.add_argument(
         "--lift_type",
-        choices=["clean", "snatch", "jerk", "none"],
-        default="none",
-        help="The type of lift to critique. Select 'none' to skip critique.",
+        choices=["auto", "clean", "snatch", "jerk", "clean_jerk", "none"],
+        default="auto",
+        help="The type of lift to critique. 'auto' detects the lift type automatically after Step 2. 'none' skips technique analysis.",
     )
     _ = parser.add_argument(
         "--no-video",
         action="store_true",
-        help="If set, skips Step 4 (video rendering), which is computationally expensive.",
+        help="If set, skips Step 5 (video rendering), which is computationally expensive.",
     )
 
     _ = parser.add_argument(
@@ -189,21 +192,10 @@ def main():
         "--lifter",
         default="generic",
         help=(
-            "Lifter name for model selection (e.g., 'liao_hui', 'lu_xiaojun', 'generic'). "
-            "Determines which pro baseline to compare against for Fast Analysis."
+            "Lifter name for baseline selection (e.g., 'liao_hui', 'lu_xiaojun', 'generic'). "
+            "Determines which pro baseline to compare against for Technique Analysis. "
+            "Falls back to pooled report if lifter-specific baselines are not found."
         ),
-    )
-
-    _ = parser.add_argument(
-        "--no-fast",
-        action="store_true",
-        help="Disable Fast Analysis (DTW-based bar path similarity).",
-    )
-
-    _ = parser.add_argument(
-        "--no-smart",
-        action="store_true",
-        help="Disable Smart Analysis (RF-based fault detection).",
     )
 
     _ = parser.add_argument(
@@ -230,14 +222,6 @@ def main():
         print_rich_help(console, parser)
         sys.exit(1)
     except SystemExit:
-        # Argparse exits on error, we want to show help if possible or just let it exit
-        # But since we disabled help, it only exits on error
-        # We can catch it to show our help?
-        # Actually, argparse prints usage to stderr on error.
-        # Let's just let it be for errors, but we handled -h above.
-        # However, required args missing will trigger SystemExit.
-        # We can try to catch it but argparse prints to stderr directly.
-        # Let's just proceed.
         raise
 
     # Supported video extensions
@@ -329,11 +313,6 @@ def main():
     console.print(f"  Lift Type:    [cyan]{args.lift_type}[/cyan]")
     console.print(f"  Lifter:       [cyan]{args.lifter}[/cyan]")
     console.print(f"  Output Dir:   [cyan]{args.output_dir}[/cyan]")
-
-    if args.no_fast:
-        console.print("  Fast Analysis: [yellow][DISABLED][/yellow]")
-    if args.no_smart:
-        console.print("  Smart Analysis: [yellow][DISABLED][/yellow]")
     console.print()
 
     # Pre-check all videos for existing outputs
@@ -364,7 +343,7 @@ def main():
                 f"[yellow]Found {len(videos_to_skip)} video(s) with existing output:[/yellow]"
             )
             for video, out_dir in videos_to_skip:
-                console.print(f"  • {video.name} → {out_dir}")
+                console.print(f"  {video.name} -> {out_dir}")
             console.print()
             console.print("  [1] Skip all existing (process only new videos)")
             console.print("  [2] Rerun all existing (overwrite outputs)")
@@ -467,8 +446,6 @@ def main():
                         encode_video=not args.no_video,
                         technique_analysis=(args.lift_type != "none"),
                         lifter=args.lifter,
-                        fast_analysis=not args.no_fast,
-                        smart_analysis=not args.no_smart,
                     ):
                         # Check for insufficient data signal
                         if step_name == "_insufficient_data_":
@@ -529,7 +506,7 @@ def main():
                                 # Just update the description for steps without progress
                                 progress.update(
                                     task_id,
-                                    description=f"[green]✓[/green] [{video_idx}/{len(videos_to_process)}] {message}",
+                                    description=f"[green]:heavy_check_mark:[/green] [{video_idx}/{len(videos_to_process)}] {message}",
                                 )
                                 progress.stop_task(task_id)
                         elif step_name == "complete":
@@ -547,7 +524,9 @@ def main():
                     continue
 
             # Final summary
-            console.print("\n[bold green]✓ All Videos Processed![/bold green]")
+            console.print(
+                "\n[bold green]:heavy_check_mark: All Videos Processed![/bold green]"
+            )
 
             # Report skipped videos due to insufficient data
             if skipped_insufficient:
@@ -555,36 +534,40 @@ def main():
                     f"\n[yellow]Skipped {len(skipped_insufficient)} video(s) due to insufficient data:[/yellow]"
                 )
                 for video, reason in skipped_insufficient:
-                    console.print(f"  • {video.name}: {reason}")
+                    console.print(f"  - {video.name}: {reason}")
 
             console.print("\n[bold]Generated files:[/bold]")
             if is_batch:
-                console.print(f"  • Output Dir:      [cyan]{args.output_dir}/[/cyan]")
+                console.print(f"  - Output Dir:      [cyan]{args.output_dir}/[/cyan]")
                 console.print(
-                    "  • [cyan]Results saved in subfolders for each video[/cyan]"
+                    "  - [cyan]Results saved in subfolders for each video[/cyan]"
                 )
                 for vid in videos_to_process:
                     subfolder = os.path.join(args.output_dir, vid.stem)
-                    console.print(f"    - {vid.name} → {subfolder}/")
+                    console.print(f"    - {vid.name} -> {subfolder}/")
             else:
-                console.print(f"  • Output Dir:      [cyan]{args.output_dir}/[/cyan]")
+                console.print(f"  - Output Dir:      [cyan]{args.output_dir}/[/cyan]")
                 console.print(
-                    f"  • Raw data:        [cyan]{os.path.join(args.output_dir, 'raw_data.pkl')}[/cyan]"
+                    f"  - Raw data:        [cyan]{os.path.join(args.output_dir, 'raw_data.pkl')}[/cyan]"
                 )
                 console.print(
-                    f"  • Analysis CSV:    [cyan]{os.path.join(args.output_dir, 'final_analysis.csv')}[/cyan]"
+                    f"  - Analysis CSV:    [cyan]{os.path.join(args.output_dir, 'final_analysis.csv')}[/cyan]"
                 )
                 # Dynamic phase display based on lift type
                 if args.lift_type == "jerk":
-                    phase_text = "Dip → Drive → Recovery"
+                    phase_text = "Dip -> Drive -> Recovery"
                 elif args.lift_type in ("clean", "snatch"):
-                    phase_text = "Pull → Pull-under → Recovery"
+                    phase_text = "Pull -> Pull-under -> Recovery"
+                elif args.lift_type == "clean_jerk":
+                    phase_text = (
+                        "Clean: Pull->Pull-under->Recovery | Jerk: Dip->Drive->Recovery"
+                    )
                 else:
                     phase_text = "N/A"
-                console.print(f"  • Phases:          [cyan]{phase_text}[/cyan]")
+                console.print(f"  - Phases:          [cyan]{phase_text}[/cyan]")
                 if not args.no_video:
                     console.print(
-                        f"  • Output video:    [cyan]{args.output_video}[/cyan]"
+                        f"  - Output video:    [cyan]{args.output_video}[/cyan]"
                     )
 
             # Display Analysis Report if available (for last video in batch mode)

@@ -39,8 +39,14 @@ test_videos/
 outputs/
 datasets/
 build/
-AGENTS.md
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent workflow
+AGENTS.md
+.claude/
+.planning/
+.gitnexusignore
+.gitnexus/

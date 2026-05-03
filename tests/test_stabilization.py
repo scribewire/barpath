@@ -34,7 +34,7 @@ except ImportError as e:
     sys.exit(1)
 
 
-def test_stabilization(video_path, max_frames=300):
+def run_stabilization_test(video_path, max_frames=300):
     """
     Test the stabilization implementation and collect diagnostics.
 
@@ -191,24 +191,17 @@ def test_stabilization(video_path, max_frames=300):
         # Detect new features if needed
         num_detected = 0
         if curr_background_features is None or len(curr_background_features) < 50:
+            kwargs = {}
             if background_mask is not None:
-                new_features = cv2.goodFeaturesToTrack(
-                    gray,
-                    maxCorners=feature_max_corners,
-                    qualityLevel=feature_quality_level,
-                    minDistance=feature_min_distance,
-                    mask=background_mask,
-                    blockSize=feature_block_size,
-                )
-            else:
-                new_features = cv2.goodFeaturesToTrack(
-                    gray,
-                    maxCorners=feature_max_corners,
-                    qualityLevel=feature_quality_level,
-                    minDistance=feature_min_distance,
-                    mask=None,
-                    blockSize=feature_block_size,
-                )
+                kwargs["mask"] = background_mask
+            new_features = cv2.goodFeaturesToTrack(
+                gray,
+                maxCorners=feature_max_corners,
+                qualityLevel=feature_quality_level,
+                minDistance=feature_min_distance,
+                blockSize=feature_block_size,
+                **kwargs,
+            )
 
             if new_features is not None:
                 num_detected = len(new_features)
@@ -429,7 +422,7 @@ def main():
 
     # Run stabilization test
     print("Running stabilization analysis...")
-    diagnostics = test_stabilization(str(video_path), args.max_frames)
+    diagnostics = run_stabilization_test(str(video_path), args.max_frames)
 
     # Save diagnostics data
     diag_path = output_dir / "stabilization_diagnostics.pkl"

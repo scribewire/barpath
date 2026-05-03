@@ -117,6 +117,75 @@ class MarkdownRenderer:
 
         html = re.sub(r"^>.*(?:\n^>.*)*", replace_blockquote, html, flags=re.MULTILINE)
 
+        # Tables
+        def replace_table(match):
+            table_text = match.group(0)
+            rows = table_text.strip().split("\n")
+            if len(rows) < 3:
+                return table_text
+            header_cells = [
+                c.strip() for c in rows[0].strip().strip("|").split("|") if c.strip()
+            ]
+            data_rows = []
+            for row in rows[2:]:
+                cells = [
+                    c.strip()
+                    for c in row.strip().strip("|").split("|")
+                    if c.strip() or True
+                ]
+                cells = [c.strip() for c in row.strip().strip("|").split("|")]
+                cells = [c.strip() for c in row.strip().strip("|").split("|")]
+                data_rows.append(cells)
+            header_html = "".join(f"<th>{h}</th>" for h in header_cells)
+            body_html = ""
+            for cells in data_rows:
+                row_cells = "".join(f"<td>{c}</td>" for c in cells)
+                body_html += f"<tr>{row_cells}</tr>"
+            return f"<table><thead><tr>{header_html}</tr></thead><tbody>{body_html}</tbody></table>"
+
+        html = re.sub(
+            r"^\|.+\|$(?:\n^\|[-:| ]+\|$)(?:\n^\|.+\|)+",
+            replace_table,
+            html,
+            flags=re.MULTILINE,
+        )
+
+        # Checklists
+        def replace_checklist(match):
+            lines = match.group(0).split("\n")
+            items = []
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                checked = re.match(r"^[\*\-\+]\s+\[x\]\s*", stripped, re.IGNORECASE)
+                unchecked = re.match(r"^[\*\-\+]\s+\[\s?\]\s*", stripped)
+                if checked:
+                    label = re.sub(
+                        r"^[\*\-\+]\s+\[x\]\s*", "", stripped, flags=re.IGNORECASE
+                    )
+                    items.append(
+                        f'<li class="check-item"><label class="checkbox checked">'
+                        f'<input type="checkbox" checked disabled>{label}</label></li>'
+                    )
+                elif unchecked:
+                    label = re.sub(r"^[\*\-\+]\s+\[\s?\]\s*", "", stripped)
+                    items.append(
+                        f'<li class="check-item"><label class="checkbox unchecked">'
+                        f'<input type="checkbox" disabled>{label}</label></li>'
+                    )
+                else:
+                    item = re.sub(r"^[\*\-\+]\s+", "", stripped)
+                    items.append(f"<li>{item}</li>")
+            return f'<ul class="checklist">{"".join(items)}</ul>'
+
+        html = re.sub(
+            r"^[\*\-\+]\s+\[[ x]\]\s+.*(?:\n^[\*\-\+]\s+\[[ x]\]\s+.*)*",
+            replace_checklist,
+            html,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+
         # Lists - Unordered
         def replace_unordered_list(match):
             lines = match.group(0).split("\n")
@@ -235,6 +304,16 @@ ul, ol {{ margin-left: 24px; margin-bottom: 16px; color: #374151; }}
 li {{ margin-bottom: 8px; }}
 strong {{ font-weight: 600; color: #111827; }}
 code {{ font-family: 'Consolas', 'Monaco', 'Courier New', monospace; background: #f3f4f6; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; color: #dc2626; }}
+table {{ width: 100%; border-collapse: collapse; margin-bottom: 16px; }}
+th {{ background: #f3f4f6; font-weight: 600; text-align: left; padding: 12px; border: 1px solid #e5e7eb; }}
+td {{ padding: 12px; border: 1px solid #e5e7eb; }}
+tr:nth-child(even) {{ background: #f9fafb; }}
+.checklist {{ list-style: none; margin-left: 0; padding-left: 0; }}
+.check-item {{ margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }}
+.checkbox {{ display: flex; align-items: center; gap: 8px; cursor: default; font-weight: 400; color: #374151; }}
+.checkbox.checked {{ color: #16a34a; font-weight: 500; }}
+.checkbox.checked input[type="checkbox"] {{ accent-color: #16a34a; }}
+.checkbox.unchecked {{ color: #9ca3af; }}
 .no-analysis {{ text-align: center; padding: 48px 24px; color: #6b7280; }}
 </style>
 </head>

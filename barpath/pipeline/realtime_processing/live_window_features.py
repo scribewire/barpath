@@ -149,11 +149,11 @@ def extract_window_features(df: pd.DataFrame) -> Dict[str, float]:
         left_eye = df["left_eye_y"].dropna()
         right_eye = df["right_eye_y"].dropna()
         if len(left_eye) > 0 and len(right_eye) > 0:
-            eye_y = float((left_eye.mean() + right_eye.mean()) / 2) / frame_h
+            eye_y = float((left_eye.values.mean() + right_eye.values.mean()) / 2) / frame_h
     elif "left_eye_y" in df.columns:
         eye_vals = df["left_eye_y"].dropna()
         if len(eye_vals) > 0:
-            eye_y = float(eye_vals.mean()) / frame_h
+            eye_y = float(eye_vals.values.mean()) / frame_h
 
     if eye_y is not None and eye_y > 0:
         features["bar_above_eye"] = 1.0 if bar_y[peak_idx] < eye_y - 0.03 else 0.0
