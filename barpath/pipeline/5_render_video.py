@@ -1,11 +1,9 @@
-"""
-Step 5: Render final analysis video with overlays.
+"""Step 5: Render final analysis video with overlays.
 
 This module renders the visualization video with:
-- Colored bar path (phase-based or similarity-based)
+- Colored bar path (phase-based)
 - Skeleton overlay
 - Legend and HUD elements
-- Optional temporal similarity heatmap
 """
 
 import argparse
@@ -46,8 +44,16 @@ PHASE_COLOR_SCHEMES = {
     },
     "jerk": {
         0: (255, 0, 0),  # Blue - Dip
-        1: (255, 255, 0),  # Cyan/Yellow - Drive
+        1: (255, 255, 0),  # Yellow - Drive
         2: (0, 255, 0),  # Green - Recovery
+    },
+    "clean_jerk": {
+        0: (0, 0, 255),  # Red - Clean Pull
+        1: (0, 165, 255),  # Orange - Clean Pull-under
+        2: (0, 255, 0),  # Green - Clean Recovery
+        3: (255, 0, 0),  # Blue - Jerk Dip
+        4: (255, 255, 0),  # Yellow - Jerk Drive
+        5: (0, 255, 255),  # Cyan - Jerk Recovery
     },
 }
 
@@ -56,6 +62,14 @@ PHASE_NAMES = {
     "snatch": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
     "clean": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
     "jerk": {0: "Dip", 1: "Drive", 2: "Recovery"},
+    "clean_jerk": {
+        0: "Pull",
+        1: "Pull-under",
+        2: "Recovery",
+        3: "Dip",
+        4: "Drive",
+        5: "Recovery",
+    },
 }
 
 
@@ -84,38 +98,11 @@ SKELETON_CONNECTIONS = [
 ]
 
 
-def similarity_to_color(similarity: float) -> tuple:
-    """
-    Convert similarity value (0-1) to BGR color.
-
-    0.0 = red (maximum deviance)
-    0.5 = yellow (moderate)
-    1.0 = green (high similarity)
-    """
-    similarity = max(0.0, min(1.0, similarity))
-
-    if similarity < 0.5:
-        t = similarity * 2
-        r = 255
-        g = int(255 * t)
-        b = 0
-    else:
-        t = (similarity - 0.5) * 2
-        r = int(255 * (1 - t))
-        g = 255
-        b = 0
-
-    return (b, g, r)
-
-
 def step_5_render_video(
     df: pd.DataFrame,
     video_path: str,
     output_video_path: str,
     draw_pose: bool = True,
-    temporal_similarity: Optional[np.ndarray] = None,
-    overall_similarity: Optional[float] = None,
-    lifter_name: Optional[str] = None,
     lift_type: str = "snatch",
 ):
     """
@@ -126,10 +113,7 @@ def step_5_render_video(
         video_path: Path to source video
         output_video_path: Path to save output video
         draw_pose: Whether to draw skeleton overlay
-        temporal_similarity: Per-frame similarity values (0-1) for coloring
-        overall_similarity: Overall similarity score for HUD
-        lifter_name: Name of baseline lifter for HUD
-        lift_type: Type of lift (snatch, clean, jerk) for phase naming
+        lift_type: Type of lift (snatch, clean, jerk, clean_jerk) for phase naming
     """
     print("--- Step 5: Rendering Final Video ---")
 
@@ -184,6 +168,7 @@ def step_5_render_video(
     first_idx = np.asarray(cast(Any, df.index).to_numpy(), dtype=float)
     first_analyzed_frame = int(first_idx.min()) if first_idx.size > 0 else 0
     last_analyzed_frame = int(first_idx.max()) if first_idx.size > 0 else 0
+
     extra_frames = int(fps)
 
     start_frame = first_analyzed_frame
@@ -198,10 +183,7 @@ def step_5_render_video(
 
     last_shake_x = 0.0
     last_shake_y = 0.0
-
-    use_similarity_coloring = (
-        temporal_similarity is not None and len(temporal_similarity) > 0
-    )
+    last_head_pos: Optional[tuple[int, int]] = None
 
     for frame_idx in range(frames_to_render):
         frame_count = start_frame + frame_idx
@@ -257,23 +239,11 @@ def step_5_render_video(
                 p1 = (points_to_draw[i, 0], points_to_draw[i, 1])
                 p2 = (points_to_draw[i + 1, 0], points_to_draw[i + 1, 1])
 
-                if use_similarity_coloring:
-                    frame_idx_for_sim = (
-                        int(path_indices[i]) if i < len(path_indices) else i
-                    )
-                    if temporal_similarity is not None and frame_idx_for_sim < len(
-                        temporal_similarity
-                    ):
-                        sim_val = temporal_similarity[frame_idx_for_sim]  # type: ignore
-                    else:
-                        sim_val = 0.5
-                    color = similarity_to_color(sim_val)
-                else:
-                    phase_index = int(phases_to_draw[i]) % 3
-                    phase_scheme = PHASE_COLOR_SCHEMES.get(
-                        lift_type, PHASE_COLOR_SCHEMES["snatch"]
-                    )
-                    color = phase_scheme.get(phase_index, (255, 255, 255))
+                phase_index = int(phases_to_draw[i])
+                phase_scheme = PHASE_COLOR_SCHEMES.get(
+                    lift_type, PHASE_COLOR_SCHEMES["snatch"]
+                )
+                color = phase_scheme.get(phase_index, (255, 255, 255))
 
                 cv2.line(frame, p1, p2, color, 3)
 
@@ -310,41 +280,28 @@ def step_5_render_video(
                 for name, (px, py) in landmark_pixels.items():
                     cv2.circle(frame, (px, py), LANDMARK_RADIUS, (255, 255, 255), -1)
 
+                for key in ["left_eye", "right_eye", "nose"]:
+                    if key in landmark_pixels:
+                        last_head_pos = landmark_pixels[key]
+                        break
+                if last_head_pos is None:
+                    for key in ["left_shoulder", "right_shoulder"]:
+                        if key in landmark_pixels:
+                            last_head_pos = landmark_pixels[key]
+                            break
+                if last_head_pos is None and len(landmark_pixels) > 0:
+                    last_head_pos = list(landmark_pixels.values())[0]
+
         # Build dynamic legend based on lift type
         phase_names = PHASE_NAMES.get(lift_type, PHASE_NAMES["snatch"])
         phase_scheme = PHASE_COLOR_SCHEMES.get(lift_type, PHASE_COLOR_SCHEMES["snatch"])
         dynamic_legend = {
             "Barbell Box": COLOR_SCHEME["Barbell Box"],
-            phase_names[0]: phase_scheme[0],
-            phase_names[1]: phase_scheme[1],
-            phase_names[2]: phase_scheme[2],
         }
+        for phase_id, phase_name in phase_names.items():
+            dynamic_legend[phase_name] = phase_scheme.get(phase_id, (255, 255, 255))
 
-        last_y = draw_legend(frame, dynamic_legend)
-
-        if use_similarity_coloring and overall_similarity is not None:
-            sim_text = f"Similarity: {overall_similarity * 100:.1f}%"
-            cv2.putText(
-                frame,
-                sim_text,
-                (15, last_y + 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2,
-            )
-
-            if lifter_name:
-                lifter_text = f"Baseline: {lifter_name.replace('_', ' ').title()}"
-                cv2.putText(
-                    frame,
-                    lifter_text,
-                    (15, last_y + 55),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (200, 200, 200),
-                    1,
-                )
+        draw_legend(frame, dynamic_legend)
 
         out.write(frame)
 
@@ -430,6 +387,12 @@ def main():
     parser.add_argument(
         "--output_video", required=True, help="Path to save the final visualized video."
     )
+    parser.add_argument(
+        "--lift_type",
+        default="snatch",
+        choices=["snatch", "clean", "jerk", "clean_jerk"],
+        help="Type of lift for phase color mapping.",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.input_video):
@@ -448,7 +411,9 @@ def main():
         print(f"Error loading CSV file {args.input_csv}: {e}")
         return
 
-    for _ in step_5_render_video(df, args.input_video, args.output_video):
+    for _ in step_5_render_video(
+        df, args.input_video, args.output_video, lift_type=args.lift_type
+    ):
         pass
 
 

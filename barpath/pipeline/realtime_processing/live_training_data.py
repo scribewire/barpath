@@ -45,13 +45,13 @@ def extract_live_windows_from_csv(
         else 720.0
     )
 
-    bar_y = df["barbell_y_smooth"].values
+    bar_y = np.asarray(df["barbell_y_smooth"].values, dtype=float)
     if len(bar_y) < min_frames:
         return []
 
     # Knee y-position: use hip_y_avg * 0.7 as proxy, or estimate from frame
     if "hip_y_avg" in df.columns:
-        hip_y = df["hip_y_avg"].values
+        hip_y = np.asarray(df["hip_y_avg"].values, dtype=float)
         # Filter out zeros (missing data)
         valid_hip = hip_y[hip_y > 0]
         if len(valid_hip) > 0:

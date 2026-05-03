@@ -149,7 +149,7 @@ class LiveFeatureExtractor:
         y_smooth = _safe_savgol(_to_float_array(y), max_win=min(11, len(y)), polyorder=3)
         
         # Compute velocity
-        timestamps = df['time_s'].values
+        timestamps = np.asarray(df['time_s'].values, dtype=float)
         if len(timestamps) > 1:
             dt = np.diff(timestamps)
             dt = np.where(dt == 0, 1.0 / self.fps, dt)
@@ -166,10 +166,10 @@ class LiveFeatureExtractor:
             vel = pd.Series(vel).interpolate().bfill().ffill().values
             
             if len(timestamps) > 2:
-                dt = np.diff(timestamps[:-1])
+                dt = np.diff(np.asarray(timestamps[:-1], dtype=float))
                 dt = np.where(dt == 0, 1.0 / self.fps, dt)
                 
-                accel = np.diff(vel[:-1]) / dt
+                accel = np.diff(np.asarray(vel[:-1], dtype=float)) / dt
                 accel = np.concatenate([[0, 0], accel])
                 df['accel_y_smooth'] = _safe_savgol(_to_float_array(accel), max_win=7, polyorder=2)
             else:

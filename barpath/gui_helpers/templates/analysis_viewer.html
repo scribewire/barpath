@@ -128,6 +128,35 @@ td {
 tr:nth-child(even) {
   background: #f9fafb;
 }
+.checklist {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 0;
+}
+.check-item {
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+  font-weight: 400;
+  color: #374151;
+}
+.checkbox.checked {
+  color: #16a34a;
+  font-weight: 500;
+}
+.checkbox.checked input[type="checkbox"] {
+  accent-color: #16a34a;
+}
+.checkbox.unchecked {
+  color: #9ca3af;
+}
 hr {
   border: none;
   border-top: 1px solid #e5e7eb;

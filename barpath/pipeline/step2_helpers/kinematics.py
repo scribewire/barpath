@@ -376,9 +376,7 @@ def detect_jerk_phases(df: pd.DataFrame, fps: float) -> pd.Series:
         c in df.columns
         for c in ["left_shoulder_y", "right_shoulder_y", "left_hip_y", "right_hip_y"]
     ):
-        shoulder_y = (
-            (df["left_shoulder_y"] + df["right_shoulder_y"]) / 2
-        ).dropna()
+        shoulder_y = ((df["left_shoulder_y"] + df["right_shoulder_y"]) / 2).dropna()
         hip_y = ((df["left_hip_y"] + df["right_hip_y"]) / 2).dropna()
         if len(shoulder_y) > 0 and len(hip_y) > 0:
             min_len = min(len(shoulder_y), len(hip_y))

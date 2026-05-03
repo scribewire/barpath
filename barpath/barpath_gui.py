@@ -33,7 +33,7 @@ from gui_helpers.markdown_renderer import MarkdownRenderer
 from toga.style import Pack
 
 # Prepare for lazy import of the pipeline runner
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 _run_pipeline = None
 _run_batch_postprocess = None
 _run_pipeline_from_folder = None

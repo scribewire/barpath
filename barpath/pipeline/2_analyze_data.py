@@ -40,6 +40,8 @@ from step2_helpers import (
     unpack_landmarks,
 )
 
+from lift_detection_features import detect_clean_jerk_split_point
+
 
 def step_2_analyze_data(input_data, output_path):
     print("--- Step 2: Analyzing Data ---")
@@ -95,12 +97,51 @@ def step_2_analyze_data(input_data, output_path):
     df = calculate_time_and_kinematics(df, fps)
 
     phases = None
+    if lift_type == "clean_jerk":
+        split_idx = detect_clean_jerk_split_point(df)
+        if split_idx is not None:
+            print(f"  Clean+jerk split detected at frame {split_idx}")
+            # Clean portion: before split
+            df_clean = df.loc[:split_idx].copy()
+            df_jerk = df.loc[split_idx:].copy()
+
+            from step2_helpers.classics_phase_detection import identify_classics_phases
+
+            clean_phases = identify_classics_phases(df_clean)
+            if clean_phases is not None:
+                df_clean = assign_phases_from_classics(df_clean, clean_phases)
+            else:
+                df_clean = assign_phases_kinematic(df_clean, fps, "clean")
+
+            # Jerk portion: after split
+            df_jerk = assign_phases_kinematic(df_jerk, fps, "jerk")
+            # Remap jerk phases to avoid collision: 0->3, 1->4, 2->5
+            jerk_phase_map = {0: 3, 1: 4, 2: 5}
+            df_jerk["bar_phase"] = df_jerk["bar_phase"].map(
+                lambda x: jerk_phase_map.get(int(x), int(x))
+            )
+            # Add segment labels
+            df_clean["lift_segment"] = "clean"
+            df_jerk["lift_segment"] = "jerk"
+
+            df = pd.concat([df_clean, df_jerk]).sort_index()
+            df["phase_change"] = df["bar_phase"].diff().fillna(0).ne(0)
+        else:
+            print(
+                "Warning: Could not detect clean+jerk split point. "
+                "Treating as regular clean lift."
+            )
+            lift_type = "clean"
+
     if lift_type in ("clean", "snatch"):
         from step2_helpers.classics_phase_detection import identify_classics_phases
 
         phases = identify_classics_phases(df)
 
-    if phases is not None:
+    if lift_type == "clean_jerk":
+        # already handled above
+        pass
+    elif phases is not None:
         df = assign_phases_from_classics(df, phases)
     else:
         if lift_type in ("clean", "snatch"):
@@ -110,6 +151,8 @@ def step_2_analyze_data(input_data, output_path):
             )
         # Use appropriate phase detection based on lift type
         df = assign_phases_kinematic(df, fps, lift_type)
+        if "lift_segment" not in df.columns:
+            df["lift_segment"] = "none"
 
     # Normalize the optional kinematic phase label column so downstream access is typed safely.
     if "bar_phase" in df.columns:

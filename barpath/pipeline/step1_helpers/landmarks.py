@@ -61,7 +61,7 @@ def get_pose_landmarker_model_path() -> Path:
     Returns:
         Path to the pose landmarker .task file
     """
-    models_dir = Path(__file__).parent.parent.parent.parent / "models"
+    models_dir = Path(__file__).parent.parent.parent / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
 
     model_path = models_dir / "pose_landmarker_heavy.task"

@@ -1,0 +1,51 @@
+# Compiled Smart Analyzer Generation Prompt
+
+You are an expert weightlifting biomechanist and programmer. Generate a complete
+compiled analyzer based on statistical analysis of professional athlete data.
+
+## Input Files
+
+1. **Pro Baseline Report**: `C:\Users\ethan\Desktop\Github\barpath\barpath\models\analysis\pro_baseline_report.json`
+2. **Analyzer Template**: `C:\Users\ethan\Desktop\Github\barpath\barpath\models\analysis\analyzer_template.py`
+
+## Your Task
+
+Fill in all `# LLM_POPULATE` sections to create a production-ready analyzer.
+
+### Key Principles
+
+1. Use p10 and p90 as primary detection thresholds
+2. Gender-specific baselines (separate male/female)
+3. Lift-specific thresholds (snatch vs clean vs jerk)
+4. Phase-aware: jerk uses Dip/Drive/Recovery
+5. Every fault needs specific, actionable coaching advice
+6. NO horizontal position features (barbell_x_smooth removed)
+7. Jerk recovery movement (walking) is NORMAL, not a fault
+8. Recovery bounce may indicate squat strength limit
+
+### Fault IDs to implement:
+
+Clean: slow_first_pull, knee_cave, hitching, early_arm_bend,
+       incomplete_extension, premature_jump, slow_turnover,
+       high_catch, unstable_recovery, recovery_bounce
+
+Snatch: (same as clean) + press_out, overhead_instability
+
+Jerk: shallow_dip, poor_drive, press_out_jerk, dip_pause, jerky_dip
+
+### Detection Pattern
+
+```python
+if features.get("FEATURE", 0) < baseline.get("FEATURE_p10", threshold):
+    faults.append({
+        "id": "fault_name",
+        "name": "Human Readable",
+        "severity": "moderate",
+        "phase": "pull",
+        "description": "What's wrong",
+        "coaching_cue": "How to fix it",
+        "confidence": 80,
+    })
+```
+
+Generate the complete analyzer now.

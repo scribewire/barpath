@@ -314,7 +314,7 @@ class LiveLiftRecognizer:
             values = [p[key] for p in self._class_prob_history if key in p]
             avg_probs[key] = float(np.mean(values)) if values else 0.0
 
-        best_class = max(avg_probs, key=avg_probs.get)
+        best_class = max(avg_probs, key=lambda k: avg_probs[k])
         best_prob = avg_probs[best_class]
 
         self._predicted_class = self._format_lift_name(best_class)
@@ -419,7 +419,7 @@ class LiveLiftRecognizer:
         buf_max = self._buffer.maxlen
 
         # Signal 1: Classic - bar passes knees going up
-        if bar_y <= frame_data.knee_y_avg and len(self._buffer) >= buf_max:
+        if frame_data.knee_y_avg is not None and buf_max is not None and bar_y <= frame_data.knee_y_avg and len(self._buffer) >= buf_max:
             return True
 
         # Signal 2: Velocity-based trigger
@@ -454,9 +454,11 @@ class LiveLiftRecognizer:
         frames = list(self._buffer)
 
         for i in range(1, len(frames)):
-            if frames[i].barbell_center and frames[i - 1].barbell_center:
+            prev = frames[i - 1].barbell_center
+            curr = frames[i].barbell_center
+            if prev is not None and curr is not None:
                 # Vertical velocity (px per frame)
-                vel = frames[i].barbell_center[1] - frames[i - 1].barbell_center[1]
+                vel = curr[1] - prev[1]
                 velocities.append(vel)
 
         return velocities

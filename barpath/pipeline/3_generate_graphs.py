@@ -1,8 +1,6 @@
 import argparse
 import os
 from pathlib import Path
-from typing import Optional
-
 import matplotlib
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
@@ -12,7 +10,6 @@ import pandas as pd
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from config import (
-    DTW_SIMILARITY_K,
     END_MARKER_COLOR,
     END_MARKER_EDGE,
     GRAPH_DPI,
@@ -365,161 +362,18 @@ def _plot_timeseries(df, y_col, title, y_label, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# DTW similarity and reference-scale helpers
+# Reference-scale helpers
 # ---------------------------------------------------------------------------
-
-
-def _dtw_distance(seq_a: np.ndarray, seq_b: np.ndarray) -> float:
-    """
-    Compute the Dynamic Time Warping distance between two 2-D point sequences.
-
-    Each sequence is shaped ``(N, 2)`` where columns are (x, y).  The DTW
-    cost matrix is built with Euclidean point-to-point distances and the
-    standard DP recurrence.  The raw accumulated cost at the corner is
-    returned (not normalised — use :func:`_dtw_similarity_pct` for a
-    percentage score).
-
-    Parameters
-    ----------
-    seq_a, seq_b : ndarray, shape (N, 2) and (M, 2)
-
-    Returns
-    -------
-    float
-        DTW distance (lower = more similar).
-    """
-    raw, _ = _dtw_distance_with_steps(seq_a, seq_b)
-    return raw
-
-
-def _dtw_distance_with_steps(seq_a: np.ndarray, seq_b: np.ndarray) -> tuple:
-    """
-    Compute the DTW distance and the length of the optimal warping path.
-
-    Uses the standard DP recurrence with Euclidean point-to-point cost.
-    After filling the cost matrix the optimal path is traced back from
-    ``(N, M)`` to ``(1, 1)`` to count the number of warping steps ``W``.
-
-    Returns
-    -------
-    (distance, n_steps) : (float, int)
-        ``distance``  – accumulated DTW cost along the optimal path.
-        ``n_steps``   – number of cells in the optimal path (>= max(N, M)).
-    """
-    n, m = len(seq_a), len(seq_b)
-    # Accumulated cost matrix (1-indexed; row/col 0 are sentinels)
-    dtw = np.full((n + 1, m + 1), np.inf)
-    dtw[0, 0] = 0.0
-
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            cost = float(np.linalg.norm(seq_a[i - 1] - seq_b[j - 1]))
-            dtw[i, j] = cost + min(dtw[i - 1, j], dtw[i, j - 1], dtw[i - 1, j - 1])
-
-    # Trace back the optimal path to count steps
-    i, j = n, m
-    n_steps = 0
-    while i > 0 or j > 0:
-        n_steps += 1
-        if i == 0:
-            j -= 1
-        elif j == 0:
-            i -= 1
-        else:
-            best = min(dtw[i - 1, j - 1], dtw[i - 1, j], dtw[i, j - 1])
-            if dtw[i - 1, j - 1] == best:
-                i -= 1
-                j -= 1
-            elif dtw[i - 1, j] == best:
-                i -= 1
-            else:
-                j -= 1
-
-    return float(dtw[n, m]), max(n_steps, 1)
 
 
 def _path_length(seq: np.ndarray) -> float:
     """
     Return the total arc-length of a 2-D point sequence ``(N, 2)``.
-    Used to normalise DTW distance so it is independent of sequence length.
     """
     if len(seq) < 2:
         return 1.0
     diffs = np.diff(seq, axis=0)
     return float(np.sum(np.linalg.norm(diffs, axis=1))) or 1.0
-
-
-def _dtw_similarity_pct(
-    ref_xy: np.ndarray,
-    other_xy: np.ndarray,
-) -> float:
-    """
-    Return a percentage similarity score in [0, 100] between two 2-D bar
-    paths using Dynamic Time Warping.
-
-    Normalisation
-    -------------
-    The raw DTW cost is the sum of Euclidean distances along the optimal
-    warping path.  We normalise it by two factors to make it independent of
-    both sequence length and absolute path scale:
-
-    1. **Step count** – divide by the number of warping steps ``W``
-       (the length of the optimal warping path, ``1 <= W <= N+M-1``).
-       This gives the *mean per-step deviation* in the same units as the
-       path coordinates.
-
-    2. **Path scale** – divide by the bounding-box diagonal of the
-       reference path.  This converts the mean deviation into a
-       dimensionless fraction of the overall path extent, so a 3 cm
-       deviation on a 160 cm path scores differently from a 3 cm
-       deviation on a 10 cm path.
-
-    The resulting ``d_norm`` is the mean warping deviation as a fraction
-    of the path's spatial extent.  A value of 0 means the paths are
-    identical; a value of 1 means the average warp step deviates by the
-    full diagonal of the bounding box.
-
-    Mapping to percentage
-    ---------------------
-    An exponential decay converts ``d_norm`` to a human-readable score:
-
-        similarity = 100 * exp(-k * d_norm)
-
-    ``k = 5`` is calibrated so the scale is intuitive for bar-path work:
-
-    * d_norm = 0.00  → 100 %  (identical)
-    * d_norm = 0.05  →  78 %  (very similar — minor style differences)
-    * d_norm = 0.10  →  61 %  (noticeable shape difference)
-    * d_norm = 0.14  →  50 %  (substantially different)
-    * d_norm = 0.20  →  37 %  (very different)
-
-    Parameters
-    ----------
-    ref_xy   : ndarray (N, 2)  – reference lift path
-    other_xy : ndarray (M, 2)  – comparison lift path
-
-    Returns
-    -------
-    float in [0, 100]
-    """
-    if len(ref_xy) < 2 or len(other_xy) < 2:
-        return 0.0
-
-    raw, n_steps = _dtw_distance_with_steps(ref_xy, other_xy)
-
-    # Mean per-step deviation in path coordinate units
-    mean_dev = raw / max(n_steps, 1)
-
-    # Characteristic scale: bounding-box diagonal of the reference path
-    ref_x_range = float(ref_xy[:, 0].max() - ref_xy[:, 0].min())
-    ref_y_range = float(ref_xy[:, 1].max() - ref_xy[:, 1].min())
-    bbox_diag = float(np.sqrt(ref_x_range**2 + ref_y_range**2))
-    if bbox_diag < 1e-6:
-        bbox_diag = 1.0
-
-    d_norm = mean_dev / bbox_diag
-
-    return float(100.0 * np.exp(-DTW_SIMILARITY_K * d_norm))
 
 
 def _find_phase_transition_points(
@@ -659,7 +513,6 @@ def _draw_superimposed_figure(
     title,
     unit_label,
     use_filenames,
-    similarity_scores: Optional[list] = None,
 ):
     """
     Shared rendering helper for superimposed bar-path graphs.
@@ -679,18 +532,10 @@ def _draw_superimposed_figure(
         Axis unit string, e.g. ``"cm"`` or ``"px"``.
     use_filenames : bool
         When True use the raw label; when False use "Lift N".
-    similarity_scores : list of float or None, optional
-        Per-lift DTW similarity percentages (same length as ``lift_paths``).
-        Index 0 (the reference lift) should be ``None``; subsequent entries
-        are the score vs the reference.  When provided the percentage is
-        appended to the legend label.
     """
     if not lift_paths:
         print(f"Skipping {filename}: no lift paths to draw.")
         return
-
-    if similarity_scores is None:
-        similarity_scores = [None] * len(lift_paths)
 
     fig, ax = plt.subplots(figsize=(GRAPH_WIDTH_PATH, GRAPH_HEIGHT_PATH))
 
@@ -704,15 +549,6 @@ def _draw_superimposed_figure(
         lift_color = LIFT_PALETTE[lift_idx % len(LIFT_PALETTE)]
         base_label = file_label if use_filenames else f"Lift {lift_idx + 1}"
 
-        # Append DTW similarity to every lift except the reference (lift 0)
-        score = (
-            similarity_scores[lift_idx] if lift_idx < len(similarity_scores) else None
-        )
-        if score is not None:
-            legend_label = f"{base_label}  [{score:.1f}% match]"
-        else:
-            legend_label = base_label
-
         (line_handle,) = ax.plot(
             x_vals,
             y_vals,
@@ -720,7 +556,7 @@ def _draw_superimposed_figure(
             linewidth=2.0,
             alpha=0.85,
             solid_capstyle="round",
-            label=legend_label,
+            label=base_label,
             zorder=3,
         )
         lift_line_handles.append(line_handle)
@@ -784,7 +620,7 @@ def _draw_superimposed_figure(
     print(f"  ✓ Generated: {output_path}")
 
 
-def _compute_scaled_paths_and_similarity(lift_paths):
+def _compute_scaled_paths(lift_paths):
     """
     Given a list of ``(label, x_vals, y_vals, phase_vals)`` tuples:
 
@@ -794,33 +630,23 @@ def _compute_scaled_paths_and_similarity(lift_paths):
        maps its phase-transition markers onto the reference markers
        (least-squares, see :func:`_uniform_scale_to_reference`), then scale
        its x and y arrays by that factor.
-    3. Compute the DTW similarity percentage between each scaled non-reference
-       path and the reference path (on the *scaled* coordinates so the
-       comparison reflects the shape rather than the absolute size).
 
     Returns
     -------
     scaled_paths : list of (label, x_vals, y_vals, phase_vals)
         Reference lift unchanged; others have scaled x/y.
-    similarity_scores : list of float or None
-        Index 0 is ``None`` (reference has no score vs itself); subsequent
-        entries are the DTW percentage for that lift vs the reference.
     scale_factors : list of float
         Scale factor applied to each lift (1.0 for the reference).
     """
     if not lift_paths:
-        return lift_paths, [], []
+        return lift_paths, []
 
     scaled_paths = []
-    similarity_scores: list = []
     scale_factors: list = []
 
     ref_label, ref_x, ref_y, ref_ph = lift_paths[0]
     scaled_paths.append((ref_label, ref_x, ref_y, ref_ph))
-    similarity_scores.append(None)  # reference has no score vs itself
     scale_factors.append(1.0)
-
-    ref_xy = np.column_stack([ref_x, ref_y])
 
     for label, x, y, ph in lift_paths[1:]:
         # Find the best uniform scale
@@ -830,21 +656,15 @@ def _compute_scaled_paths_and_similarity(lift_paths):
         scaled_paths.append((label, sx, sy, ph))
         scale_factors.append(s)
 
-        # DTW similarity on the scaled path vs the reference
-        other_xy = np.column_stack([sx, sy])
-        pct = _dtw_similarity_pct(ref_xy, other_xy)
-        similarity_scores.append(pct)
+        print(f"  Superimposed scaling: '{label}' scale={s:.4f}")
 
-        print(
-            f"  Superimposed scaling: '{label}' scale={s:.4f}, "
-            f"DTW similarity={pct:.1f}%"
-        )
-
-    return scaled_paths, similarity_scores, scale_factors
+    return scaled_paths, scale_factors
 
 
 def plot_superimposed_paths(
-    video_data_list, output_dir, use_filenames=False,
+    video_data_list,
+    output_dir,
+    use_filenames=False,
     filename="superimposed_bar_paths.png",
     title="Superimposed Bar Paths\n(origin-normalised at pull-under start; non-reference lifts uniformly scaled to reference)",
 ):
@@ -853,8 +673,7 @@ def plot_superimposed_paths(
 
     All lifts use their smoothed pixel columns for comparison.
     Non-reference lifts are uniformly scaled to best match the reference
-    lift's phase-transition marker positions.  DTW similarity percentages
-    vs the reference are shown in the legend.
+    lift's phase-transition marker positions.
 
     Parameters
     ----------
@@ -897,10 +716,8 @@ def plot_superimposed_paths(
         print("Skipping superimposed path: all lifts had insufficient data.")
         return
 
-    # Scale non-reference lifts and compute DTW similarity
-    lift_paths, similarity_scores, scale_factors = _compute_scaled_paths_and_similarity(
-        raw_lift_paths
-    )
+    # Scale non-reference lifts
+    lift_paths, scale_factors = _compute_scaled_paths(raw_lift_paths)
 
     _draw_superimposed_figure(
         lift_paths,
@@ -909,7 +726,6 @@ def plot_superimposed_paths(
         title=title,
         unit_label="px",
         use_filenames=use_filenames,
-        similarity_scores=similarity_scores,
     )
 
 
