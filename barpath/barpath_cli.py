@@ -156,6 +156,13 @@ def main():
         help="Path to the trained YOLO model (e.g., 'models/yolo26n.pt', 'models/best.onnx', 'models/best.engine', or an OpenVINO export directory). YOLO26 NMS-free models are fully supported.",
     )
     _ = parser.add_argument(
+        "--backend",
+        type=str,
+        choices=["pytorch", "openvino", "auto"],
+        default="auto",
+        help="Backend for model inference: 'auto' (detect Intel GPU → OpenVINO, else PyTorch), 'openvino' (force OpenVINO), 'pytorch' (force PyTorch/CUDA). Default: auto",
+    )
+    _ = parser.add_argument(
         "--output_video",
         required=False,
         default="outputs/output.mp4",
@@ -296,6 +303,7 @@ def main():
     else:
         console.print("  Output Video: [yellow][SKIPPED - using --no-video][/yellow]")
     console.print(f"  Lift Type:    [cyan]{args.lift_type}[/cyan]")
+    console.print(f"  Backend:      [cyan]{args.backend}[/cyan]")
     console.print(f"  Lifter:       [cyan]{args.lifter}[/cyan]")
     console.print(f"  Output Dir:   [cyan]{args.output_dir}[/cyan]")
     console.print()
@@ -431,6 +439,7 @@ def main():
                         encode_video=not args.no_video,
                         technique_analysis=(args.lift_type != "none"),
                         lifter=args.lifter,
+                        backend=args.backend,
                     ):
                         # Check for insufficient data signal
                         if step_name == "_insufficient_data_":

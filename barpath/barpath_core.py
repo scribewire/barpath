@@ -114,6 +114,7 @@ def run_pipeline_from_folder(
     analysis_csv_path: str = "final_analysis.csv",
     cancel_event: threading.Event | None = None,
     lifter: str = "generic",
+    backend: str = "auto",
 ) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Re-run steps 2-5 of the barpath pipeline from an existing output folder.
@@ -331,6 +332,7 @@ def run_pipeline(
     analysis_csv_path: str = "final_analysis.csv",
     cancel_event: threading.Event | None = None,
     lifter: str = "generic",
+    backend: str = "auto",
 ) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Run the complete barpath analysis pipeline.
@@ -376,6 +378,7 @@ def run_pipeline(
         model_path,
         raw_data_path,
         lift_type,
+        backend=backend,
     ):
         check_cancel()
         yield update
@@ -479,6 +482,7 @@ def run_pipeline_simple(
     encode_video: bool = True,
     technique_analysis: bool = True,
     lifter: str = "generic",
+    backend: str = "auto",
 ) -> dict[str, Any]:
     """
     Simple wrapper that runs the pipeline and consumes all progress updates.
@@ -503,6 +507,7 @@ def run_pipeline_simple(
             encode_video=encode_video,
             technique_analysis=technique_analysis,
             lifter=lifter,
+            backend=backend,
         ):
             results[step_name] = message
             print(f"[{step_name}] {message}")
