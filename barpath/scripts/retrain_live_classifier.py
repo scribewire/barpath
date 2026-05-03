@@ -8,7 +8,6 @@ real-time classification of partial trajectories.
 from __future__ import annotations
 
 import pickle
-import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -19,10 +18,8 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "barpath"))
-
-from pipeline.live_training_data import generate_live_training_dataset
-from pipeline.live_window_features import extract_window_features
+from barpath.pipeline.realtime_processing.live_training_data import generate_live_training_dataset
+from barpath.pipeline.realtime_processing.live_window_features import extract_window_features
 
 
 def train_live_classifier(

@@ -4,11 +4,7 @@ Retrain lift detection classifier using all available labeled data.
 
 from pathlib import Path
 from typing import Dict, List, Optional
-import sys
 import pickle
-
-# Add barpath to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "barpath"))
 
 import numpy as np
 import pandas as pd
@@ -41,7 +37,7 @@ def get_all_csv_files() -> Dict[str, List[Path]]:
 
 def load_features(category: str, csv_files: List[Path]) -> tuple:
     """Load features and labels from CSV files."""
-    from pipeline.lift_detection_features import extract_model_features_as_array
+    from barpath.pipeline.lift_detection_features import extract_model_features_as_array
 
     all_features = []
     all_labels = []
@@ -195,7 +191,7 @@ def main():
     clf = train_classifier(X, y, classes)
 
     # Feature importances
-    from pipeline.lift_detection_features import get_model_feature_names
+    from barpath.pipeline.lift_detection_features import get_model_feature_names
 
     feature_names = get_model_feature_names()
     importances = clf.feature_importances_
