@@ -158,7 +158,43 @@ def step_1_collect_data(
         if is_tensorrt_engine:
             print("Detected TensorRT engine model (.engine).")
 
-        yolo_model = YOLO(resolved_path, task="detect")
+        # Try loading with selected backend, with warn+fallback (D-04)
+        yolo_model = None
+        actual_backend = backend_name
+
+        try:
+            yolo_model = YOLO(resolved_path, task="detect")
+            print(f"Model loaded with {backend_name} backend")
+        except Exception as e:
+            if backend_name == "openvino":
+                print(f"WARNING: OpenVINO failed to load model: {e}")
+                print("Falling back to PyTorch backend")
+                actual_backend = "pytorch"
+                try:
+                    yolo_model = YOLO(resolved_path, task="detect")
+                    print("Model loaded with PyTorch backend (fallback)")
+                except Exception as e2:
+                    print(f"ERROR: PyTorch fallback also failed: {e2}")
+                    raise
+            elif backend_name == "pytorch":
+                print(f"ERROR: PyTorch failed to load model: {e}")
+                raise
+            else:  # auto
+                print(f"WARNING: Auto-detection failed: {e}")
+                print("Trying alternative backend...")
+                alt_backend = "openvino" if not is_openvino else "pytorch"
+                try:
+                    yolo_model = YOLO(resolved_path, task="detect")
+                    actual_backend = alt_backend
+                    print(f"Model loaded with {alt_backend} backend (fallback)")
+                except Exception as e2:
+                    print(f"ERROR: Fallback backend also failed: {e2}")
+                    raise
+
+        if yolo_model is None:
+            raise RuntimeError("Failed to load model with any backend")
+
+        print(f"Active backend: {actual_backend}")
 
         nms_free = _is_yolo26_model(resolved_path)
         if nms_free:
