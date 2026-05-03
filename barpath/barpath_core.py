@@ -30,7 +30,32 @@ import pandas as pd
 print("barpath_core: Starting imports...", flush=True)
 
 
-from barpath.backend_resolver import _is_openvino_model_dir, validate_openvino_model_dir
+def _is_openvino_model_dir(path_str: str | Path) -> bool:
+    """Return True when the provided path looks like an OpenVINO export directory."""
+    path = Path(path_str)
+    if not path.is_dir():
+        return False
+    return any("openvino" in part.lower() for part in path.parts)
+
+
+pipeline_dir = Path(__file__).parent / "pipeline"
+barpath_dir = Path(__file__).parent
+for p in [str(pipeline_dir), str(barpath_dir)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+print(f"barpath_core: Added {pipeline_dir} and {barpath_dir} to sys.path", flush=True)
+
+if TYPE_CHECKING:
+    from barpath.pipeline.step2_helpers.kinematics import InsufficientDataError
+else:
+    try:
+        from barpath.pipeline.step2_helpers.kinematics import InsufficientDataError
+    except ImportError:
+
+        class InsufficientDataError(Exception):
+            """Fallback error when step2 helpers cannot be imported."""
+
+            pass
 
 
 def _import_step_function(step_file: Path, function_name: str) -> Any:
@@ -114,7 +139,6 @@ def run_pipeline_from_folder(
     analysis_csv_path: str = "final_analysis.csv",
     cancel_event: threading.Event | None = None,
     lifter: str = "generic",
-    backend: str = "auto",
 ) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Re-run steps 2-5 of the barpath pipeline from an existing output folder.
@@ -332,7 +356,6 @@ def run_pipeline(
     analysis_csv_path: str = "final_analysis.csv",
     cancel_event: threading.Event | None = None,
     lifter: str = "generic",
-    backend: str = "auto",
 ) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Run the complete barpath analysis pipeline.
@@ -346,11 +369,17 @@ def run_pipeline(
     if not os.path.exists(input_video):
         raise FileNotFoundError(f"Input video not found: {input_video}")
 
-    is_ov_dir = _is_openvino_model_dir(model_path)
-    if is_ov_dir:
-        is_valid, err_msg = validate_openvino_model_dir(model_path)
-        if not is_valid:
-            raise FileNotFoundError(err_msg)
+    if _is_openvino_model_dir(model_path):
+        xml_files = list(Path(model_path).glob("*.xml"))
+        bin_files = list(Path(model_path).glob("*.bin"))
+        if not xml_files:
+            raise FileNotFoundError(
+                f"OpenVINO directory '{model_path}' does not contain a .xml model file"
+            )
+        if not bin_files:
+            raise FileNotFoundError(
+                f"OpenVINO directory '{model_path}' does not contain a .bin weights file. OpenVINO models require both .xml (model definition) and .bin (weights) files."
+            )
     elif not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
@@ -378,7 +407,6 @@ def run_pipeline(
         model_path,
         raw_data_path,
         lift_type,
-        backend=backend,
     ):
         check_cancel()
         yield update
@@ -482,7 +510,6 @@ def run_pipeline_simple(
     encode_video: bool = True,
     technique_analysis: bool = True,
     lifter: str = "generic",
-    backend: str = "auto",
 ) -> dict[str, Any]:
     """
     Simple wrapper that runs the pipeline and consumes all progress updates.
@@ -507,7 +534,6 @@ def run_pipeline_simple(
             encode_video=encode_video,
             technique_analysis=technique_analysis,
             lifter=lifter,
-            backend=backend,
         ):
             results[step_name] = message
             print(f"[{step_name}] {message}")
