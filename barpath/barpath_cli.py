@@ -30,7 +30,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Import the core pipeline runner
 from barpath.barpath_core import run_pipeline
-from barpath.backend_resolver import _is_openvino_model_dir, validate_openvino_model_dir
+
+
+def _is_openvino_model_dir(path_str: str) -> bool:
+    """Return True when the provided path looks like an OpenVINO export directory."""
+    path = Path(path_str)
+    if not path.is_dir():
+        return False
+    return any("openvino" in part.lower() for part in path.parts)
 
 
 def print_rich_help(console, parser):
@@ -156,13 +163,6 @@ def main():
         help="Path to the trained YOLO model (e.g., 'models/yolo26n.pt', 'models/best.onnx', 'models/best.engine', or an OpenVINO export directory). YOLO26 NMS-free models are fully supported.",
     )
     _ = parser.add_argument(
-        "--backend",
-        type=str,
-        choices=["pytorch", "openvino", "auto"],
-        default="auto",
-        help="Backend for model inference: 'auto' (detect Intel GPU → OpenVINO, else PyTorch), 'openvino' (force OpenVINO), 'pytorch' (force PyTorch/CUDA). Default: auto",
-    )
-    _ = parser.add_argument(
         "--output_video",
         required=False,
         default="outputs/output.mp4",
@@ -267,9 +267,17 @@ def main():
         sys.exit(1)
 
     if is_openvino_dir:
-        is_valid, err_msg = validate_openvino_model_dir(model_path)
-        if not is_valid:
-            print(f"Error: {err_msg}", file=sys.stderr)
+        if not any(model_path.glob("*.xml")):
+            print(
+                f"Error: OpenVINO directory '{args.model}' does not contain a .xml model definition.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not any(model_path.glob("*.bin")):
+            print(
+                f"Error: OpenVINO directory '{args.model}' does not contain a .bin weights file.",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     # Set default output video path if not provided
@@ -303,7 +311,6 @@ def main():
     else:
         console.print("  Output Video: [yellow][SKIPPED - using --no-video][/yellow]")
     console.print(f"  Lift Type:    [cyan]{args.lift_type}[/cyan]")
-    console.print(f"  Backend:      [cyan]{args.backend}[/cyan]")
     console.print(f"  Lifter:       [cyan]{args.lifter}[/cyan]")
     console.print(f"  Output Dir:   [cyan]{args.output_dir}[/cyan]")
     console.print()
@@ -439,7 +446,6 @@ def main():
                         encode_video=not args.no_video,
                         technique_analysis=(args.lift_type != "none"),
                         lifter=args.lifter,
-                        backend=args.backend,
                     ):
                         # Check for insufficient data signal
                         if step_name == "_insufficient_data_":
