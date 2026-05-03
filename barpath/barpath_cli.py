@@ -30,14 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Import the core pipeline runner
 from barpath.barpath_core import run_pipeline
-
-
-def _is_openvino_model_dir(path_str: str) -> bool:
-    """Return True when the provided path looks like an OpenVINO export directory."""
-    path = Path(path_str)
-    if not path.is_dir():
-        return False
-    return any("openvino" in part.lower() for part in path.parts)
+from barpath.backend_resolver import _is_openvino_model_dir, validate_openvino_model_dir
 
 
 def print_rich_help(console, parser):
@@ -267,17 +260,9 @@ def main():
         sys.exit(1)
 
     if is_openvino_dir:
-        if not any(model_path.glob("*.xml")):
-            print(
-                f"Error: OpenVINO directory '{args.model}' does not contain a .xml model definition.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if not any(model_path.glob("*.bin")):
-            print(
-                f"Error: OpenVINO directory '{args.model}' does not contain a .bin weights file.",
-                file=sys.stderr,
-            )
+        is_valid, err_msg = validate_openvino_model_dir(model_path)
+        if not is_valid:
+            print(f"Error: {err_msg}", file=sys.stderr)
             sys.exit(1)
 
     # Set default output video path if not provided
