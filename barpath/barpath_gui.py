@@ -94,8 +94,6 @@ class BarpathTogaApp(toga.App):
         self.use_filenames_in_legend: bool = False
 
         self.lifter: str = "generic"
-        self.fast_analysis_enabled: bool = True
-        self.smart_analysis_enabled: bool = True
 
         # Skip/rerun decisions for batch processing
         self._skip_all_existing: bool = False
@@ -442,33 +440,25 @@ class BarpathTogaApp(toga.App):
         content.add(self.lifter_dropdown)
 
         self.lifter_hint_label = toga.Label(
-            "Lifter determines which pro baseline to compare against for Fast Analysis. "
-            "Models are loaded from models/analysis/{lifter}/{lift_type}/",
+            "Lifter determines which pro baseline to compare against for Technique Analysis. "
+            "Falls back to pooled report if lifter-specific baselines are not found.",
             style=Pack(font_size=9, color="#5B6472", margin_bottom=10),
         )
         content.add(self.lifter_hint_label)
 
         analysis_row = toga.Box(style=Pack(direction="column", margin_bottom=6))
-        self.fast_analysis_switch = toga.Switch(
-            "Fast Analysis (DTW similarity)",
+        self.technique_analysis_switch = toga.Switch(
+            "Technique Analysis",
             value=True,
-            on_change=self._on_fast_analysis_change,
+            on_change=self._on_technique_analysis_change,
             style=Pack(margin_bottom=4),
         )
-        self.smart_analysis_switch = toga.Switch(
-            "Smart Analysis (RF fault detection)",
-            value=True,
-            on_change=self._on_smart_analysis_change,
-            style=Pack(margin_bottom=4),
-        )
-        analysis_row.add(self.fast_analysis_switch)
-        analysis_row.add(self.smart_analysis_switch)
+        analysis_row.add(self.technique_analysis_switch)
         content.add(analysis_row)
 
         content.add(
             toga.Label(
-                "Fast Analysis compares bar path shape to pro baselines using DTW. "
-                "Smart Analysis detects specific faults using a trained Random Forest model.",
+                "Technique Analysis detects faults using biomechanical rules and pro baselines.",
                 style=Pack(font_size=9, color="#5B6472", margin_top=4, margin_bottom=6),
             )
         )
@@ -791,10 +781,7 @@ class BarpathTogaApp(toga.App):
         self._log(f"  Lift Type:    [cyan]{self.lift_type}[/cyan]")
         self._log(f"  Lifter:       [cyan]{self.lifter}[/cyan]")
         self._log(
-            f"  Fast Analysis: [cyan]{'enabled' if self.fast_analysis_enabled else 'disabled'}[/cyan]"
-        )
-        self._log(
-            f"  Smart Analysis: [cyan]{'enabled' if self.smart_analysis_enabled else 'disabled'}[/cyan]"
+            f"  Technique Analysis: [cyan]{'enabled' if self.technique_analysis else 'disabled'}[/cyan]"
         )
         self._log(f"  Output Dir:   [cyan]{self._effective_output_dir()}[/cyan]")
         self._log("")
@@ -881,17 +868,18 @@ class BarpathTogaApp(toga.App):
                     pass
 
         # --- Lift buttons ---
-        for lift in ("none", "clean", "snatch", "jerk"):
+        for lift in ("auto", "none", "clean", "snatch", "jerk", "clean_jerk"):
             if lift not in self._lift_buttons:  # type: ignore[attr-defined]
+                label = "Clean & Jerk" if lift == "clean_jerk" else lift.capitalize()
                 btn = toga.Button(
-                    lift.capitalize(),
+                    label,
                     on_press=lambda w, lt=lift: self._set_lift_type(lt),
                     style=self._pill_style(selected=False),
                 )
                 self._lift_buttons[lift] = btn  # type: ignore[attr-defined]
                 self.lift_button_row.add(btn)
 
-        for lift in ("none", "clean", "snatch", "jerk"):
+        for lift in ("auto", "none", "clean", "snatch", "jerk", "clean_jerk"):
             btn = self._lift_buttons.get(lift)  # type: ignore[attr-defined]
             if btn is not None:
                 btn.style.update(
@@ -977,15 +965,10 @@ class BarpathTogaApp(toga.App):
             self.lifter = selected
             self._log(f"[green]✓[/green] Selected lifter: [cyan]{selected}[/cyan]")
 
-    def _on_fast_analysis_change(self, widget: Any) -> None:
-        self.fast_analysis_enabled = bool(widget.value)
-        status = "enabled" if self.fast_analysis_enabled else "disabled"
-        self._log(f"[green]✓[/green] Fast Analysis {status}")
-
-    def _on_smart_analysis_change(self, widget: Any) -> None:
-        self.smart_analysis_enabled = bool(widget.value)
-        status = "enabled" if self.smart_analysis_enabled else "disabled"
-        self._log(f"[green]✓[/green] Smart Analysis {status}")
+    def _on_technique_analysis_change(self, widget: Any) -> None:
+        self.technique_analysis = bool(widget.value)
+        status = "enabled" if self.technique_analysis else "disabled"
+        self._log(f"[green]✓[/green] Technique Analysis {status}")
 
     def _resolve_selected_model(self) -> Path | None:
         if self.selected_model is None:
@@ -1497,11 +1480,11 @@ class BarpathTogaApp(toga.App):
                         lift_type=lift_type,
                         output_dir=str(video_output_dir),
                         encode_video=encode_video,
-                        technique_analysis=(lift_type != "none"),
+                        technique_analysis=(
+                            lift_type != "none" and self.technique_analysis
+                        ),
                         cancel_event=self._cancel_event,
                         lifter=self.lifter,
-                        fast_analysis=self.fast_analysis_enabled,
-                        smart_analysis=self.smart_analysis_enabled,
                     ):
                         # Check for insufficient data signal
                         if step_name == "_insufficient_data_":
@@ -1890,6 +1873,9 @@ class BarpathTogaApp(toga.App):
         Background thread that captures webcam frames, runs YOLO + MediaPipe,
         and displays the annotated feed in an OpenCV window.
 
+        Includes live lift recognition: bar path tracing, lift type detection,
+        and classification overlay.
+
         Press 'q' in the preview window to stop.
         """
         import cv2
@@ -1900,6 +1886,7 @@ class BarpathTogaApp(toga.App):
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision as mp_vision
         from pipeline.step1_helpers.landmarks import get_pose_landmarker_model_path
+        from barpath.pipeline.realtime_processing.live_lift_recognition import LiveLiftRecognizer
 
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
@@ -1920,6 +1907,20 @@ class BarpathTogaApp(toga.App):
         pose_landmarker = mp_vision.PoseLandmarker.create_from_options(options)
         yolo_model = YOLO(model_path, task="detect")
 
+        # Initialize live lift recognizer with the lift detection model
+        lift_model_path = str(
+            Path(__file__).parent
+            / "models"
+            / "lift_detection"
+            / "lift_detection_model.pkl"
+        )
+        recognizer = LiveLiftRecognizer(
+            model_path=lift_model_path,
+            fps=30.0,
+            buffer_seconds=1.0,
+            display_seconds=3.0,
+        )
+
         cv2.namedWindow("Barpath Preview", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Barpath Preview", 960, 540)
 
@@ -1939,12 +1940,20 @@ class BarpathTogaApp(toga.App):
             pose_results = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
             yolo_results = yolo_model(frame, verbose=False, conf=0.25)
 
+            # Extract barbell data for recognizer
+            barbell_center = None
+            barbell_box = None
             if yolo_results and len(yolo_results) > 0:
                 for result in yolo_results:
                     boxes = result.boxes
                     if boxes is not None:
                         for box in boxes:
                             x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                            barbell_box = (x1, y1, x2, y2)
+                            barbell_center = (
+                                (x1 + x2) / 2.0,
+                                (y1 + y2) / 2.0,
+                            )
                             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                             cv2.putText(
                                 frame,
@@ -1955,11 +1964,15 @@ class BarpathTogaApp(toga.App):
                                 (0, 255, 0),
                                 2,
                             )
+                            break  # Use first detection only
 
+            # Extract landmark data for recognizer
+            landmarks_dict = {}
             if pose_results and pose_results.pose_landmarks:
                 landmarks = pose_results.pose_landmarks[0]
                 landmark_pixels = {}
                 for idx, lm in enumerate(landmarks):
+                    landmarks_dict[idx] = (lm.x, lm.y, lm.z, lm.visibility)
                     px = int(lm.x * w)
                     py = int(lm.y * h)
                     vis = lm.visibility
@@ -1989,6 +2002,20 @@ class BarpathTogaApp(toga.App):
                 for idx, (px, py) in landmark_pixels.items():
                     cv2.circle(frame, (px, py), 4, (255, 0, 0), -1)
 
+            # Feed frame data to live lift recognizer
+            recognizer.update(
+                barbell_center=barbell_center,
+                barbell_box=barbell_box,
+                landmarks=landmarks_dict,
+                timestamp_ms=float(timestamp_ms),
+                frame_width=w,
+                frame_height=h,
+            )
+
+            # Draw lift recognition overlay (bar path + label)
+            recognizer.draw_overlay(frame)
+
+            # Draw FPS counter
             current_time = time.time()
             frame_times.append(current_time)
             if len(frame_times) > 30:
@@ -2003,6 +2030,20 @@ class BarpathTogaApp(toga.App):
                     1.0,
                     (0, 255, 255),
                     2,
+                )
+
+            # Draw recognizer status
+            status = recognizer.status_text
+            if status:
+                cv2.putText(
+                    frame,
+                    status,
+                    (15, h - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (200, 200, 200),
+                    1,
+                    cv2.LINE_AA,
                 )
 
             cv2.imshow("Barpath Preview", frame)
