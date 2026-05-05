@@ -41,14 +41,21 @@ def draw_legend(image, colors):
         cv2.rectangle(
             image, (15, 10 + i * y_offset), (35, 30 + i * y_offset), color, -1
         )
+        x, y = 45, 25 + i * y_offset
+        for dx, dy in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+            cv2.putText(
+                image, name, (x + dx, y + dy), cv2.FONT_HERSHEY_SIMPLEX,
+                0.6, (0, 0, 0), 2, cv2.LINE_AA,
+            )
         cv2.putText(
             image,
             name,
-            (45, 25 + i * y_offset),
+            (x, y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
             (255, 255, 255),
             2,
+            cv2.LINE_AA,
         )
     return 15 + len(colors) * y_offset
 

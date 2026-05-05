@@ -3,7 +3,7 @@
 This module renders the visualization video with:
 - Colored bar path (phase-based)
 - Skeleton overlay
-- Legend and HUD elements
+- Legend and HUD elements (sparkline, power band, error markers)
 """
 
 import argparse
@@ -18,84 +18,19 @@ import pandas as pd
 from config import (
     BARBELL_BOX_THICKNESS,
     GC_INTERVAL_FRAMES,
-    LANDMARK_RADIUS,
-    PHASE_COLORS_BGR,
-    SKELETON_LINE_THICKNESS,
+)
+from step5_helpers import HUDConfig
+from step5_helpers.hud_renderer import (
+    LEGEND_COLORS,
+    PHASE_COLOR_SCHEMES,
+    PHASE_NAMES,
+    draw_hud_overlay,
 )
 from utils import (
     COLOR_SCHEME,
     draw_legend,
-    get_connection_color,
     parse_barbell_box,
-    parse_landmarks_from_string,
 )
-
-# Phase color schemes for different lift types
-PHASE_COLOR_SCHEMES = {
-    "snatch": {
-        0: (0, 0, 255),  # Red - Pull
-        1: (0, 165, 255),  # Orange - Pull-under
-        2: (0, 255, 0),  # Green - Recovery
-    },
-    "clean": {
-        0: (0, 0, 255),  # Red - Pull
-        1: (0, 165, 255),  # Orange - Pull-under
-        2: (0, 255, 0),  # Green - Recovery
-    },
-    "jerk": {
-        0: (255, 0, 0),  # Blue - Dip
-        1: (255, 255, 0),  # Yellow - Drive
-        2: (0, 255, 0),  # Green - Recovery
-    },
-    "clean_jerk": {
-        0: (0, 0, 255),  # Red - Clean Pull
-        1: (0, 165, 255),  # Orange - Clean Pull-under
-        2: (0, 255, 0),  # Green - Clean Recovery
-        3: (255, 0, 0),  # Blue - Jerk Dip
-        4: (255, 255, 0),  # Yellow - Jerk Drive
-        5: (0, 255, 255),  # Cyan - Jerk Recovery
-    },
-}
-
-# Phase names for legend
-PHASE_NAMES = {
-    "snatch": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
-    "clean": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
-    "jerk": {0: "Dip", 1: "Drive", 2: "Recovery"},
-    "clean_jerk": {
-        0: "Pull",
-        1: "Pull-under",
-        2: "Recovery",
-        3: "Dip",
-        4: "Drive",
-        5: "Recovery",
-    },
-}
-
-
-LEGEND_COLORS = {
-    "Barbell Box": COLOR_SCHEME["Barbell Box"],
-    "Pull": PHASE_COLORS_BGR[0],
-    "Pull-under": PHASE_COLORS_BGR[1],
-    "Recovery": PHASE_COLORS_BGR[2],
-    "Dip": (255, 0, 0),
-    "Drive": (255, 255, 0),
-}
-
-SKELETON_CONNECTIONS = [
-    ("left_shoulder", "right_shoulder"),
-    ("left_shoulder", "left_hip"),
-    ("right_shoulder", "right_hip"),
-    ("left_hip", "right_hip"),
-    ("left_shoulder", "left_elbow"),
-    ("left_elbow", "left_wrist"),
-    ("right_shoulder", "right_elbow"),
-    ("right_elbow", "right_wrist"),
-    ("left_hip", "left_knee"),
-    ("left_knee", "left_ankle"),
-    ("right_hip", "right_knee"),
-    ("right_knee", "right_ankle"),
-]
 
 
 def step_5_render_video(
@@ -104,6 +39,8 @@ def step_5_render_video(
     output_video_path: str,
     draw_pose: bool = True,
     lift_type: str = "snatch",
+    analysis_result=None,
+    hud_config=None,
 ):
     """
     Render the final visualization video.
@@ -130,6 +67,10 @@ def step_5_render_video(
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
 
     pose_enabled = draw_pose
+
+    # Create default HUDConfig if not provided
+    if hud_config is None:
+        hud_config = HUDConfig()
 
     position_sources = [
         ("barbell_x_smooth", "barbell_y_smooth", "smoothed"),
@@ -207,7 +148,6 @@ def step_5_render_video(
                 np.searchsorted(path_indices, frame_count, side="right")
             )
 
-            draw_skeleton = pose_enabled
             draw_box = True
 
             landmarks_str = (
@@ -221,7 +161,6 @@ def step_5_render_video(
 
             max_path_index = len(path_points)
 
-            draw_skeleton = False
             draw_box = False
 
             landmarks_str = "{}"
@@ -229,23 +168,20 @@ def step_5_render_video(
 
         if max_path_index >= 2:
             points_to_draw = path_points[:max_path_index].copy()
-            phases_to_draw = path_phases[:max_path_index]
 
             points_to_draw[:, 0] += current_shake_x  # type: ignore
             points_to_draw[:, 1] += current_shake_y  # type: ignore
-            points_to_draw = points_to_draw.astype(np.int32)
 
-            for i in range(len(points_to_draw) - 1):
-                p1 = (points_to_draw[i, 0], points_to_draw[i, 1])
-                p2 = (points_to_draw[i + 1, 0], points_to_draw[i + 1, 1])
-
-                phase_index = int(phases_to_draw[i])
-                phase_scheme = PHASE_COLOR_SCHEMES.get(
-                    lift_type, PHASE_COLOR_SCHEMES["snatch"]
-                )
-                color = phase_scheme.get(phase_index, (255, 255, 255))
-
-                cv2.line(frame, p1, p2, color, 3)
+            # Use HUD overlay orchestrator (bar path + skeleton + sparkline + power band + error markers)
+            frame, last_head_pos = draw_hud_overlay(
+                frame, df,
+                frame_width, frame_height, lift_type, hud_config,
+                path_points, path_phases, max_path_index,
+                current_shake_x, current_shake_y,
+                landmarks_str, LEGEND_COLORS,
+                analysis_result=analysis_result,
+                current_frame=frame_count,
+            )
 
         if draw_box:
             barbell_box = parse_barbell_box(barbell_box_str)
@@ -258,39 +194,6 @@ def step_5_render_video(
                     LEGEND_COLORS["Barbell Box"],
                     BARBELL_BOX_THICKNESS,
                 )
-
-        if draw_skeleton:
-            landmarks = parse_landmarks_from_string(landmarks_str)
-
-            if landmarks:
-                landmark_pixels = {}
-                for name, (x, y, z, vis) in landmarks.items():
-                    if vis > 0.1:
-                        px = int(x * frame_width)
-                        py = int(y * frame_height)
-                        landmark_pixels[name] = (px, py)
-
-                for lm1_name, lm2_name in SKELETON_CONNECTIONS:
-                    if lm1_name in landmark_pixels and lm2_name in landmark_pixels:
-                        p1 = landmark_pixels[lm1_name]
-                        p2 = landmark_pixels[lm2_name]
-                        color = get_connection_color(lm1_name, lm2_name, LEGEND_COLORS)
-                        cv2.line(frame, p1, p2, color, SKELETON_LINE_THICKNESS)
-
-                for name, (px, py) in landmark_pixels.items():
-                    cv2.circle(frame, (px, py), LANDMARK_RADIUS, (255, 255, 255), -1)
-
-                for key in ["left_eye", "right_eye", "nose"]:
-                    if key in landmark_pixels:
-                        last_head_pos = landmark_pixels[key]
-                        break
-                if last_head_pos is None:
-                    for key in ["left_shoulder", "right_shoulder"]:
-                        if key in landmark_pixels:
-                            last_head_pos = landmark_pixels[key]
-                            break
-                if last_head_pos is None and len(landmark_pixels) > 0:
-                    last_head_pos = list(landmark_pixels.values())[0]
 
         # Build dynamic legend based on lift type
         phase_names = PHASE_NAMES.get(lift_type, PHASE_NAMES["snatch"])

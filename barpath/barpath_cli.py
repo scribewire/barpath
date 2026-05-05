@@ -210,6 +210,28 @@ def main():
         help="Automatically skip videos that have already been processed (skip confirmation).",
     )
 
+    # HUD Element Toggles
+    _ = parser.add_argument(
+        "--no-skeleton",
+        action="store_true",
+        help="Hide skeleton overlay on rendered video",
+    )
+    _ = parser.add_argument(
+        "--no-sparkline",
+        action="store_true",
+        help="Hide velocity sparkline HUD element",
+    )
+    _ = parser.add_argument(
+        "--no-power-zones",
+        action="store_true",
+        help="Hide power zone band HUD element",
+    )
+    _ = parser.add_argument(
+        "--no-error-markers",
+        action="store_true",
+        help="Hide fault error markers on bar path",
+    )
+
     # Check for help flag manually
     if "-h" in sys.argv or "--help" in sys.argv:
         print_rich_help(console, parser)
@@ -437,6 +459,13 @@ def main():
 
                 # Run the pipeline and consume progress updates
                 try:
+                    hud_options = {
+                        'show_skeleton': not args.no_skeleton,
+                        'show_sparkline': not args.no_sparkline,
+                        'show_power_zones': not args.no_power_zones,
+                        'show_error_markers': not args.no_error_markers,
+                    }
+
                     for step_name, prog_value, message in run_pipeline(
                         input_video=str(input_video),
                         model_path=args.model,
@@ -446,6 +475,7 @@ def main():
                         encode_video=not args.no_video,
                         technique_analysis=(args.lift_type != "none"),
                         lifter=args.lifter,
+                        hud_options=hud_options,
                     ):
                         # Check for insufficient data signal
                         if step_name == "_insufficient_data_":

@@ -1,0 +1,14 @@
+{
+  "workflow": {
+    "mode": "interactive",
+    "commit_frequency": "per_phase",
+    "run_lint": true,
+    "run_tests": true,
+    "run_typecheck": false
+  },
+  "project": {
+    "name": "barpath",
+    "type": "brownfield",
+    "phases": 4
+  }
+}

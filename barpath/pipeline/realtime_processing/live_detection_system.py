@@ -12,6 +12,7 @@ from barpath.pipeline.lift_classifier import LiveLiftClassifier, find_model_path
 
 from .live_buffer import CircularFrameBuffer, FrameData
 from .live_feature_extractor import LiveFeatureExtractor
+from .coaching_tip import compute_coaching_tip
 
 
 class DetectionState(Enum):
@@ -74,6 +75,10 @@ class LiftDetectionSystem:
         self.pending_clean_result: Optional[Dict] = None
         self.display_start_time: float = 0.0
         self.jerk_watch_start_time: float = 0.0
+
+        # Coaching tip
+        self.coaching_tip: Optional[str] = None
+        self.tip_display_start: float = 0.0
 
         # Callbacks (set by GUI)
         self.on_detection: Optional[Callable] = None
@@ -267,9 +272,25 @@ class LiftDetectionSystem:
         self.state = DetectionState.DISPLAYING
         self.display_start_time = time.time()
 
+        # Compute coaching tip on display entry
+        detected_class = self.current_result.get("class", "none") if self.current_result else "none"
+        buffer_frames = self.buffer.get_recent_frames(self.buffer.num_frames)
+        self.coaching_tip = compute_coaching_tip(buffer_frames, detected_class)
+        self.tip_display_start = time.time()
+
         result = self.current_result.copy() if self.current_result else {}
         result["state"] = "complete"
         return result
+
+    @property
+    def current_tip(self) -> Optional[str]:
+        """Return coaching tip if within display duration, else None."""
+        from barpath.pipeline.config import COACHING_TIP_DURATION_S
+        if self.coaching_tip and self.state == DetectionState.DISPLAYING:
+            elapsed = time.time() - self.tip_display_start
+            if elapsed < COACHING_TIP_DURATION_S:
+                return self.coaching_tip
+        return None
 
     def _force_complete(self) -> Dict:
         """Force completion after max duration."""

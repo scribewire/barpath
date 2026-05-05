@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from barpath.pipeline.step5_helpers import HUDConfig
+
 print("barpath_core: Starting imports...", flush=True)
 
 
@@ -139,6 +141,7 @@ def run_pipeline_from_folder(
     analysis_csv_path: str = "final_analysis.csv",
     cancel_event: threading.Event | None = None,
     lifter: str = "generic",
+    hud_options: dict | None = None,
 ) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Re-run steps 2-5 of the barpath pipeline from an existing output folder.
@@ -259,6 +262,8 @@ def run_pipeline_from_folder(
                 str(output_video_path),
                 draw_pose=pose_overlay_enabled,
                 lift_type=lift_type,
+                analysis_result=analysis_result,
+                hud_config=HUDConfig(**(hud_options or {})),
             ):
                 check_cancel()
                 yield update
@@ -356,6 +361,7 @@ def run_pipeline(
     analysis_csv_path: str = "final_analysis.csv",
     cancel_event: threading.Event | None = None,
     lifter: str = "generic",
+    hud_options: dict | None = None,
 ) -> Generator[tuple[str, float | None, str], None, None]:
     """
     Run the complete barpath analysis pipeline.
@@ -492,6 +498,8 @@ def run_pipeline(
             output_video,
             draw_pose=pose_overlay_enabled,
             lift_type=lift_type,
+            analysis_result=analysis_result,
+            hud_config=HUDConfig(**(hud_options or {})),
         ):
             check_cancel()
             yield update
