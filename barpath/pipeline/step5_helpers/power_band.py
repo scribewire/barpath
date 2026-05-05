@@ -5,7 +5,6 @@ showing specific power over time.
 """
 
 import cv2
-import numpy as np
 
 from barpath.pipeline.config import (
     POWER_BAND_GAP,
@@ -50,6 +49,7 @@ def draw_power_zone_band(frame, df, frame_width, frame_height,
         sl_x, sl_y, sl_w, sl_h = sparkline_box
         band_x = sl_x
         band_w = sl_w
+        band_y_base = sl_y + sl_h
     else:
         band_x = frame_width - SPARKLINE_MARGIN_X - sparkline_w
         band_y_base = SPARKLINE_MARGIN_Y + max(50, int(frame_height * SPARKLINE_HEIGHT_RATIO))
@@ -60,10 +60,7 @@ def draw_power_zone_band(frame, df, frame_width, frame_height,
     label_text_size = cv2.getTextSize("Power", cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
     label_h = label_text_size[1] + label_gap * 2
 
-    if sparkline_box is not None:
-        band_y = sl_y + sl_h + label_h + POWER_BAND_GAP
-    else:
-        band_y = band_y_base + label_h + POWER_BAND_GAP
+    band_y = band_y_base + label_h + POWER_BAND_GAP
 
     label_y = band_y - POWER_BAND_GAP - label_gap
 

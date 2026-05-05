@@ -168,7 +168,6 @@ def step_5_render_video(
 
         if max_path_index >= 2:
             points_to_draw = path_points[:max_path_index].copy()
-            phases_to_draw = path_phases[:max_path_index]
 
             points_to_draw[:, 0] += current_shake_x  # type: ignore
             points_to_draw[:, 1] += current_shake_y  # type: ignore

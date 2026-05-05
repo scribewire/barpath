@@ -16,7 +16,6 @@ from barpath.pipeline.config import (
 )
 from barpath.pipeline.utils import (
     COLOR_SCHEME,
-    draw_legend,
     get_connection_color,
     parse_landmarks_from_string,
 )
