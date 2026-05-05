@@ -3,7 +3,7 @@
 This module renders the visualization video with:
 - Colored bar path (phase-based)
 - Skeleton overlay
-- Legend and HUD elements
+- Legend and HUD elements (sparkline, power band, error markers)
 """
 
 import argparse
@@ -24,8 +24,7 @@ from step5_helpers.hud_renderer import (
     LEGEND_COLORS,
     PHASE_COLOR_SCHEMES,
     PHASE_NAMES,
-    draw_bar_path_trail,
-    draw_skeleton_overlay,
+    draw_hud_overlay,
 )
 from utils import (
     COLOR_SCHEME,
@@ -149,7 +148,6 @@ def step_5_render_video(
                 np.searchsorted(path_indices, frame_count, side="right")
             )
 
-            draw_skeleton = pose_enabled
             draw_box = True
 
             landmarks_str = (
@@ -163,7 +161,6 @@ def step_5_render_video(
 
             max_path_index = len(path_points)
 
-            draw_skeleton = False
             draw_box = False
 
             landmarks_str = "{}"
@@ -176,9 +173,16 @@ def step_5_render_video(
             points_to_draw[:, 0] += current_shake_x  # type: ignore
             points_to_draw[:, 1] += current_shake_y  # type: ignore
 
-            # Use extracted bar path drawing function
-            draw_bar_path_trail(frame, path_points, path_phases, max_path_index,
-                                current_shake_x, current_shake_y, lift_type)
+            # Use HUD overlay orchestrator (bar path + skeleton + sparkline + power band + error markers)
+            frame, last_head_pos = draw_hud_overlay(
+                frame, df,
+                frame_width, frame_height, lift_type, hud_config,
+                path_points, path_phases, max_path_index,
+                current_shake_x, current_shake_y,
+                landmarks_str, LEGEND_COLORS,
+                analysis_result=analysis_result,
+                current_frame=frame_count,
+            )
 
         if draw_box:
             barbell_box = parse_barbell_box(barbell_box_str)
@@ -191,11 +195,6 @@ def step_5_render_video(
                     LEGEND_COLORS["Barbell Box"],
                     BARBELL_BOX_THICKNESS,
                 )
-
-        # Use extracted skeleton drawing function
-        if draw_skeleton:
-            last_head_pos = draw_skeleton_overlay(frame, landmarks_str, frame_width,
-                                                   frame_height, LEGEND_COLORS)
 
         # Build dynamic legend based on lift type
         phase_names = PHASE_NAMES.get(lift_type, PHASE_NAMES["snatch"])

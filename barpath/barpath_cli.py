@@ -227,11 +227,6 @@ def main():
         help="Hide power zone band HUD element",
     )
     _ = parser.add_argument(
-        "--no-angles",
-        action="store_true",
-        help="Hide knee angle display HUD element",
-    )
-    _ = parser.add_argument(
         "--no-error-markers",
         action="store_true",
         help="Hide fault error markers on bar path",
@@ -468,7 +463,6 @@ def main():
                         'show_skeleton': not args.no_skeleton,
                         'show_sparkline': not args.no_sparkline,
                         'show_power_zones': not args.no_power_zones,
-                        'show_angles': not args.no_angles,
                         'show_error_markers': not args.no_error_markers,
                     }
 

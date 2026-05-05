@@ -184,6 +184,7 @@ class LiveLiftRecognizer:
 
         # Analysis result
         self._top_fault: Optional[Dict[str, Any]] = None
+        self._tip_display_start: float = 0.0
 
         # Model (legacy fallback)
         self._model_data: Optional[Dict[str, Any]] = None
@@ -911,6 +912,7 @@ class LiveLiftRecognizer:
                 self._display_stack.append("JERK")
             self._expecting_jerk = False
             self._display_start_time = time.time()
+            self._tip_display_start = time.time()
             self.state = LiftState.DISPLAYING
             return
 
@@ -923,6 +925,7 @@ class LiveLiftRecognizer:
             self._predicted_class = "Unknown"
             self._predicted_confidence = 0.0
             self._display_start_time = time.time()
+            self._tip_display_start = time.time()
             self.state = LiftState.DISPLAYING
             return
 
@@ -993,6 +996,7 @@ class LiveLiftRecognizer:
             return
 
         self._display_start_time = time.time()
+        self._tip_display_start = time.time()
         self.state = LiftState.DISPLAYING
 
     def _classify_with_legacy_model(self, frame_width: int, frame_height: int) -> None:
@@ -1054,6 +1058,7 @@ class LiveLiftRecognizer:
         self._run_technique_analysis(df)
 
         self._display_start_time = time.time()
+        self._tip_display_start = time.time()
         self.state = LiftState.DISPLAYING
 
     def _run_technique_analysis(self, df: pd.DataFrame) -> None:
@@ -1108,6 +1113,18 @@ class LiveLiftRecognizer:
         elapsed = time.time() - self._display_start_time
         if elapsed >= self.display_seconds:
             self._reset()
+
+    @property
+    def current_tip(self) -> Optional[str]:
+        """Return coaching tip if within display duration, else None."""
+        from barpath.pipeline.config import COACHING_TIP_DURATION_S
+        if self.state == LiftState.DISPLAYING:
+            elapsed = time.time() - self._tip_display_start
+            if elapsed < COACHING_TIP_DURATION_S:
+                if self._top_fault and self._top_fault.get("confidence", 0) > 0.6:
+                    return self._top_fault.get("name", "Unknown Fault")
+                return "Lift looks good"
+        return None
 
     def _handle_shoulder_wait(self, frame_data: FrameData, frame_height: int) -> None:
         """SHOULDER_WAIT state: after clean, wait for jerk or new lift."""
