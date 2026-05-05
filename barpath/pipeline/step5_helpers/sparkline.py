@@ -6,7 +6,6 @@ indicating the current video frame position.
 """
 
 import cv2
-import numpy as np
 
 from barpath.pipeline.config import (
     SPARKLINE_AXIS_COLOR_BGR,

@@ -1,6 +1,6 @@
 """Live coaching tip computation — heuristic fault checks on buffered lift data."""
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from barpath.pipeline.config import COACHING_TIP_CONFIDENCE_THRESHOLD, COACHING_TIP_FALLBACK
 from .live_buffer import FrameData
@@ -45,7 +45,7 @@ def compute_coaching_tip(buffer_frames: List[FrameData], detected_class: str) ->
 
     # Find highest confidence fault
     if checks:
-        best_fault = max(checks, key=checks.get)
+        best_fault = max(checks, key=lambda k: checks[k])
         if checks[best_fault] > COACHING_TIP_CONFIDENCE_THRESHOLD:
             # Convert fault_id to display name
             name_map = {
