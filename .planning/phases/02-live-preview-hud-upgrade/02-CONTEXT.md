@@ -1,7 +1,7 @@
 # Phase 02: Live Preview HUD Upgrade - Context
 
 **Gathered:** 2026-05-05 (updated)
-**Status:** Ready for planning
+**Status:** Implementation in progress — wiring gap closure
 
 <domain>
 ## Phase Boundary
@@ -19,6 +19,10 @@ Upgrade the offline output video HUD (Step 5, `barpath/pipeline/5_render_video.p
 - **D-03:** Orchestrator (`barpath_core.py`) loads analysis data (CSV + Step 4 fault output) and passes it to `step_5_render_video()` as parameters. Step 5 stays a renderer, not a data loader. **Step 4 fault data passed as `analysis_result` function parameter.**
 - **D-04:** Render by mutating frames directly (OpenCV drawing functions) — same pattern as existing Step 5.
 
+### HUD Wiring (Offline Video)
+- **D-18:** `5_render_video.py` frame loop calls `draw_hud_overlay()` orchestrator (from `step5_helpers.hud_renderer`) instead of direct `draw_bar_path_trail()` + `draw_skeleton_overlay()` calls. The orchestrator handles all 5 HUD elements based on `hud_config` toggles.
+- **D-19:** Pro baselines loaded once at render start via `_load_baselines()` helper in `5_render_video.py`, passed to `draw_hud_overlay()` for knee angle color coding. Falls back gracefully if no baseline files exist.
+
 ### HUD Layout (All 6 Elements)
 - **D-05:** Overlay on video (consistent with existing Step 5 pattern). Full layout:
   - **Bar path trail:** Center (phase-colored: Pull=red, Pull-under=orange, Recovery=green)
@@ -27,20 +31,21 @@ Upgrade the offline output video HUD (Step 5, `barpath/pipeline/5_render_video.p
   - **Phase legend:** Bottom-left (existing Step 5 behavior)
   - **Velocity sparkline:** Top-right, polyline with phase-colored segments, full curve from frame 1 (pre-computed, not building up). Proportional sizing: 20% width, 15% height.
   - **Power zone band:** Below sparkline, same time axis, single-hue intensity (light=low→dark=high), normalized to lift max power (relative scale)
-  - **Joint angles:** Bottom-center row, knees only (left + right), color-coded vs phase-specific thresholds from pro baseline data (green=good, yellow=borderline, red=outside range)
+  - **Joint angles:** ~~Bottom-center row, knees only~~ — REMOVED per user request
   - **Error markers:** Small filled triangles on bar path at fault frames, color-coded by fault type, top 3 faults only (remaining listed as text in legend)
   - **Skeleton overlay:** Shown on both offline and live views
 - **D-06:** Proportional sizing (relative to frame size) — avoids breakage across different webcam/video resolutions.
 - **D-07:** Distinct color palette per HUD element (not reusing phase colors for everything). Phase colors reserved for bar path, sparkline, and legend. **All colors defined as constants in `config.py`.**
 
 ### Implementation Phasing
-- **D-08:** Implement in order: (1) bar path trail + phase labels (existing, may need refinement), (2) velocity sparkline, (3) power zone band, (4) joint angles display, (5) error markers. Each element independently testable.
-- **D-09:** CLI toggles for individual HUD elements: `--no-skeleton`, `--no-sparkline`, `--no-power-zones`, `--no-angles`, `--no-error-markers`. Existing `--no-video` still skips all rendering. **Flags passed through orchestrator to Step 5.** GUI Settings tab gets checkboxes for same toggles.
+- **D-08:** Implement in order: (1) bar path trail + phase labels (existing, may need refinement), (2) velocity sparkline, (3) power zone band, (4) error markers. Each element independently testable. ~~Joint angles display removed per user request.~~
+- **D-09:** CLI toggles for individual HUD elements: `--no-skeleton`, `--no-sparkline`, `--no-power-zones`, `--no-error-markers`. Existing `--no-video` still skips all rendering. **Flags passed through orchestrator to Step 5.** GUI Settings tab gets checkboxes for same toggles.
 
 ### Live Preview Coaching Tip
 - **D-10:** Show tip only after lift completes (DISPLAYING state). Buffer lift data during detection, compute joint angles and kinematics from buffer on completion, run heuristic fault checks. Show tip instantly, persist 5 seconds, disappear. **Extend CircularFrameBuffer to store barbell position + joint landmarks.**
 - **D-11:** Tip text: most probable fault name (e.g., "Early arm bend") if confidence > 0.6, otherwise "Lift looks good". Single line, top-right overlay.
 - **D-12:** Tip shows instantly (no fade animation). Uses simplified compiled rules — same fault categories as Step 4's compiled analyzer, but computed from buffered lift data in real-time.
+- **D-20:** Live preview uses `LiveLiftRecognizer` (NOT `LiftDetectionSystem`). `LiveLiftRecognizer` has its own `FrameData` class, state machine, and buffer — incompatible with `LiftDetectionSystem`'s `CircularFrameBuffer` + `FrameData` interface. Coaching tip added as `current_tip` property on `LiveLiftRecognizer`, using existing `_top_fault` from `CompiledAnalyzer`.
 
 ### Fault Markers (Offline Video)
 - **D-13:** Fault data from Step 4's `compiled_analyzer` and `smart_analysis` output. Top 3 faults shown as colored triangles on bar path; remaining faults listed as text in legend area.
@@ -50,6 +55,10 @@ Upgrade the offline output video HUD (Step 5, `barpath/pipeline/5_render_video.p
 - **D-15:** Sparkline rendering: Pre-allocate numpy buffer for full curve, draw with `cv2.polylines` once. Faster for offline rendering.
 - **D-16:** Power zone band: Per-column pixel rectangles (`cv2.rectangle` 1px wide) with intensity-based color from UI-SPEC.md formula.
 - **D-17:** Live fault checks: Simplified versions of compiled_analyzer rules (elbow angle threshold, velocity reversal detection, extension timing) — consistent with offline analysis but faster.
+
+### GUI Integration
+- **D-21:** HUD toggle checkboxes added to GUI Settings page under "HUD Overlay Options" section. Four switches: skeleton, sparkline, power zones, error markers. All default True.
+- **D-22:** GUI passes `hud_options` dict to both `run_pipeline()` and `run_pipeline_from_folder()` calls. Dict built from checkbox values: `{'show_skeleton': sw.value, ...}`.
 
 ### the agent's Discretion
 - Exact pixel offsets and margins within proportional size constraints
@@ -73,13 +82,14 @@ Upgrade the offline output video HUD (Step 5, `barpath/pipeline/5_render_video.p
 - `.planning/phases/02-live-preview-hud-upgrade/02-UI-SPEC.md` — Visual design contract with exact pixel/scaling values, color BGR tuples, typography, positioning for all 6 HUD elements + coaching tip. **MANDATORY for implementation.**
 
 ### Current Step 5 Rendering
-- `barpath/pipeline/5_render_video.py` — Existing offline video renderer (421 lines). Reference for drawing patterns (skeleton, bar path, phase coloring, legend, velocity text). This file will be refactored into orchestrator + step5_helpers.
+- `barpath/pipeline/5_render_video.py` — Offline video renderer. Frame loop calls `draw_hud_overlay()` orchestrator which handles all 5 HUD elements. `_load_baselines()` helper loads pro baseline data for knee angle coloring.
 - `barpath/pipeline/utils.py` — Shared video drawing helpers (video_writer setup, font constants)
 - `barpath/pipeline/config.py` — Central constants (colors, thresholds, font sizes). New HUD constants added here.
 
 ### Live Detection System
 - `barpath/pipeline/realtime_processing/live_detection_system.py` — Live detection state machine (DetectionState enum: IDLE→DETECTING→COMPLETE→JERK_WATCH→DISPLAYING). Hooks for live coaching tip.
-- `barpath/pipeline/realtime_processing/live_buffer.py:CircularFrameBuffer` — CircularFrameBuffer to be extended with barbell position + joint landmarks fields.
+- `barpath/pipeline/realtime_processing/live_lift_recognition.py:LiveLiftRecognizer` — Live preview recognition state machine. Has `current_tip` property for coaching tip display. Uses its own `FrameData` class and buffer — separate from `LiftDetectionSystem`.
+- `barpath/pipeline/realtime_processing/live_buffer.py:CircularFrameBuffer` — Circular frame buffer with barbell position + joint landmarks fields.
 
 ### Analysis Output (Data Sources for HUD)
 - `barpath/pipeline/2_analyze_data.py` — Produces final_analysis.csv (barbell position, velocity, acceleration, power, joint angles, phases)
@@ -103,26 +113,27 @@ Upgrade the offline output video HUD (Step 5, `barpath/pipeline/5_render_video.p
 ## Existing Code Insights
 
 ### Reusable Assets
-- `barpath/pipeline/5_render_video.py:step_5_render_video()` — Existing frame rendering loop. Reads CSV, iterates frames, applies OpenCV drawing. The skeleton drawing, bar path trail, phase coloring, and legend rendering logic can be extracted into step5_helpers.
+- `barpath/pipeline/5_render_video.py:step_5_render_video()` — Frame rendering loop now calls `draw_hud_overlay()` orchestrator. Handles baselines loading for knee angle coloring.
 - `barpath/pipeline/3_generate_graphs.py` — Matplotlib graph generation (881 lines). Sparkline and power band could reference the same data computation patterns (not the matplotlib rendering, but how data is structured).
 - `barpath/pipeline/step2_helpers/kinematics.py` — Velocity, acceleration, and power calculations already exist. HUD reads these values from CSV, doesn't recompute.
 - `barpath/pipeline/step2_helpers/landmark_processing.py` — Joint angle calculation functions. Can be reused for live tip heuristic checks.
-- `barpath/pipeline/realtime_processing/live_buffer.py:CircularFrameBuffer` — Bounded deque pattern. To be extended with barbell_position and landmarks fields for buffering lift data during detection.
+- `barpath/pipeline/realtime_processing/live_lift_recognition.py:LiveLiftRecognizer` — Live preview state machine with `current_tip` property. Uses `_top_fault` from CompiledAnalyzer for coaching tip text.
 
 ### Established Patterns
-- Pipeline step helper packages: `step{N}_helpers/` with `__init__.py` re-exports. New `step5_helpers/` follows this.
+- Pipeline step helper packages: `step{N}_helpers/` with `__init__.py` re-exports. `step5_helpers/` follows this.
 - `cv2.line`, `cv2.circle`, `cv2.putText`, `cv2.polylines` — Standard OpenCV drawing used throughout Step 5.
 - Generator-based progress reporting: Step 5 yields `(step_name, progress, message)` tuples. Keep this pattern.
 - `cv2.FONT_HERSHEY_SIMPLEX` for all text. Configurable font scale and thickness via `config.py`.
-- Config module constants: All magic numbers in `barpath/pipeline/config.py`. Add new HUD constants (sparkline size ratio, power band height, angle text position, color constants) there.
+- Config module constants: All magic numbers in `barpath/pipeline/config.py`. HUD constants (sparkline size ratio, power band height, angle text position, color constants) added there.
 - Dynamic step function import: `barpath_core.py:_import_step_function()` — no change needed for Step 5 import.
 
 ### Integration Points
-- `barpath/barpath_core.py:run_pipeline()` line ~256 — Calls `step_5_render_video()`. Currently passes `df, source_video, output_video_path, draw_pose, lift_type`. Must add `analysis_result` dict and HUD toggle flags.
-- `barpath/barpath_core.py:run_pipeline_from_folder()` line ~489 — Second call site for `step_5_render_video()`. Must also be updated.
-- `barpath/pipeline/realtime_processing/live_detection_system.py:DetectionState.DISPLAYING` — State where live tip should appear. Hook here for tip rendering.
-- `barpath/barpath_gui.py` — Live preview rendering loop. Needs to call tip overlay drawing function when in DISPLAYING state. Settings tab needs HUD toggle checkboxes.
-- `barpath/barpath_cli.py` — argparse setup. Add `--no-skeleton`, `--no-sparkline`, `--no-power-zones`, `--no-angles`, `--no-error-markers` flags.
+- `barpath/barpath_core.py:run_pipeline()` — Calls `step_5_render_video()` with `analysis_result` and `hud_config=HUDConfig(**(hud_options or {}))`.
+- `barpath/barpath_core.py:run_pipeline_from_folder()` — Second call site, same `hud_config` pattern.
+- `barpath/barpath_gui.py:_run_preview()` — Live preview loop draws `recognizer.current_tip` overlay in top-right corner.
+- `barpath/barpath_gui.py:_build_settings_page()` — HUD toggle checkboxes under "HUD Overlay Options" section. `hud_options` dict passed to pipeline calls.
+- `barpath/barpath_gui.py:_pipeline_worker_videos()` / `_pipeline_worker_folders()` — Both pass `hud_options` from checkbox values to pipeline.
+- `barpath/barpath_cli.py` — argparse setup. `--no-skeleton`, `--no-sparkline`, `--no-power-zones`, `--no-angles`, `--no-error-markers` flags.
 
 </code_context>
 

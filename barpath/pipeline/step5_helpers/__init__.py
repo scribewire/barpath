@@ -4,7 +4,6 @@ This package contains HUD drawing functions for the video renderer:
 - hud_renderer: Extracted skeleton/bar-path/legend drawing, HUD orchestration
 - sparkline: Velocity sparkline rendering
 - power_band: Power zone band rendering
-- joint_angles: Knee angle display with color coding
 - error_markers: Fault marker placement and rendering
 """
 
@@ -17,7 +16,6 @@ class HUDConfig:
     show_skeleton: bool = True
     show_sparkline: bool = True
     show_power_zones: bool = True
-    show_angles: bool = True
     show_error_markers: bool = True
 
 
@@ -37,11 +35,6 @@ def draw_power_zone_band(*args, **kwargs):
     return _impl(*args, **kwargs)
 
 
-def draw_knee_angles(*args, **kwargs):
-    from .joint_angles import draw_knee_angles as _impl
-    return _impl(*args, **kwargs)
-
-
 def draw_error_markers(*args, **kwargs):
     from .error_markers import draw_error_markers as _impl
     return _impl(*args, **kwargs)
@@ -52,6 +45,5 @@ __all__ = [
     "draw_hud_overlay",
     "draw_velocity_sparkline",
     "draw_power_zone_band",
-    "draw_knee_angles",
     "draw_error_markers",
 ]

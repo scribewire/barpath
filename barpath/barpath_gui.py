@@ -494,6 +494,37 @@ class BarpathTogaApp(toga.App):
             )
         )
 
+        # ------------------------------------------------------------------
+        # HUD overlay toggles
+        # ------------------------------------------------------------------
+        content.add(
+            toga.Label(
+                "HUD Overlay Options",
+                style=Pack(font_weight="bold", margin=(14, 0, 6, 0)),
+            )
+        )
+
+        hud_toggles = [
+            ("show_skeleton", "Skeleton overlay", True),
+            ("show_sparkline", "Velocity sparkline", True),
+            ("show_power_zones", "Power zone band", True),
+            ("show_error_markers", "Error markers", True),
+        ]
+        self.hud_switches: dict[str, toga.Switch] = {}
+        for key, label, default in hud_toggles:
+            row = toga.Box(style=Pack(direction="row", align_items="center", margin_bottom=4))
+            sw = toga.Switch(label, value=default, style=Pack(margin_right=8))
+            row.add(sw)
+            self.hud_switches[key] = sw
+            content.add(row)
+
+        content.add(
+            toga.Label(
+                "Toggle individual HUD elements on/off for the output video overlay.",
+                style=Pack(font_size=9, color="#5B6472", margin_top=4, margin_bottom=6),
+            )
+        )
+
         scroll = toga.ScrollContainer(content=content, style=Pack(flex=1))
         page.add(scroll)
 
@@ -1471,6 +1502,7 @@ class BarpathTogaApp(toga.App):
                 )
 
                 try:
+                    hud_options = {k: sw.value for k, sw in self.hud_switches.items()}
                     for step_name, progress_value, message in run_pipeline(
                         input_video=str(input_video),
                         model_path=str(selected_model),
@@ -1485,6 +1517,7 @@ class BarpathTogaApp(toga.App):
                         ),
                         cancel_event=self._cancel_event,
                         lifter=self.lifter,
+                        hud_options=hud_options,
                     ):
                         # Check for insufficient data signal
                         if step_name == "_insufficient_data_":
@@ -1617,12 +1650,14 @@ class BarpathTogaApp(toga.App):
                     )
                 )
 
+                hud_options = {k: sw.value for k, sw in self.hud_switches.items()}
                 for step_name, progress_value, message in run_pipeline_from_folder(
                     output_folder=folder,
                     lift_type="none",
                     encode_video=encode_video,
                     technique_analysis=True,
                     cancel_event=self._cancel_event,
+                    hud_options=hud_options,
                 ):
                     self._progress_queue.put((step_name, progress_value, message))
 
@@ -2043,6 +2078,30 @@ class BarpathTogaApp(toga.App):
                     0.6,
                     (200, 200, 200),
                     1,
+                    cv2.LINE_AA,
+                )
+
+            # Draw coaching tip (top-right, yellow, shown for 5s after lift)
+            tip = recognizer.current_tip
+            if tip:
+                tip_font = cv2.FONT_HERSHEY_SIMPLEX
+                tip_scale = 0.7
+                tip_thickness = 2
+                tip_size = cv2.getTextSize(tip, tip_font, tip_scale, tip_thickness)[0]
+                tip_pad = 10
+                tip_x = w - tip_size[0] - tip_pad - 15
+                tip_y = tip_size[1] + tip_pad + 15
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (tip_x - tip_pad, tip_y - tip_size[1] - tip_pad), (tip_x + tip_size[0] + tip_pad, tip_y + tip_pad), (30, 30, 30), -1)
+                cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+                cv2.putText(
+                    frame,
+                    tip,
+                    (tip_x, tip_y),
+                    tip_font,
+                    tip_scale,
+                    (0, 255, 255),
+                    tip_thickness,
                     cv2.LINE_AA,
                 )
 

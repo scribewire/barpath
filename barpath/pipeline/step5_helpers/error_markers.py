@@ -163,8 +163,13 @@ def draw_error_markers(frame, analysis_result, df, path_points, path_phases,
         ], np.int32)
         cv2.fillPoly(frame, [pts], color)
 
-        # Draw fault name label below triangle
+        # Draw fault name label below triangle with black background
         label_y = py + ERROR_TEXT_Y_OFFSET
+        text_size = cv2.getTextSize(fault_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        pad = 4
+        bg_tl = (px - 30 - pad, label_y - text_size[1] - pad)
+        bg_br = (px - 30 + text_size[0] + pad, label_y + pad)
+        cv2.rectangle(frame, bg_tl, bg_br, (0, 0, 0), -1)
         cv2.putText(frame, fault_name, (px - 30, label_y), cv2.FONT_HERSHEY_SIMPLEX,
                     0.6, color, 2, cv2.LINE_AA)
 

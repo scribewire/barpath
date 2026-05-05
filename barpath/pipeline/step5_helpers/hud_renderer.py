@@ -90,6 +90,25 @@ SKELETON_CONNECTIONS = [
 ]
 
 
+def draw_text_with_outline(frame, text, pos, font, font_scale, color, thickness=1, outline_thickness=2):
+    """Draw text with black outline for readability on any background.
+
+    Args:
+        frame: OpenCV frame/image to draw on (modified in place)
+        text: Text string to draw
+        pos: (x, y) position
+        font: OpenCV font constant
+        font_scale: Font size scale
+        color: BGR color tuple for main text
+        thickness: Main text thickness
+        outline_thickness: Outline stroke thickness (default 2)
+    """
+    x, y = pos
+    for dx, dy in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+        cv2.putText(frame, text, (x + dx, y + dy), font, font_scale, (0, 0, 0), outline_thickness, cv2.LINE_AA)
+    cv2.putText(frame, text, (x, y), font, font_scale, color, thickness, cv2.LINE_AA)
+
+
 def draw_skeleton_overlay(frame, landmarks_str, frame_width, frame_height, legend_colors):
     """Draw pose skeleton overlay on the frame.
 
@@ -177,9 +196,10 @@ def draw_bar_path_trail(frame, path_points, path_phases, max_path_index,
         cv2.line(frame, p1, p2, color, 3)
 
 
-def draw_hud_overlay(frame, df, df_row, frame_width, frame_height, lift_type, hud_config,
+def draw_hud_overlay(frame, df, frame_width, frame_height, lift_type, hud_config,
                      path_points, path_phases, max_path_index, shake_x, shake_y,
-                     landmarks_str, legend_colors, analysis_result=None, baselines=None):
+                     landmarks_str, legend_colors, analysis_result=None,
+                     current_frame=None):
     """Orchestrator function for per-frame HUD compositing.
 
     Calls each HUD element function based on hud_config toggles.
@@ -187,7 +207,6 @@ def draw_hud_overlay(frame, df, df_row, frame_width, frame_height, lift_type, hu
     Args:
         frame: OpenCV frame/image to draw on (modified in place)
         df: Full DataFrame with kinematic data
-        df_row: Current frame's row from DataFrame
         frame_width: Frame width in pixels
         frame_height: Frame height in pixels
         lift_type: Type of lift for phase color mapping
@@ -200,7 +219,7 @@ def draw_hud_overlay(frame, df, df_row, frame_width, frame_height, lift_type, hu
         landmarks_str: String representation of landmarks dict
         legend_colors: Color scheme dict for body part coloring
         analysis_result: Optional dict from Step 4 critique (for error markers)
-        baselines: Optional baseline data dict (for knee angle coloring)
+        current_frame: Current video frame index for playhead
 
     Returns:
         last_head_pos: tuple (x, y) or None
@@ -215,22 +234,18 @@ def draw_hud_overlay(frame, df, df_row, frame_width, frame_height, lift_type, hu
         last_head_pos = draw_skeleton_overlay(frame, landmarks_str, frame_width,
                                                frame_height, legend_colors)
 
-    # Draw velocity sparkline
+    # Draw velocity sparkline (returns box for power band positioning)
+    sparkline_box = None
     if hud_config.show_sparkline:
         from .sparkline import draw_velocity_sparkline
-        frame = draw_velocity_sparkline(frame, df, frame_width, frame_height, lift_type)
+        frame, sparkline_box = draw_velocity_sparkline(
+            frame, df, frame_width, frame_height, lift_type, current_frame)
 
     # Draw power zone band
     if hud_config.show_power_zones:
         from .power_band import draw_power_zone_band
-        frame = draw_power_zone_band(frame, df, frame_width, frame_height)
-
-    # Draw knee angles
-    if hud_config.show_angles:
-        from .joint_angles import draw_knee_angles
-        bar_phase = df_row.get('bar_phase', None) if df_row is not None else None
-        frame = draw_knee_angles(frame, df_row, frame_width, frame_height,
-                                  bar_phase, baselines)
+        frame = draw_power_zone_band(
+            frame, df, frame_width, frame_height, sparkline_box, current_frame)
 
     # Draw error markers
     if hud_config.show_error_markers and analysis_result:
