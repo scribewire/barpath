@@ -46,15 +46,13 @@ Plans:
 ### Phase 2: Live Preview HUD Upgrade
 **Goal**: Full telemetry overlay on live webcam preview post-lift-recognition.
 
-2.1 Analyze existing analysis output data structures
-2.2 Design HUD overlay system for real-time rendering
-2.3 Implement velocity curve overlay
-2.4 Implement bar path trajectory overlay
-2.5 Implement power zones visualization
-2.6 Implement joint angles display
-2.7 Implement error markers on video feed
-2.8 Integrate with existing live preview pipeline
-2.9 Optimize for real-time performance
+**Plans:** 4 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Create step5_helpers package, add HUD constants to config.py
+- [ ] 02-02-PLAN.md — Extract drawing logic into hud_renderer.py, implement velocity sparkline
+- [ ] 02-03-PLAN.md — Implement power band, knee angles, error markers, test scaffolding
+- [ ] 02-04-PLAN.md — Wire data flow through orchestrator, CLI toggles, live coaching tip
 
 ### Phase 3: Interactive Analysis Graphs
 **Goal**: Replace static matplotlib graphs with interactive Plotly/Bokeh visualizations.

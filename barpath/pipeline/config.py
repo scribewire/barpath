@@ -181,6 +181,56 @@ SCALE_MIN = 0.4
 SCALE_MAX = 2.5
 
 # ---------------------------------------------------------------------------
+# Step 5: HUD Overlay
+# ---------------------------------------------------------------------------
+
+# HUD Sparkline
+SPARKLINE_WIDTH_RATIO = 0.20       # 20% of frame width
+SPARKLINE_HEIGHT_RATIO = 0.15      # 15% of frame height
+SPARKLINE_MARGIN_X = 20            # pixels from right edge
+SPARKLINE_MARGIN_Y = 20            # pixels from top edge
+SPARKLINE_LINE_THICKNESS = 2
+SPARKLINE_AXIS_COLOR_BGR = (80, 80, 80)  # gray axis lines
+
+# HUD Power Zone Band
+POWER_BAND_HEIGHT = 15             # pixels tall
+POWER_BAND_GAP = 8                 # pixels below sparkline
+
+# HUD Joint Angles
+ANGLE_TEXT_POSITION_Y_RATIO = 0.92  # 92% down from top (near bottom)
+ANGLE_FONT_SCALE = 0.7
+ANGLE_FONT_THICKNESS = 2
+ANGLE_GREEN_BGR = (0, 255, 0)
+ANGLE_YELLOW_BGR = (0, 255, 255)
+ANGLE_RED_BGR = (0, 0, 255)
+ANGLE_FALLBACK_MIN = 90.0          # degrees (green lower bound when no baseline)
+ANGLE_FALLBACK_MAX = 135.0         # degrees (green upper bound when no baseline)
+ANGLE_BORDERLINE_MARGIN = 0.10     # 10% boundary margin for yellow
+
+# HUD Error Markers
+ERROR_TRIANGLE_SIZE = 12           # pixels (side length)
+ERROR_TEXT_Y_OFFSET = 25           # pixels below triangle apex for label
+
+# HUD Fault Type Colors (BGR) - Distinct per fault category
+FAULT_COLORS_BGR = {
+    "arm": (0, 165, 255),          # Orange
+    "extension": (255, 0, 255),    # Magenta
+    "path": (255, 255, 0),         # Cyan
+    "knee_leg": (0, 255, 255),     # Yellow
+    "catch": (0, 0, 255),          # Red
+}
+
+# Live Coaching Tip
+COACHING_TIP_DURATION_S = 5.0
+COACHING_TIP_CONFIDENCE_THRESHOLD = 0.6
+COACHING_TIP_FONT_SCALE = 0.8
+COACHING_TIP_FONT_THICKNESS = 2
+COACHING_TIP_COLOR_BGR = (0, 255, 255)  # Yellow
+
+# Coaching Tip Text
+COACHING_TIP_FALLBACK = "Lift looks good"
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 
