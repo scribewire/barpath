@@ -40,10 +40,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest
+          # Lightweight subset only — the full requirements.txt (torch,
+          # ultralytics, mediapipe, pycairo) is not needed by the
+          # self-contained tests and would slow/fail CI installs.
+          pip install numpy pandas scipy opencv-python pytest
 
       - name: Run tests
         run: python -m pytest tests/test_lift_detection.py tests/test_progress_flow.py tests/test_realtime_processing_init.py tests/test_step5_hud -q
