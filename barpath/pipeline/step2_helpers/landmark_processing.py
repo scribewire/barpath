@@ -5,8 +5,6 @@ Handles unpacking of landmark data, calculating joint angles, and
 deriving body position metrics.
 """
 
-from typing import List
-
 import numpy as np
 import pandas as pd
 from config import LANDMARKS_TO_TRACK
@@ -42,9 +40,7 @@ def unpack_landmarks(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def get_pixel_pos(
-    row: pd.Series, name: str, frame_width: int, frame_height: int
-) -> np.ndarray:
+def get_pixel_pos(row: pd.Series, name: str, frame_width: int, frame_height: int) -> np.ndarray:
     """
     Get pixel-space position for a landmark.
 
@@ -95,9 +91,7 @@ def calculate_angle(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> float:
     return float(np.degrees(np.arccos(cos_angle)))
 
 
-def calculate_joint_angles(
-    df: pd.DataFrame, frame_width: int, frame_height: int
-) -> pd.DataFrame:
+def calculate_joint_angles(df: pd.DataFrame, frame_width: int, frame_height: int) -> pd.DataFrame:
     """
     Calculate all joint angles from landmark positions.
 
@@ -264,7 +258,7 @@ def drop_intermediate_columns(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with intermediate columns removed
     """
-    cols_to_drop: List[str] = []
+    cols_to_drop: list[str] = []
 
     cols_to_drop.append("landmarks")
     cols_to_drop.extend(["shake_dx", "shake_dy"])

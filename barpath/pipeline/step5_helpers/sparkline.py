@@ -17,10 +17,12 @@ from barpath.pipeline.config import (
 )
 
 from .hud_renderer import PHASE_COLOR_SCHEMES
+from .overlay_metrics import OverlayMetrics
 
 
-def draw_velocity_sparkline(frame, df, frame_width, frame_height, lift_type,
-                            current_frame=None):
+def draw_velocity_sparkline(
+    frame, df, frame_width, frame_height, lift_type, current_frame=None, overlay_metrics=None
+):
     """Draw phase-colored velocity sparkline in top-right corner.
 
     Pre-computes full curve from frame 1 — drawn identically every frame,
@@ -38,20 +40,21 @@ def draw_velocity_sparkline(frame, df, frame_width, frame_height, lift_type,
         tuple: (frame, sparkline_box) where sparkline_box is (x, y, w, h)
     """
     # Check for required columns
-    if 'vel_y_smooth' not in df.columns or 'bar_phase' not in df.columns:
+    if "vel_y_smooth" not in df.columns or "bar_phase" not in df.columns:
         return frame, None
 
-    vel_series = df['vel_y_smooth'].dropna().values
-    phases = df['bar_phase'].dropna().values
+    vel_series = df["vel_y_smooth"].dropna().values
+    phases = df["bar_phase"].dropna().values
 
     if len(vel_series) == 0:
         return frame, None
 
     # Calculate bounding box with proportional sizing and minimum clamp
-    sparkline_w = max(100, int(frame_width * SPARKLINE_WIDTH_RATIO))
-    sparkline_h = max(50, int(frame_height * SPARKLINE_HEIGHT_RATIO))
-    x = frame_width - SPARKLINE_MARGIN_X - sparkline_w
-    y = SPARKLINE_MARGIN_Y
+    metrics = overlay_metrics or OverlayMetrics.for_frame(frame_width, frame_height)
+    sparkline_w = max(metrics.px(100), int(frame_width * SPARKLINE_WIDTH_RATIO))
+    sparkline_h = max(metrics.px(50), int(frame_height * SPARKLINE_HEIGHT_RATIO))
+    x = frame_width - metrics.px(SPARKLINE_MARGIN_X) - sparkline_w
+    y = metrics.px(SPARKLINE_MARGIN_Y)
 
     # Normalize velocity to sparkline box
     vel_min = vel_series.min()
@@ -71,17 +74,30 @@ def draw_velocity_sparkline(frame, df, frame_width, frame_height, lift_type,
     for i in range(len(points) - 1):
         phase_idx = int(phases[min(i, len(phases) - 1)])
         color = phase_scheme.get(phase_idx, (255, 255, 255))
-        cv2.line(frame, points[i], points[i + 1], color, SPARKLINE_LINE_THICKNESS)
+        cv2.line(frame, points[i], points[i + 1], color, metrics.px(SPARKLINE_LINE_THICKNESS))
 
     # Draw axis lines (subtle)
-    cv2.line(frame, (x, y + sparkline_h), (x + sparkline_w, y + sparkline_h),
-             SPARKLINE_AXIS_COLOR_BGR, 1)
-    cv2.line(frame, (x, y), (x, y + sparkline_h), SPARKLINE_AXIS_COLOR_BGR, 1)
+    cv2.line(
+        frame,
+        (x, y + sparkline_h),
+        (x + sparkline_w, y + sparkline_h),
+        SPARKLINE_AXIS_COLOR_BGR,
+        metrics.px(1),
+    )
+    cv2.line(frame, (x, y), (x, y + sparkline_h), SPARKLINE_AXIS_COLOR_BGR, metrics.px(1))
 
     # Draw "Velocity" label with outline
     from .hud_renderer import draw_text_with_outline
-    draw_text_with_outline(frame, "Velocity", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX,
-                           0.5, (255, 255, 255))
+
+    draw_text_with_outline(
+        frame,
+        "Velocity",
+        (x, y - metrics.px(5)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        metrics.font(0.5),
+        (255, 255, 255),
+        outline_thickness=metrics.px(2),
+    )
 
     # Draw playhead if current_frame is provided
     if current_frame is not None and len(df) > 0:
@@ -93,7 +109,12 @@ def draw_velocity_sparkline(frame, df, frame_width, frame_height, lift_type,
             t = (current_frame - first_frame) / (last_frame - first_frame)
             t = max(0.0, min(1.0, t))
             playhead_x = x + int(t * sparkline_w)
-            cv2.line(frame, (playhead_x, y), (playhead_x, y + sparkline_h),
-                     (255, 255, 255), 2)
+            cv2.line(
+                frame,
+                (playhead_x, y),
+                (playhead_x, y + sparkline_h),
+                (255, 255, 255),
+                metrics.px(2),
+            )
 
     return frame, (x, y, sparkline_w, sparkline_h)

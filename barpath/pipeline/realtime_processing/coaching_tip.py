@@ -1,12 +1,14 @@
 """Live coaching tip computation — heuristic fault checks on buffered lift data."""
 
-from typing import List, Optional
+from barpath.pipeline.config import (
+    COACHING_TIP_CONFIDENCE_THRESHOLD,
+    COACHING_TIP_FALLBACK,
+)
 
-from barpath.pipeline.config import COACHING_TIP_CONFIDENCE_THRESHOLD, COACHING_TIP_FALLBACK
 from .live_buffer import FrameData
 
 
-def compute_coaching_tip(buffer_frames: List[FrameData], detected_class: str) -> Optional[str]:
+def compute_coaching_tip(buffer_frames: list[FrameData], detected_class: str) -> str | None:
     """Run heuristic checks on buffered lift data. Return fault name or fallback.
 
     Checks (simplified versions of compiled_analyzer rules):
@@ -38,9 +40,7 @@ def compute_coaching_tip(buffer_frames: List[FrameData], detected_class: str) ->
         checks["incomplete_extension"] = ext_check
 
     # Filter by class-appropriate checks (snatch/clean don't have jerk faults)
-    if detected_class in ("snatch", "clean"):
-        pass  # all checks applicable
-    elif detected_class == "jerk":
+    if detected_class in ("snatch", "clean") or detected_class == "jerk":
         pass  # all checks applicable
 
     # Find highest confidence fault
@@ -59,13 +59,13 @@ def compute_coaching_tip(buffer_frames: List[FrameData], detected_class: str) ->
     return COACHING_TIP_FALLBACK
 
 
-def _check_early_arm_bend(frames: List[FrameData]) -> Optional[float]:
+def _check_early_arm_bend(frames: list[FrameData]) -> float | None:
     """Check if average elbow angle during lift > 150°. Return confidence 0.0-1.0."""
     # Extract elbow angles from frames
     angles = []
     for f in frames:
-        left = f.joint_angles.get('left_elbow', 180.0)
-        right = f.joint_angles.get('right_elbow', 180.0)
+        left = f.joint_angles.get("left_elbow", 180.0)
+        right = f.joint_angles.get("right_elbow", 180.0)
         angles.append((left + right) / 2.0)
     if not angles:
         return None
@@ -76,9 +76,10 @@ def _check_early_arm_bend(frames: List[FrameData]) -> Optional[float]:
     return None
 
 
-def _check_hitching(frames: List[FrameData]) -> Optional[float]:
+def _check_hitching(frames: list[FrameData]) -> float | None:
     """Check for velocity reversals (sign changes) in barbell vertical velocity."""
     import numpy as np
+
     positions = []
     for f in frames:
         if f.barbell_center:
@@ -93,9 +94,10 @@ def _check_hitching(frames: List[FrameData]) -> Optional[float]:
     return None
 
 
-def _check_peak_velocity_timing(frames: List[FrameData]) -> Optional[float]:
+def _check_peak_velocity_timing(frames: list[FrameData]) -> float | None:
     """Check if peak velocity occurs before 70% of lift duration."""
     import numpy as np
+
     positions = []
     for f in frames:
         if f.barbell_center:

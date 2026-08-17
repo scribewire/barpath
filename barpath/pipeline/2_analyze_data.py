@@ -23,6 +23,7 @@ from analysis_utils import (
     calculate_pixel_to_meter_conversion,
 )
 from config import BARBELL_ENDCAP_WIDTH_M
+from lift_detection_features import detect_clean_jerk_split_point
 from pandas import Series
 from step2_helpers import (
     assign_phases_from_classics,
@@ -39,8 +40,6 @@ from step2_helpers import (
     truncate_at_peak_height,
     unpack_landmarks,
 )
-
-from lift_detection_features import detect_clean_jerk_split_point
 
 
 def step_2_analyze_data(input_data, output_path):
@@ -128,8 +127,7 @@ def step_2_analyze_data(input_data, output_path):
             df["phase_change"] = df["bar_phase"].diff().fillna(0).ne(0)
         else:
             print(
-                "Warning: Could not detect clean+jerk split point. "
-                "Treating as regular clean lift."
+                "Warning: Could not detect clean+jerk split point. Treating as regular clean lift."
             )
             lift_type = "clean"
 
@@ -169,18 +167,14 @@ def step_2_analyze_data(input_data, output_path):
             max_power_real = max_power_result.get("max_power_real")
             max_power_px = max_power_result.get("max_power_px")
             if max_power_real is not None:
-                print(
-                    f"Peak power output (pull->pull-under): {float(max_power_real):.2f} W/kg"
-                )
+                print(f"Peak power output (pull->pull-under): {float(max_power_real):.2f} W/kg")
             elif max_power_px is not None:
                 print(
                     f"Peak power output (pull->pull-under): {float(max_power_px):.2f} px^2/s^3 "
                     "(endcap detection failed)"
                 )
 
-    df["landmarks_str"] = df["landmarks"].apply(
-        lambda x: str(x) if isinstance(x, dict) else "{}"
-    )
+    df["landmarks_str"] = df["landmarks"].apply(lambda x: str(x) if isinstance(x, dict) else "{}")
 
     def box_to_str(x):
         if isinstance(x, (list, tuple)):
@@ -218,9 +212,7 @@ def step_2_analyze_data(input_data, output_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Step 2: Analyze raw data and save to CSV."
-    )
+    parser = argparse.ArgumentParser(description="Step 2: Analyze raw data and save to CSV.")
     parser.add_argument(
         "--input",
         default="raw_data.pkl",

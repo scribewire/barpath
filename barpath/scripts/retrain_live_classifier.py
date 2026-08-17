@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pickle
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -18,17 +18,21 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-from barpath.pipeline.realtime_processing.live_training_data import generate_live_training_dataset
-from barpath.pipeline.realtime_processing.live_window_features import extract_window_features
+from barpath.pipeline.realtime_processing.live_training_data import (
+    generate_live_training_dataset,
+)
+from barpath.pipeline.realtime_processing.live_window_features import (
+    extract_window_features,
+)
 
 
 def train_live_classifier(
     data_dir: Path,
     output_path: Path,
-    categories: List[str] | None = None,
+    categories: list[str] | None = None,
     test_size: float = 0.2,
     random_state: int = 42,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Train a live-preview lift classifier.
 
     Args:
@@ -53,8 +57,8 @@ def train_live_classifier(
 
     # Extract features from all windows
     print("Extracting features...")
-    X_rows: List[Dict[str, float]] = []
-    y_labels: List[str] = []
+    X_rows: list[dict[str, float]] = []
+    y_labels: list[str] = []
 
     for window_df, label in dataset:
         features = extract_window_features(window_df)
@@ -137,7 +141,7 @@ def train_live_classifier(
     print("\n" + "=" * 60)
     print("TOP 15 FEATURE IMPORTANCES")
     print("=" * 60)
-    importances = list(zip(X.columns, clf.feature_importances_))
+    importances = list(zip(X.columns, clf.feature_importances_, strict=False))
     importances.sort(key=lambda x: x[1], reverse=True)
     for name, imp in importances[:15]:
         print(f"  {name}: {imp:.4f}")
@@ -181,6 +185,6 @@ if __name__ == "__main__":
     output_path = Path("barpath/models/lift_detection/live_lift_model.pkl")
 
     results = train_live_classifier(data_dir, output_path)
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"FINAL TEST ACCURACY: {results['accuracy']:.1%}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")

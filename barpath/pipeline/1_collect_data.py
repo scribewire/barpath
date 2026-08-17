@@ -26,7 +26,10 @@ from config import (  # type: ignore[import-untyped]
     STAB_MIN_FEATURES,
     YOLO_CONFIDENCE_THRESHOLD,
 )
-from hardware_detection import detect_intel_gpu, detect_nvidia_gpu  # type: ignore[import-untyped]
+from hardware_detection import (  # type: ignore[import-untyped]
+    detect_intel_gpu,
+    detect_nvidia_gpu,
+)
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 from step1_helpers import (  # type: ignore[import-untyped]
@@ -61,13 +64,9 @@ def _get_model_path(model_path: Path) -> tuple[str, bool]:
             print(f"Detected OpenVINO model in: {model_path}")
             return str(model_path), True
         elif xml_files:
-            raise ValueError(
-                f"OpenVINO directory missing .bin weights file: {model_path}"
-            )
+            raise ValueError(f"OpenVINO directory missing .bin weights file: {model_path}")
         elif bin_files:
-            raise ValueError(
-                f"OpenVINO directory missing .xml model file: {model_path}"
-            )
+            raise ValueError(f"OpenVINO directory missing .xml model file: {model_path}")
         else:
             raise ValueError(f"Directory does not contain a valid model: {model_path}")
     elif model_path.is_file():
@@ -144,9 +143,7 @@ def step_1_collect_data(
         model_path_str, is_openvino = _get_model_path(model_path_obj)
         print(f"Loading model: {model_path_str}")
 
-        is_tensorrt_engine = (
-            model_path_obj.is_file() and model_path_obj.suffix.lower() == ".engine"
-        )
+        is_tensorrt_engine = model_path_obj.is_file() and model_path_obj.suffix.lower() == ".engine"
         if is_tensorrt_engine:
             print("Detected TensorRT engine model (.engine).")
 
@@ -175,7 +172,7 @@ def step_1_collect_data(
             pose_landmarker.close()
         raise RuntimeError(f"Failed to load model: {e}")
 
-    frame_queue: "queue.Queue[object]" = queue.Queue(maxsize=DECODE_QUEUE_SIZE)
+    frame_queue: queue.Queue[object] = queue.Queue(maxsize=DECODE_QUEUE_SIZE)
     producer_thread = threading.Thread(
         target=_frame_producer,
         args=(video_path, frame_queue, total_frames),
@@ -226,8 +223,8 @@ def step_1_collect_data(
 
         landmarks_data, world_landmarks_data, segmentation_mask = None, None, None
         if results_pose is not None:
-            landmarks_data, world_landmarks_data, segmentation_mask = (
-                process_pose_results(results_pose, LANDMARK_ENUMS)
+            landmarks_data, world_landmarks_data, segmentation_mask = process_pose_results(
+                results_pose, LANDMARK_ENUMS
             )
             frame_data["landmarks"] = landmarks_data
             frame_data["world_landmarks"] = world_landmarks_data
@@ -250,9 +247,7 @@ def step_1_collect_data(
                         y2 = float(max(0, min(y2, frame_height - 1)))
 
                         center = (int((x1 + x2) / 2), int((y1 + y2) / 2))
-                        detected_endcaps.append(
-                            {"center": center, "box": (x1, y1, x2, y2)}
-                        )
+                        detected_endcaps.append({"center": center, "box": (x1, y1, x2, y2)})
 
         if detected_endcaps:
             if last_known_barbell_center is None:
@@ -269,13 +264,9 @@ def step_1_collect_data(
                 if feet_pos_px is not None:
                     best_endcap = min(
                         detected_endcaps,
-                        key=lambda e: np.linalg.norm(
-                            np.array(e["center"]) - feet_pos_px
-                        ),
+                        key=lambda e: np.linalg.norm(np.array(e["center"]) - feet_pos_px),
                     )
-                    print(
-                        f"[Info] Barbell initially detected at frame {frame_count} (near feet)."
-                    )
+                    print(f"[Info] Barbell initially detected at frame {frame_count} (near feet).")
                 else:
                     best_endcap = min(
                         detected_endcaps,
@@ -288,9 +279,7 @@ def step_1_collect_data(
             else:
                 best_endcap = min(
                     detected_endcaps,
-                    key=lambda e: np.linalg.norm(
-                        np.array(e["center"]) - last_known_barbell_center
-                    ),
+                    key=lambda e: np.linalg.norm(np.array(e["center"]) - last_known_barbell_center),
                 )
 
             last_known_barbell_center = np.array(best_endcap["center"])
@@ -314,10 +303,7 @@ def step_1_collect_data(
                     prev_background_features, curr_features, status, stab_params
                 )
 
-        if (
-            curr_background_features is None
-            or len(curr_background_features) < STAB_MIN_FEATURES
-        ):
+        if curr_background_features is None or len(curr_background_features) < STAB_MIN_FEATURES:
             new_features = detect_features(gray, background_mask, stab_params)
             if new_features is not None:
                 curr_background_features = update_features(
@@ -366,9 +352,7 @@ def step_1_collect_data(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Step 1: Collect raw motion data from video."
-    )
+    parser = argparse.ArgumentParser(description="Step 1: Collect raw motion data from video.")
     parser.add_argument("--input", required=True, help="Path to the source video file")
     parser.add_argument("--model", required=True, help="Path to the trained YOLO model")
     parser.add_argument(

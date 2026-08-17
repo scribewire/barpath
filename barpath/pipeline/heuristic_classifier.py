@@ -12,7 +12,7 @@ Feature map (from _MODEL_FEATURE_NAMES, alphabetical):
   [29] shape_y_start:         float — normalized starting bar position
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 
@@ -45,7 +45,7 @@ CJ_TRAJ_LEN_STRICT = 160
 CJ_PHASE_GAP_STRICT = 0.55
 
 
-def classify_with_heuristics(features: np.ndarray) -> Dict[str, Any]:
+def classify_with_heuristics(features: np.ndarray) -> dict[str, Any]:
     """Classify lift type using kinematic feature heuristics.
 
     Args:
@@ -105,9 +105,7 @@ def classify_with_heuristics(features: np.ndarray) -> Dict[str, Any]:
         reason = "clean_jerk_large_gap_long_traj"
 
     elif (
-        cj_two_phase > 0.5
-        and dip_depth >= JERK_DIP_DEPTH_MAX
-        and trajectory_len > CJ_TRAJ_LEN_MIN
+        cj_two_phase > 0.5 and dip_depth >= JERK_DIP_DEPTH_MAX and trajectory_len > CJ_TRAJ_LEN_MIN
     ):
         # Two-phase pattern with moderate trajectory length and deep
         # dip — more likely a clean+jerk than a single lift mimicking one.
@@ -245,9 +243,7 @@ def classify_with_heuristics(features: np.ndarray) -> Dict[str, Any]:
             reason = "fallback_clean_floor_start"
 
     # Clamp confidence
-    confidence = max(
-        HEURISTIC_CONFIDENCE_FLOOR, min(confidence, HEURISTIC_CONFIDENCE_CEILING)
-    )
+    confidence = max(HEURISTIC_CONFIDENCE_FLOOR, min(confidence, HEURISTIC_CONFIDENCE_CEILING))
 
     return {
         "class": predicted,
@@ -258,8 +254,8 @@ def classify_with_heuristics(features: np.ndarray) -> Dict[str, Any]:
 
 
 def classify_with_heuristics_smoothed(
-    features_list: List[np.ndarray],
-) -> Dict[str, Any]:
+    features_list: list[np.ndarray],
+) -> dict[str, Any]:
     """Classify using multiple frames for smoother results.
 
     Args:
@@ -279,7 +275,7 @@ def classify_with_heuristics_smoothed(
     results = [classify_with_heuristics(f) for f in features_list]
 
     # Average probabilities across frames
-    avg_probs: Dict[str, float] = {"snatch": 0.0, "clean": 0.0, "jerk": 0.0}
+    avg_probs: dict[str, float] = {"snatch": 0.0, "clean": 0.0, "jerk": 0.0}
     if any(r.get("clean_jerk", 0.0) for r in results):
         avg_probs["clean_jerk"] = 0.0
     for r in results:
@@ -313,7 +309,6 @@ if __name__ == "__main__":
 
     sys.path.insert(0, "barpath")
     import pandas as pd
-
     from pipeline.lift_detection_features import extract_model_features_as_array
 
     print("Testing heuristic classifier:")

@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 
@@ -27,7 +27,7 @@ PHASE_NAMES = {
     "jerk": {0: "Dip", 1: "Drive", 2: "Recovery"},
 }
 
-FAULT_DEFS: Dict[str, Dict[str, Any]] = {
+FAULT_DEFS: dict[str, dict[str, Any]] = {
     "slow_first_pull": {
         "name": "Slow First Pull",
         "phase": "pull",
@@ -177,7 +177,7 @@ FAULT_DEFS: Dict[str, Dict[str, Any]] = {
 
 def load_baselines_from_json(
     json_path: Path,
-) -> Dict[str, Dict[str, Dict[str, float]]]:
+) -> dict[str, dict[str, dict[str, float]]]:
     """Load baselines from a pro_baseline_report.json.
 
     Returns dict keyed by "{lift_type}_{gender}" with feature stats.
@@ -185,16 +185,15 @@ def load_baselines_from_json(
     """
     if not json_path.exists():
         logger.error(
-            f"Baseline JSON not found at {json_path}. "
-            "Run smart_analysis_training.py first."
+            f"Baseline JSON not found at {json_path}. Run smart_analysis_training.py first."
         )
         return {}
 
     try:
-        with open(json_path, "r", encoding="utf-8") as f:
+        with open(json_path, encoding="utf-8") as f:
             report = json.load(f)
 
-        baselines: Dict[str, Dict[str, Dict[str, float]]] = {}
+        baselines: dict[str, dict[str, dict[str, float]]] = {}
         for key, baseline_data in report.get("baselines", {}).items():
             feat_stats = baseline_data.get("feature_statistics", {})
             baselines[key] = {}
@@ -226,7 +225,7 @@ class CompiledAnalyzer:
         self,
         lift_type: str,
         gender: str = "male",
-        baselines: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None,
+        baselines: dict[str, dict[str, dict[str, float]]] | None = None,
     ) -> None:
         self.lift_type = lift_type.lower()
         self.gender = gender.lower()
@@ -236,8 +235,7 @@ class CompiledAnalyzer:
             self.baselines = baselines[self.baseline_key]
         else:
             logger.warning(
-                f"No baselines for {self.baseline_key}. "
-                "Fault detection will be limited."
+                f"No baselines for {self.baseline_key}. Fault detection will be limited."
             )
             self.baselines = {}
 
@@ -249,9 +247,9 @@ class CompiledAnalyzer:
 
     def analyze(
         self,
-        features: Dict[str, float],
-        df: Optional[pd.DataFrame] = None,
-    ) -> List[Dict[str, Any]]:
+        features: dict[str, float],
+        df: pd.DataFrame | None = None,
+    ) -> list[dict[str, Any]]:
         """Analyze a lift and return detected faults.
 
         Args:
@@ -261,7 +259,7 @@ class CompiledAnalyzer:
         Returns:
             List of fault dicts sorted by confidence (highest first).
         """
-        faults: List[Dict[str, Any]] = []
+        faults: list[dict[str, Any]] = []
 
         if self.lift_type in ("clean", "snatch"):
             faults.extend(self._check_clean_snatch_faults(features))
@@ -273,9 +271,7 @@ class CompiledAnalyzer:
         faults.sort(key=lambda f: f.get("confidence", 0), reverse=True)
         return faults
 
-    def _check_clean_snatch_faults(
-        self, features: Dict[str, float]
-    ) -> List[Dict[str, Any]]:
+    def _check_clean_snatch_faults(self, features: dict[str, float]) -> list[dict[str, Any]]:
         """Check faults common to clean and snatch.
 
         Threshold logic reference (from pro baseline data):
@@ -283,7 +279,7 @@ class CompiledAnalyzer:
         - MediaPipe elbow angle: low = straight arm, high = bent arm
         - MediaPipe knee angle: low = deep squat, high = standing
         """
-        faults: List[Dict[str, Any]] = []
+        faults: list[dict[str, Any]] = []
 
         # slow_first_pull
         # max_vel_y is always positive (abs of velocity). A slow pull has low max_vel_y.
@@ -321,33 +317,25 @@ class CompiledAnalyzer:
         val = features.get("min_elbow_angle_early", 180)
         p90 = self._get_threshold("min_elbow_angle_early", "p90")
         if p90 > 0 and val > p90:
-            faults.append(
-                self._make_fault("early_arm_bend", val, "min_elbow_angle_early")
-            )
+            faults.append(self._make_fault("early_arm_bend", val, "min_elbow_angle_early"))
 
         # incomplete_extension
         # Peak velocity position > p90 means peak occurs too late (extending past optimal)
         val = features.get("peak_vel_phase_frac", 0.5)
         if val > self._get_threshold("peak_vel_phase_frac", "p90"):
-            faults.append(
-                self._make_fault("incomplete_extension", val, "peak_vel_phase_frac")
-            )
+            faults.append(self._make_fault("incomplete_extension", val, "peak_vel_phase_frac"))
 
         # premature_jump
         # Ankle rise > p90 means feet leaving floor too early
         val = features.get("ankle_rise_late_pull", 0)
         if val > self._get_threshold("ankle_rise_late_pull", "p90"):
-            faults.append(
-                self._make_fault("premature_jump", val, "ankle_rise_late_pull")
-            )
+            faults.append(self._make_fault("premature_jump", val, "ankle_rise_late_pull"))
 
         # slow_turnover
         # Turnover duration > p90 means too long in pull-under phase
         val = features.get("turnover_duration_frac", 0)
         if val > self._get_threshold("turnover_duration_frac", "p90"):
-            faults.append(
-                self._make_fault("slow_turnover", val, "turnover_duration_frac")
-            )
+            faults.append(self._make_fault("slow_turnover", val, "turnover_duration_frac"))
 
         # high_catch
         # Knee angle > p90 at catch = not squatting deep enough
@@ -360,26 +348,20 @@ class CompiledAnalyzer:
         bounce_count = features.get("recovery_bounce_count", 0)
         if bounce_count >= 2:
             faults.append(
-                self._make_fault(
-                    "recovery_bounce", bounce_count, "recovery_bounce_count"
-                )
+                self._make_fault("recovery_bounce", bounce_count, "recovery_bounce_count")
             )
         elif bounce_count >= 1:
             # Lower confidence since the bounce detection threshold may
             # miss subtle bar oscillation vs real squat bounces
-            fault = self._make_fault(
-                "unstable_recovery", bounce_count, "recovery_bounce_count"
-            )
+            fault = self._make_fault("unstable_recovery", bounce_count, "recovery_bounce_count")
             fault["confidence"] = min(fault["confidence"], 40)
             faults.append(fault)
 
         return faults
 
-    def _check_snatch_specific_faults(
-        self, features: Dict[str, float]
-    ) -> List[Dict[str, Any]]:
+    def _check_snatch_specific_faults(self, features: dict[str, float]) -> list[dict[str, Any]]:
         """Check snatch-specific faults."""
-        faults: List[Dict[str, Any]] = []
+        faults: list[dict[str, Any]] = []
 
         # press_out: elbow angle variance > p90
         val = features.get("elbow_angle_variance", 0)
@@ -393,20 +375,18 @@ class CompiledAnalyzer:
             "elbow_angle_variance", "p75"
         ) and knee_catch > self._get_threshold("min_knee_angle_catch", "p75"):
             faults.append(
-                self._make_fault(
-                    "overhead_instability", elbow_var, "elbow_angle_variance"
-                )
+                self._make_fault("overhead_instability", elbow_var, "elbow_angle_variance")
             )
 
         return faults
 
-    def _check_jerk_faults(self, features: Dict[str, float]) -> List[Dict[str, Any]]:
+    def _check_jerk_faults(self, features: dict[str, float]) -> list[dict[str, Any]]:
         """Check jerk-specific faults.
 
         Jerk phases: 0=Dip, 1=Drive, 2=Recovery.
         Note: Walking forward/backward during recovery is NORMAL for jerk.
         """
-        faults: List[Dict[str, Any]] = []
+        faults: list[dict[str, Any]] = []
 
         # shallow_dip
         # Dip depth < p10 = insufficient dip before drive
@@ -425,9 +405,7 @@ class CompiledAnalyzer:
         # Elbow angle variance > p90
         val = features.get("elbow_angle_variance", 0)
         if val > self._get_threshold("elbow_angle_variance", "p90"):
-            faults.append(
-                self._make_fault("press_out_jerk", val, "elbow_angle_variance")
-            )
+            faults.append(self._make_fault("press_out_jerk", val, "elbow_angle_variance"))
 
         # dip_pause / no_dip_pause
         # 90% of pro jerkers have dip_pause_detected=1.0. NOT having one is the fault.
@@ -453,8 +431,8 @@ class CompiledAnalyzer:
         fault_id: str,
         value: float,
         feature_name: str,
-        extra: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Create a fault dictionary."""
         fdef = FAULT_DEFS.get(fault_id, {})
         baseline = self.baselines.get(feature_name, {})
@@ -473,15 +451,13 @@ class CompiledAnalyzer:
 
         confidence = min(95, max(10, int(abs(deviation) * 30)))
 
-        fault: Dict[str, Any] = {
+        fault: dict[str, Any] = {
             "id": fault_id,
             "name": fdef.get("name", fault_id.replace("_", " ").title()),
             "severity": severity,
             "phase": phase,
             "description": fdef.get("description", "Technique issue detected."),
-            "coaching_cue": fdef.get(
-                "coaching_cue", "Review this aspect of your technique."
-            ),
+            "coaching_cue": fdef.get("coaching_cue", "Review this aspect of your technique."),
             "confidence": confidence,
             "deviation": deviation,
             "feature_value": value,
@@ -492,7 +468,7 @@ class CompiledAnalyzer:
         return fault
 
     @staticmethod
-    def _compute_deviation(value: float, baseline: Dict[str, float]) -> float:
+    def _compute_deviation(value: float, baseline: dict[str, float]) -> float:
         """Compute deviation in standard deviations from mean."""
         mean = baseline.get("mean", value)
         std = baseline.get("std", 1.0)
@@ -500,7 +476,7 @@ class CompiledAnalyzer:
             return (value - mean) / std
         return 0.0
 
-    def get_technique_score(self, faults: List[Dict[str, Any]]) -> Tuple[float, str]:
+    def get_technique_score(self, faults: list[dict[str, Any]]) -> tuple[float, str]:
         """Calculate overall technique score from detected faults.
 
         Returns:
@@ -531,8 +507,6 @@ class CompiledAnalyzer:
         elif score >= 50:
             assessment = "Fair technique with several areas needing work."
         else:
-            assessment = (
-                "Technique needs significant improvement across multiple areas."
-            )
+            assessment = "Technique needs significant improvement across multiple areas."
 
         return score, assessment

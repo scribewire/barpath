@@ -2,9 +2,8 @@
 Retrain lift detection classifier using all available labeled data.
 """
 
-from pathlib import Path
-from typing import Dict, List, Optional
 import pickle
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -13,7 +12,7 @@ from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import StandardScaler
 
 
-def get_all_csv_files() -> Dict[str, List[Path]]:
+def get_all_csv_files() -> dict[str, list[Path]]:
     """Get all labeled CSV files by category."""
     base = Path("outputs/male")
     categories = {}
@@ -35,7 +34,7 @@ def get_all_csv_files() -> Dict[str, List[Path]]:
     return categories
 
 
-def load_features(category: str, csv_files: List[Path]) -> tuple:
+def load_features(category: str, csv_files: list[Path]) -> tuple:
     """Load features and labels from CSV files."""
     from barpath.pipeline.lift_detection_features import extract_model_features_as_array
 
@@ -74,7 +73,7 @@ def load_features(category: str, csv_files: List[Path]) -> tuple:
 def train_classifier(
     X: np.ndarray,
     y: np.ndarray,
-    classes: List[str],
+    classes: list[str],
 ) -> RandomForestClassifier:
     """Train a RandomForest classifier."""
 
@@ -94,9 +93,9 @@ def train_classifier(
 
 def save_model(
     classifier: RandomForestClassifier,
-    scaler: Optional[StandardScaler],
-    feature_names: List[str],
-    classes: List[str],
+    scaler: StandardScaler | None,
+    feature_names: list[str],
+    classes: list[str],
     output_path: str,
 ) -> bool:
     """Save the trained model to a pickle file."""

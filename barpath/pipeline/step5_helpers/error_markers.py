@@ -13,6 +13,7 @@ from barpath.pipeline.config import (
     FAULT_COLORS_BGR,
 )
 
+from .overlay_metrics import OverlayMetrics
 
 # Mapping of fault IDs to fault categories for color assignment
 FAULT_CATEGORY_MAP = {
@@ -45,8 +46,8 @@ def find_fault_frame(df, fault_id, lift_type):
     """
     if fault_id in ("early_arm_bend", "press_out"):
         # Find frame with max elbow angle during pull phase (phase 0)
-        pull_mask = df['bar_phase'] == 0
-        elbow_cols = [c for c in df.columns if 'elbow_angle' in c]
+        pull_mask = df["bar_phase"] == 0
+        elbow_cols = [c for c in df.columns if "elbow_angle" in c]
         if elbow_cols and pull_mask.any():
             pull_frames = df[pull_mask]
             col = elbow_cols[0]
@@ -55,8 +56,8 @@ def find_fault_frame(df, fault_id, lift_type):
 
     elif fault_id in ("hitching", "slow_turnover"):
         # Find first velocity reversal (acceleration sign change)
-        if 'accel_y_smooth' in df.columns:
-            accel = df['accel_y_smooth'].dropna()
+        if "accel_y_smooth" in df.columns:
+            accel = df["accel_y_smooth"].dropna()
             if len(accel) > 1:
                 sign_changes = np.where(np.diff(np.signbit(accel)))[0]
                 if len(sign_changes) > 0:
@@ -64,15 +65,15 @@ def find_fault_frame(df, fault_id, lift_type):
 
     elif fault_id in ("incomplete_extension", "premature_jump"):
         # Find frame where peak velocity occurs
-        if 'vel_y_smooth' in df.columns:
-            vel = df['vel_y_smooth'].dropna()
+        if "vel_y_smooth" in df.columns:
+            vel = df["vel_y_smooth"].dropna()
             if len(vel) > 0:
                 return vel.idxmax()
 
     elif fault_id in ("knee_cave", "unstable_recovery", "recovery_bounce"):
         # Place at midpoint of relevant phase (phase 0 for knee_cave, phase 2 for recovery)
         target_phase = 0 if fault_id == "knee_cave" else 2
-        phase_mask = df['bar_phase'] == target_phase
+        phase_mask = df["bar_phase"] == target_phase
         if phase_mask.any():
             phase_indices = df[phase_mask].index
             mid_idx = len(phase_indices) // 2
@@ -80,7 +81,7 @@ def find_fault_frame(df, fault_id, lift_type):
 
     elif fault_id in ("high_catch", "slow_first_pull"):
         # Place at phase 1→2 transition midpoint
-        phase1_mask = df['bar_phase'] == 1
+        phase1_mask = df["bar_phase"] == 1
         if phase1_mask.any():
             phase1_indices = df[phase1_mask].index
             return phase1_indices[-1]
@@ -88,8 +89,18 @@ def find_fault_frame(df, fault_id, lift_type):
     return None
 
 
-def draw_error_markers(frame, analysis_result, df, path_points, path_phases,
-                       max_path_index, shake_x, shake_y, lift_type):
+def draw_error_markers(
+    frame,
+    analysis_result,
+    df,
+    path_points,
+    path_phases,
+    max_path_index,
+    shake_x,
+    shake_y,
+    lift_type,
+    overlay_metrics=None,
+):
     """Draw fault error markers on bar path.
 
     Top 3 faults by confidence rendered as colored triangles.
@@ -112,19 +123,20 @@ def draw_error_markers(frame, analysis_result, df, path_points, path_phases,
     if analysis_result is None:
         return []
 
-    faults = analysis_result.get('compiled_faults', [])
+    metrics = overlay_metrics or OverlayMetrics.for_frame(frame.shape[1], frame.shape[0])
+    faults = analysis_result.get("compiled_faults", [])
     if not faults:
         return []
 
     # Sort by confidence descending, take top 3
-    sorted_faults = sorted(faults, key=lambda f: f.get('confidence', 0), reverse=True)
+    sorted_faults = sorted(faults, key=lambda f: f.get("confidence", 0), reverse=True)
     top_faults = sorted_faults[:3]
-    remaining_faults = [f.get('name', f.get('id', 'Unknown')) for f in sorted_faults[3:]]
+    remaining_faults = [f.get("name", f.get("id", "Unknown")) for f in sorted_faults[3:]]
 
     for fault in top_faults:
-        fault_id = fault.get('id', '')
-        fault_name = fault.get('name', fault_id)
-        confidence = fault.get('confidence', 0)
+        fault_id = fault.get("id", "")
+        fault_name = fault.get("name", fault_id)
+        confidence = fault.get("confidence", 0)
 
         # Validate confidence is numeric
         try:
@@ -155,22 +167,40 @@ def draw_error_markers(frame, analysis_result, df, path_points, path_phases,
         color = FAULT_COLORS_BGR.get(category, (0, 0, 255))
 
         # Draw filled triangle
-        size = ERROR_TRIANGLE_SIZE
-        pts = np.array([
-            [px, py - size],                    # top point (apex)
-            [px - size // 2, py + size // 2],   # bottom-left
-            [px + size // 2, py + size // 2],   # bottom-right
-        ], np.int32)
+        size = metrics.px(ERROR_TRIANGLE_SIZE)
+        pts = np.array(
+            [
+                [px, py - size],  # top point (apex)
+                [px - size // 2, py + size // 2],  # bottom-left
+                [px + size // 2, py + size // 2],  # bottom-right
+            ],
+            np.int32,
+        )
         cv2.fillPoly(frame, [pts], color)
 
         # Draw fault name label below triangle with black background
-        label_y = py + ERROR_TEXT_Y_OFFSET
-        text_size = cv2.getTextSize(fault_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-        pad = 4
-        bg_tl = (px - 30 - pad, label_y - text_size[1] - pad)
-        bg_br = (px - 30 + text_size[0] + pad, label_y + pad)
+        label_y = py + metrics.px(ERROR_TEXT_Y_OFFSET)
+        font_scale = metrics.font(0.6)
+        text_thickness = metrics.px(2)
+        text_size = cv2.getTextSize(
+            fault_name, cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_thickness
+        )[0]
+        pad = metrics.px(4)
+        text_x = px - text_size[0] // 2
+        text_x = max(pad, min(frame.shape[1] - text_size[0] - pad, text_x))
+        label_y = min(frame.shape[0] - pad, max(text_size[1] + pad, label_y))
+        bg_tl = (text_x - pad, label_y - text_size[1] - pad)
+        bg_br = (text_x + text_size[0] + pad, label_y + pad)
         cv2.rectangle(frame, bg_tl, bg_br, (0, 0, 0), -1)
-        cv2.putText(frame, fault_name, (px - 30, label_y), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6, color, 2, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            fault_name,
+            (text_x, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            color,
+            text_thickness,
+            cv2.LINE_AA,
+        )
 
     return remaining_faults

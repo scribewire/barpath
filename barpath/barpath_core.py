@@ -16,6 +16,7 @@ already contains a ``raw_data.pkl``.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import pickle
@@ -57,8 +58,6 @@ else:
         class InsufficientDataError(Exception):
             """Fallback error when step2 helpers cannot be imported."""
 
-            pass
-
 
 def _import_step_function(step_file: Path, function_name: str) -> Any:
     """Dynamically import a function from a step file."""
@@ -93,9 +92,7 @@ step_3_generate_graphs = _import_step_function(
 plot_superimposed_paths = _import_step_function(
     pipeline_dir / "3_generate_graphs.py", "plot_superimposed_paths"
 )
-critique_lift = _import_step_function(
-    pipeline_dir / "4_critique_lift.py", "critique_lift"
-)
+critique_lift = _import_step_function(pipeline_dir / "4_critique_lift.py", "critique_lift")
 step_5_render_video = _import_step_function(
     pipeline_dir / "5_render_video.py", "step_5_render_video"
 )
@@ -110,9 +107,7 @@ def _detect_lift_type_auto(csv_path: str | Path) -> str:
             predict_lift_type,
         )
 
-        model_path = str(
-            barpath_dir / "models" / "lift_detection" / "lift_detection_model.pkl"
-        )
+        model_path = str(barpath_dir / "models" / "lift_detection" / "lift_detection_model.pkl")
         model_data = load_lift_detection_model(model_path)
         if model_data is None:
             print("Warning: lift detection model not found, defaulting to 'clean'.")
@@ -232,9 +227,7 @@ def run_pipeline_from_folder(
         yield ("step4", None, f"Analyzing {lift_type} technique...")
 
         check_cancel()
-        analysis_result = critique_lift(
-            df_indexed, lift_type, str(output_folder), lifter
-        )
+        analysis_result = critique_lift(df_indexed, lift_type, str(output_folder), lifter)
 
         if not analysis_result:
             message = "Analysis complete (No phases detected?)"
@@ -307,7 +300,7 @@ def run_batch_postprocess(
     check_cancel()
 
     video_data_list = []
-    for label, video_dir in zip(video_labels, video_output_dirs):
+    for label, video_dir in zip(video_labels, video_output_dirs, strict=False):
         csv_path = Path(video_dir) / analysis_csv_name
         if not csv_path.exists():
             print(f"  Warning: no analysis CSV found at {csv_path} — skipping lift.")
@@ -446,10 +439,8 @@ def run_pipeline(
             with open(raw_data_path, "rb") as _f:
                 _pkl = pickle.load(_f)
             _pkl.setdefault("metadata", {})["lift_type"] = detected_lift
-            try:
+            with contextlib.suppress(InsufficientDataError):
                 step_2_analyze_data(_pkl, analysis_csv_path)
-            except InsufficientDataError:
-                pass
             del _pkl
             yield (
                 "step2",
@@ -482,7 +473,9 @@ def run_pipeline(
         if not analysis_result:
             message = "Analysis complete (No phases detected?)"
         else:
-            message = f"Analysis complete. Report saved to {os.path.join(output_dir, 'analysis.md')}"
+            message = (
+                f"Analysis complete. Report saved to {os.path.join(output_dir, 'analysis.md')}"
+            )
 
         yield ("step4", None, message)
     else:

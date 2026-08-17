@@ -1,8 +1,8 @@
 """Tests for realtime_processing package __init__.py re-exports."""
 
 import ast
+import re
 from pathlib import Path
-
 
 PACKAGE_INIT = Path("barpath/pipeline/realtime_processing/__init__.py")
 
@@ -20,29 +20,38 @@ class TestRealtimeProcessingInit:
         ast.parse(content)  # Raises SyntaxError if invalid
 
     def test_import_circular_frame_buffer(self):
-        """__init__.py contains `from .live_buffer import CircularFrameBuffer, FrameData`."""
+        """__init__.py re-exports CircularFrameBuffer and FrameData."""
         content = PACKAGE_INIT.read_text()
-        assert "from .live_buffer import CircularFrameBuffer, FrameData" in content
+        assert "from .live_buffer import" in content
+        assert "CircularFrameBuffer" in content
+        assert "FrameData" in content
 
     def test_import_lift_detection_system(self):
-        """__init__.py contains `from .live_detection_system import LiftDetectionSystem, DetectionState`."""
+        """__init__.py re-exports LiftDetectionSystem and DetectionState."""
         content = PACKAGE_INIT.read_text()
-        assert "from .live_detection_system import LiftDetectionSystem, DetectionState" in content
+        assert "from .live_detection_system import" in content
+        assert "LiftDetectionSystem" in content
+        assert "DetectionState" in content
 
     def test_import_live_lift_recognizer(self):
-        """__init__.py contains `from .live_lift_recognition import LiveLiftRecognizer, LiftState`."""
+        """__init__.py re-exports LiveLiftRecognizer and LiftState."""
         content = PACKAGE_INIT.read_text()
-        assert "from .live_lift_recognition import LiveLiftRecognizer, LiftState" in content
+        assert "from .live_lift_recognition import" in content
+        assert "LiveLiftRecognizer" in content
+        assert "LiftState" in content
 
     def test_import_live_feature_extractor(self):
-        """__init__.py contains `from .live_feature_extractor import LiveFeatureExtractor`."""
+        """__init__.py re-exports LiveFeatureExtractor."""
         content = PACKAGE_INIT.read_text()
-        assert "from .live_feature_extractor import LiveFeatureExtractor" in content
+        assert "from .live_feature_extractor import" in content
+        assert "LiveFeatureExtractor" in content
 
     def test_all_exports_defined(self):
         """__all__ lists all public symbols."""
         content = PACKAGE_INIT.read_text()
-        expected_symbols = [
+        match = re.search(r"__all__\s*=\s*(\[[^\]]*\])", content, re.DOTALL)
+        assert match, "__all__ list not found"
+        expected_symbols = {
             "CircularFrameBuffer",
             "FrameData",
             "LiftDetectionSystem",
@@ -50,9 +59,9 @@ class TestRealtimeProcessingInit:
             "LiveFeatureExtractor",
             "LiveLiftRecognizer",
             "LiftState",
-        ]
+        }
         for symbol in expected_symbols:
-            assert symbol in content, f"__all__ should include {symbol}"
+            assert symbol in match.group(1), f"__all__ should include {symbol}"
 
     def test_has_docstring(self):
         """__init__.py includes a package docstring."""

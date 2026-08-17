@@ -1,6 +1,7 @@
 import argparse
 import os
 from pathlib import Path
+
 import matplotlib
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
@@ -27,7 +28,6 @@ from config import (
     START_MARKER_EDGE,
 )
 
-
 PHASE_LABELS_BY_LIFT = {
     "snatch": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
     "clean": {0: "Pull", 1: "Pull-under", 2: "Recovery"},
@@ -43,10 +43,7 @@ def _get_phase_labels(lift_type: str = "snatch") -> dict:
 def _phase_legend_handles(lift_type: str = "snatch"):
     """Return a list of legend patch handles for the three phases."""
     labels = _get_phase_labels(lift_type)
-    return [
-        mpatches.Patch(color=PHASE_COLORS[i], label=labels[i])
-        for i in sorted(PHASE_COLORS)
-    ]
+    return [mpatches.Patch(color=PHASE_COLORS[i], label=labels[i]) for i in sorted(PHASE_COLORS)]
 
 
 def _add_phase_shading(ax, phase_series, time_series):
@@ -155,9 +152,7 @@ def _plot_phase_path(ax, x_vals, y_vals, phase_vals, linewidth=2.0):
 
             color = PHASE_COLORS[current_phase % len(PHASE_COLORS)]
             label = (
-                PHASE_LABELS[current_phase]
-                if current_phase not in seen_phases
-                else "_nolegend_"
+                PHASE_LABELS[current_phase] if current_phase not in seen_phases else "_nolegend_"
             )
             seen_phases.add(current_phase)
 
@@ -260,9 +255,7 @@ def _plot_xy_path(df, x_col, y_col, title, filename, output_dir):
 
     path_data_df = df[path_cols].dropna()
     if len(path_data_df) < 2:
-        print(
-            f"Warning: Insufficient data for '{title}' ({len(path_data_df)} points). Skipping."
-        )
+        print(f"Warning: Insufficient data for '{title}' ({len(path_data_df)} points). Skipping.")
         return None
 
     x_vals = path_data_df[x_col].values
@@ -288,7 +281,7 @@ def _plot_xy_path(df, x_col, y_col, title, filename, output_dir):
     existing_handles, existing_labels = ax.get_legend_handles_labels()
     marker_handles = [
         h
-        for h, lbl in zip(existing_handles, existing_labels)
+        for h, lbl in zip(existing_handles, existing_labels, strict=False)
         if lbl in ("Start", "End")
     ]
     ax.legend(handles=phase_handles + marker_handles, loc="best", fontsize=9)
@@ -311,9 +304,7 @@ def _plot_timeseries(df, y_col, title, y_label, output_dir):
 
     valid_data = df[["time_s", y_col]].dropna()
     if len(valid_data) < 2:
-        print(
-            f"Warning: Insufficient data for '{title}' ({len(valid_data)} points). Skipping."
-        )
+        print(f"Warning: Insufficient data for '{title}' ({len(valid_data)} points). Skipping.")
         return None
 
     fig, ax = plt.subplots(figsize=(GRAPH_WIDTH_TIMESERIES, GRAPH_HEIGHT_TIMESERIES))
@@ -349,7 +340,7 @@ def _plot_timeseries(df, y_col, title, y_label, output_dir):
     data_handle, _ = ax.get_legend_handles_labels()
     # The data line is the last handle added
     ax.legend(
-        handles=phase_handles + [data_handle[-1]] if data_handle else phase_handles,
+        handles=[*phase_handles, data_handle[-1]] if data_handle else phase_handles,
         fontsize=9,
         loc="best",
     )
@@ -717,7 +708,7 @@ def plot_superimposed_paths(
         return
 
     # Scale non-reference lifts
-    lift_paths, scale_factors = _compute_scaled_paths(raw_lift_paths)
+    lift_paths, _scale_factors = _compute_scaled_paths(raw_lift_paths)
 
     _draw_superimposed_figure(
         lift_paths,

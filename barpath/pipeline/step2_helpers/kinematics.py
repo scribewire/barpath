@@ -5,7 +5,7 @@ Handles barbell position processing, velocity/acceleration calculations,
 and phase detection for snatch, clean, and jerk.
 """
 
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -48,9 +48,7 @@ def calculate_stabilized_position(df: pd.DataFrame) -> pd.DataFrame:
             lambda x: x[1] if isinstance(x, (list, tuple)) else np.nan
         )
     else:
-        print(
-            "Warning: 'barbell_center' column not found. No barbell data will be processed."
-        )
+        print("Warning: 'barbell_center' column not found. No barbell data will be processed.")
         df["barbell_x_raw"] = np.nan
         df["barbell_y_raw"] = np.nan
 
@@ -92,18 +90,14 @@ def smooth_barbell_position(df: pd.DataFrame) -> pd.DataFrame:
             pd.Series(y_filled), window=window, poly=SAVGOL_POLY_ORDER
         )
     else:
-        print(
-            "Warning: Not enough data to smooth barbell position. Using unsmoothed values."
-        )
+        print("Warning: Not enough data to smooth barbell position. Using unsmoothed values.")
         df["barbell_x_smooth"] = x_filled
         df["barbell_y_smooth"] = y_filled
 
     return df
 
 
-def truncate_at_knee_pass(
-    df: pd.DataFrame, fps: float, frame_height: int
-) -> pd.DataFrame:
+def truncate_at_knee_pass(df: pd.DataFrame, fps: float, frame_height: int) -> pd.DataFrame:
     """
     Truncate data to only include frames after the bar passes the knees.
 
@@ -160,8 +154,6 @@ def truncate_at_knee_pass(
 
 class InsufficientDataError(Exception):
     """Raised when there's not enough valid data to analyze."""
-
-    pass
 
 
 def truncate_at_peak_height(df: pd.DataFrame) -> pd.DataFrame:
@@ -236,9 +228,7 @@ def calculate_time_and_kinematics(df: pd.DataFrame, fps: float) -> pd.DataFrame:
 
     if n >= 5 and n >= window:
         print(f"  Smoothing velocity with window {window}...")
-        df["vel_y_smooth"] = safe_savgol_smooth(
-            vel_filled, window=window, poly=SAVGOL_POLY_ORDER
-        )
+        df["vel_y_smooth"] = safe_savgol_smooth(vel_filled, window=window, poly=SAVGOL_POLY_ORDER)
     else:
         print("Warning: Not enough data to smooth velocity.")
         df["vel_y_smooth"] = vel_filled
@@ -289,9 +279,7 @@ def detect_three_phases(df: pd.DataFrame, fps: float) -> pd.Series:
     pull_start_idx = int(bar_moving_up.idxmax())
 
     hip_after_pull = hip_y.loc[pull_start_idx:]
-    hip_smooth = safe_savgol_smooth(
-        hip_after_pull, window=PHASE_HIP_SMOOTH_WINDOW, poly=3
-    )
+    hip_smooth = safe_savgol_smooth(hip_after_pull, window=PHASE_HIP_SMOOTH_WINDOW, poly=3)
     hip_vel = hip_smooth.diff().fillna(0)
 
     hip_std_val = hip_smooth.std()
@@ -299,21 +287,17 @@ def detect_three_phases(df: pd.DataFrame, fps: float) -> pd.Series:
         hip_std_float: float = float(hip_std_val)
     else:
         hip_std_float = float(hip_std_val.item())
-    hip_drop_threshold = (
-        hip_std_float * PHASE_HIP_DROP_STD_FACTOR if hip_std_float > 0 else 0.5
-    )
+    hip_drop_threshold = hip_std_float * PHASE_HIP_DROP_STD_FACTOR if hip_std_float > 0 else 0.5
     hips_dropping = hip_vel > hip_drop_threshold
 
-    pull_under_start_idx: Optional[int] = None
+    pull_under_start_idx: int | None = None
     if hips_dropping.any():
         pull_under_start_idx = int(hips_dropping.idxmax())
 
-    recovery_start_idx: Optional[int] = None
+    recovery_start_idx: int | None = None
     if pull_under_start_idx is not None:
         hip_after_pu = hip_y.loc[pull_under_start_idx:]
-        hip_smooth_pu = safe_savgol_smooth(
-            hip_after_pu, window=PHASE_HIP_SMOOTH_WINDOW, poly=3
-        )
+        hip_smooth_pu = safe_savgol_smooth(hip_after_pu, window=PHASE_HIP_SMOOTH_WINDOW, poly=3)
         hip_vel_pu = hip_smooth_pu.diff().fillna(0)
         hips_stopped = hip_vel_pu <= hip_drop_threshold * 0.5
 
@@ -363,14 +347,10 @@ def detect_jerk_phases(df: pd.DataFrame, fps: float) -> pd.Series:
         print("Warning: Not enough data for jerk phase detection")
         return phase
 
-    has_knee_angles = (
-        "left_knee_angle" in df.columns and "right_knee_angle" in df.columns
-    )
+    has_knee_angles = "left_knee_angle" in df.columns and "right_knee_angle" in df.columns
 
     # Compute torso (shoulder-to-hip) distance for minimum dip depth
-    frame_height = (
-        float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 1080.0
-    )
+    frame_height = float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 1080.0
     torso_length_px = frame_height * 0.3  # default fallback
     if all(
         c in df.columns
@@ -395,9 +375,7 @@ def detect_jerk_phases(df: pd.DataFrame, fps: float) -> pd.Series:
         knee_angles = pd.Series(knee_angles, index=df.index, dtype="float64")
         knee_angles = knee_angles.interpolate(method="linear").bfill().ffill()
         knee_vel = knee_angles.diff().fillna(0) * fps
-        knee_vel_series = pd.Series(knee_vel, index=df.index, dtype="float64").astype(
-            "float64"
-        )
+        knee_vel_series = pd.Series(knee_vel, index=df.index, dtype="float64").astype("float64")
         knee_vel_smooth = safe_savgol_smooth(
             cast(pd.Series, knee_vel_series),
             window=min(7, len(knee_vel_series) // 2 * 2 + 1),
@@ -407,12 +385,10 @@ def detect_jerk_phases(df: pd.DataFrame, fps: float) -> pd.Series:
         print("Warning: No knee angle data, falling back to barbell-only detection")
 
     vel_series = pd.Series(vel, index=df.index, dtype="float64")
-    vel_smooth = safe_savgol_smooth(
-        vel_series, window=min(7, len(vel_series) // 2 * 2 + 1), poly=3
-    )
+    vel_smooth = safe_savgol_smooth(vel_series, window=min(7, len(vel_series) // 2 * 2 + 1), poly=3)
 
-    dip_start_idx: Optional[int] = None
-    drive_start_idx: Optional[int] = None
+    dip_start_idx: int | None = None
+    drive_start_idx: int | None = None
 
     if has_knee_angles and knee_vel_smooth is not None and knee_angles is not None:
         knee_angle_decreasing = knee_vel_smooth < -JERK_DIP_VELOCITY_THRESHOLD
@@ -449,9 +425,7 @@ def detect_jerk_phases(df: pd.DataFrame, fps: float) -> pd.Series:
                     continue
 
                 dip_start_idx = int(idx)
-                print(
-                    f"  Jerk dip detected (knee bend): frame {dip_start_idx} -> {dip_end_idx}"
-                )
+                print(f"  Jerk dip detected (knee bend): frame {dip_start_idx} -> {dip_end_idx}")
                 print(f"    Knee angle change: {angle_change:.1f} degrees")
                 print(
                     f"    Dip displacement: {dip_displacement:.1f}px "
@@ -465,16 +439,12 @@ def detect_jerk_phases(df: pd.DataFrame, fps: float) -> pd.Series:
 
             if bool(knee_extending.any()):
                 drive_start_idx = int(knee_extending.idxmax())
-                print(
-                    f"  Jerk drive starts at frame {drive_start_idx} (knees extending)"
-                )
+                print(f"  Jerk drive starts at frame {drive_start_idx} (knees extending)")
     else:
         moving_down = vel_smooth > JERK_DIP_VELOCITY_THRESHOLD
 
         if not bool(moving_down.any()):
-            print(
-                "Warning: Could not detect dip phase - no downward bar movement found"
-            )
+            print("Warning: Could not detect dip phase - no downward bar movement found")
             return phase
 
         down_indices = moving_down[moving_down].index
@@ -498,9 +468,7 @@ def detect_jerk_phases(df: pd.DataFrame, fps: float) -> pd.Series:
 
             if displacement >= min_dip_depth_px:
                 dip_start_idx = int(idx)
-                print(
-                    f"  Jerk dip detected (barbell): frame {dip_start_idx} -> {dip_end_idx}"
-                )
+                print(f"  Jerk dip detected (barbell): frame {dip_start_idx} -> {dip_end_idx}")
                 print(
                     f"    Displacement: {displacement:.1f}px "
                     f"({displacement / torso_length_px * 100:.0f}% of torso)"
@@ -519,7 +487,7 @@ def detect_jerk_phases(df: pd.DataFrame, fps: float) -> pd.Series:
         print("Warning: No dip detected")
         return phase
 
-    recovery_start_idx: Optional[int] = None
+    recovery_start_idx: int | None = None
     if drive_start_idx is not None:
         drive_velocities = vel_smooth.loc[drive_start_idx:]
         peak_drive_vel = drive_velocities.min()

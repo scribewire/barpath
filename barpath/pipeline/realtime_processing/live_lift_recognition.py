@@ -13,7 +13,7 @@ import time
 from collections import deque
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -25,13 +25,13 @@ from barpath.pipeline.lift_detection_features import (
     load_lift_detection_model,
     predict_lift_type,
 )
-from .live_window_features import extract_window_features
 from barpath.pipeline.step4_helpers.compiled_analyzer import (
     CompiledAnalyzer,
     load_baselines_from_json,
 )
 from barpath.pipeline.step4_helpers.feature_extraction import extract_technique_features
 
+from .live_window_features import extract_window_features
 
 # ============================================================================
 # Phase color scheme (matches step 5 PHASE_COLOR_SCHEMES)
@@ -68,18 +68,18 @@ class FrameData:
     """Data captured from a single frame."""
 
     __slots__ = (
-        "barbell_center",
         "barbell_box",
-        "landmarks",
+        "barbell_center",
         "knee_y_avg",
+        "landmarks",
         "timestamp_ms",
     )
 
     def __init__(
         self,
-        barbell_center: Optional[Tuple[float, float]],
-        barbell_box: Optional[Tuple[int, int, int, int]],
-        landmarks: Dict[int, Tuple[float, float, float, float]],
+        barbell_center: tuple[float, float] | None,
+        barbell_box: tuple[int, int, int, int] | None,
+        landmarks: dict[int, tuple[float, float, float, float]],
         knee_y_avg: float,
         timestamp_ms: float,
     ):
@@ -133,34 +133,30 @@ class LiveLiftRecognizer:
         self._trigger_count = 0
 
         # Lift recording
-        self._lift_frames: List[FrameData] = []
+        self._lift_frames: list[FrameData] = []
         self._recording_frame_count = 0
 
         # Classification result
-        self._predicted_class: Optional[str] = None
+        self._predicted_class: str | None = None
         self._predicted_confidence: float = 0.0
         self._is_clean_jerk: bool = False
         self._display_start_time: float = 0.0
 
         # Display stack for clean + jerk sequence
-        self._display_stack: List[str] = []
+        self._display_stack: list[str] = []
 
         # Live preview window classification
-        self._live_model_data: Optional[Dict[str, Any]] = None
+        self._live_model_data: dict[str, Any] | None = None
         self._live_model_loaded: bool = False
-        self._live_model_path = model_path.replace(
-            "lift_detection_model", "live_lift_model"
-        )
-        self._class_prob_history: deque[Dict[str, float]] = deque(maxlen=20)
+        self._live_model_path = model_path.replace("lift_detection_model", "live_lift_model")
+        self._class_prob_history: deque[dict[str, float]] = deque(maxlen=20)
         self._classification_interval = 5  # classify every 5 frames
         self._frame_counter = 0
 
         # Shoulder wait state
         self._shoulder_wait_start_time: float = 0.0
         self._shoulder_wait_timeout: float = 3.0  # seconds to wait for jerk
-        self._shoulder_reference_y: float = (
-            0.0  # y position when entering shoulder wait
-        )
+        self._shoulder_reference_y: float = 0.0  # y position when entering shoulder wait
 
         # Post-peak stabilization detection
         self._peak_detected: bool = False
@@ -177,24 +173,24 @@ class LiveLiftRecognizer:
         self._expecting_jerk: bool = False
 
         # Path drawing state
-        self._path_points: List[Tuple[int, int]] = []
-        self._path_phases: List[int] = []
-        self._trimmed_path_points: List[Tuple[int, int]] = []
-        self._trimmed_path_phases: List[int] = []
+        self._path_points: list[tuple[int, int]] = []
+        self._path_phases: list[int] = []
+        self._trimmed_path_points: list[tuple[int, int]] = []
+        self._trimmed_path_phases: list[int] = []
 
         # Analysis result
-        self._top_fault: Optional[Dict[str, Any]] = None
+        self._top_fault: dict[str, Any] | None = None
         self._tip_display_start: float = 0.0
 
         # Model (legacy fallback)
-        self._model_data: Optional[Dict[str, Any]] = None
+        self._model_data: dict[str, Any] | None = None
         self._model_loaded: bool = False
         self._model_path = model_path
 
         # Baseline loading (lazy)
         self._lifter = lifter
         self._gender = gender
-        self._baselines: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None
+        self._baselines: dict[str, dict[str, dict[str, float]]] | None = None
         self._baselines_loaded: bool = False
 
     def _load_baselines(self) -> None:
@@ -266,9 +262,7 @@ class LiveLiftRecognizer:
                 self._predicted_class = "JERK"
                 self._predicted_confidence = 0.95
                 self._class_prob_history.clear()
-                self._class_prob_history.append(
-                    {"snatch": 0.0, "clean": 0.0, "jerk": 1.0}
-                )
+                self._class_prob_history.append({"snatch": 0.0, "clean": 0.0, "jerk": 1.0})
                 return
 
         df = build_lift_dataframe(
@@ -300,7 +294,7 @@ class LiveLiftRecognizer:
         probs = model["classifier"].predict_proba(X_scaled)[0]
         classes = [str(c) for c in model["classifier"].classes_]
 
-        prob_dict = {c: float(p) for c, p in zip(classes, probs)}
+        prob_dict = {c: float(p) for c, p in zip(classes, probs, strict=False)}
         self._class_prob_history.append(prob_dict)
         self._update_smoothed_prediction()
 
@@ -310,7 +304,7 @@ class LiveLiftRecognizer:
             return
 
         # Simple average of recent probabilities
-        avg_probs: Dict[str, float] = {}
+        avg_probs: dict[str, float] = {}
         for key in self._class_prob_history[0]:
             values = [p[key] for p in self._class_prob_history if key in p]
             avg_probs[key] = float(np.mean(values)) if values else 0.0
@@ -323,9 +317,9 @@ class LiveLiftRecognizer:
 
     def update(
         self,
-        barbell_center: Optional[Tuple[float, float]],
-        barbell_box: Optional[Tuple[int, int, int, int]],
-        landmarks: Dict[int, Tuple[float, float, float, float]],
+        barbell_center: tuple[float, float] | None,
+        barbell_box: tuple[int, int, int, int] | None,
+        landmarks: dict[int, tuple[float, float, float, float]],
         timestamp_ms: float,
         frame_width: int,
         frame_height: int,
@@ -370,7 +364,7 @@ class LiveLiftRecognizer:
 
     def _compute_knee_y(
         self,
-        landmarks: Dict[int, Tuple[float, float, float, float]],
+        landmarks: dict[int, tuple[float, float, float, float]],
         frame_height: int,
     ) -> float:
         """Compute average knee y-coordinate in pixels."""
@@ -420,7 +414,12 @@ class LiveLiftRecognizer:
         buf_max = self._buffer.maxlen
 
         # Signal 1: Classic - bar passes knees going up
-        if frame_data.knee_y_avg is not None and buf_max is not None and bar_y <= frame_data.knee_y_avg and len(self._buffer) >= buf_max:
+        if (
+            frame_data.knee_y_avg is not None
+            and buf_max is not None
+            and bar_y <= frame_data.knee_y_avg
+            and len(self._buffer) >= buf_max
+        ):
             return True
 
         # Signal 2: Velocity-based trigger
@@ -446,7 +445,7 @@ class LiveLiftRecognizer:
 
         return False
 
-    def _compute_recent_velocities(self) -> List[float]:
+    def _compute_recent_velocities(self) -> list[float]:
         """Compute recent barbell velocities from buffer."""
         if len(self._buffer) < 2:
             return []
@@ -551,9 +550,7 @@ class LiveLiftRecognizer:
             self._trim_path_to_peak()
             self.state = LiftState.CLASSIFYING
 
-    def _update_shoulder_estimate(
-        self, frame_data: FrameData, frame_height: int
-    ) -> None:
+    def _update_shoulder_estimate(self, frame_data: FrameData, frame_height: int) -> None:
         """Update running estimate of shoulder height from landmarks."""
         lm = frame_data.landmarks
         left_sh = lm.get(11)
@@ -571,13 +568,9 @@ class LiveLiftRecognizer:
                 self._shoulder_y_estimate = avg_sh
             else:
                 # Running average
-                self._shoulder_y_estimate = (
-                    0.9 * self._shoulder_y_estimate + 0.1 * avg_sh
-                )
+                self._shoulder_y_estimate = 0.9 * self._shoulder_y_estimate + 0.1 * avg_sh
 
-    def _check_shoulder_stabilization(
-        self, frame_data: FrameData, frame_height: int
-    ) -> bool:
+    def _check_shoulder_stabilization(self, frame_data: FrameData, frame_height: int) -> bool:
         """Check if bar has stabilized at shoulder height (low velocity near shoulder)."""
         if frame_data.barbell_center is None:
             return False
@@ -615,9 +608,7 @@ class LiveLiftRecognizer:
             return False
 
         barbell_ys = [
-            f.barbell_center[1]
-            for f in self._lift_frames
-            if f.barbell_center is not None
+            f.barbell_center[1] for f in self._lift_frames if f.barbell_center is not None
         ]
         if len(barbell_ys) < 10:
             return False
@@ -642,9 +633,7 @@ class LiveLiftRecognizer:
 
         return False
 
-    def _check_post_peak_drop(
-        self, current_frame: FrameData, frame_height: int
-    ) -> bool:
+    def _check_post_peak_drop(self, current_frame: FrameData, frame_height: int) -> bool:
         """Check if bar has dropped significantly after peak."""
         if current_frame.barbell_center is None:
             return False
@@ -668,10 +657,9 @@ class LiveLiftRecognizer:
         peak_idx = 0
         peak_y = float("inf")
         for i, f in enumerate(self._lift_frames):
-            if f.barbell_center is not None:
-                if f.barbell_center[1] < peak_y:
-                    peak_y = f.barbell_center[1]
-                    peak_idx = i
+            if f.barbell_center is not None and f.barbell_center[1] < peak_y:
+                peak_y = f.barbell_center[1]
+                peak_idx = i
 
         # Trim path points to peak
         if peak_idx > 0 and peak_idx < len(self._path_points):
@@ -724,9 +712,7 @@ class LiveLiftRecognizer:
         hip_arr = np.array(hip_ys[: len(smoothed)], dtype=np.float64)
         self._path_phases = self._detect_path_phases(smoothed, frame_height, hip_arr)
 
-    def _smooth_path(
-        self, points: List[Tuple[int, int]], window: int = 5
-    ) -> List[Tuple[int, int]]:
+    def _smooth_path(self, points: list[tuple[int, int]], window: int = 5) -> list[tuple[int, int]]:
         """Apply simple moving average smoothing to path points."""
         if len(points) < window:
             return points
@@ -748,10 +734,10 @@ class LiveLiftRecognizer:
 
     def _detect_path_phases(
         self,
-        points: List[Tuple[int, int]],
+        points: list[tuple[int, int]],
         frame_height: int,
-        hip_y: Optional[np.ndarray] = None,
-    ) -> List[int]:
+        hip_y: np.ndarray | None = None,
+    ) -> list[int]:
         """Detect phases for path coloring.
 
         Uses the same logic as the normal post-process pipeline:
@@ -792,9 +778,7 @@ class LiveLiftRecognizer:
         return self._detect_phases_velocity_only(vel_arr, ys, n)
 
     @staticmethod
-    def _detect_phases_hip(
-        vel_smooth: np.ndarray, hip_y: np.ndarray, n: int
-    ) -> List[int]:
+    def _detect_phases_hip(vel_smooth: np.ndarray, hip_y: np.ndarray, n: int) -> list[int]:
         """Detect phases using hip velocity (matches normal pipeline).
 
         In image coordinates: positive hip velocity = hips moving DOWN
@@ -823,10 +807,7 @@ class LiveLiftRecognizer:
 
         # Smooth hip
         hw = min(9, len(hip_after) if len(hip_after) % 2 == 1 else len(hip_after) - 1)
-        if hw >= 3:
-            hip_sm = savgol_filter(hip_after, window_length=hw, polyorder=3)
-        else:
-            hip_sm = hip_after
+        hip_sm = savgol_filter(hip_after, window_length=hw, polyorder=3) if hw >= 3 else hip_after
         hip_sm = cast(np.ndarray, hip_sm)
         hip_vel = np.gradient(hip_sm)
 
@@ -836,24 +817,20 @@ class LiveLiftRecognizer:
         # In pixel coords: positive hip_vel = hips dropping DOWN = pull-under
         hips_dropping = hip_vel > hip_drop_thresh
 
-        pull_under_start: Optional[int] = None
+        pull_under_start: int | None = None
         if np.any(hips_dropping):
             pull_under_start = pull_start + int(np.argmax(hips_dropping))
 
-        recovery_start: Optional[int] = None
+        recovery_start: int | None = None
         if pull_under_start is not None:
             hip_after_pu = hip_y[pull_under_start:]
             if len(hip_after_pu) >= 5:
                 hw2 = min(
                     9,
-                    len(hip_after_pu)
-                    if len(hip_after_pu) % 2 == 1
-                    else len(hip_after_pu) - 1,
+                    len(hip_after_pu) if len(hip_after_pu) % 2 == 1 else len(hip_after_pu) - 1,
                 )
                 if hw2 >= 3:
-                    hip_sm2 = savgol_filter(
-                        hip_after_pu, window_length=hw2, polyorder=3
-                    )
+                    hip_sm2 = savgol_filter(hip_after_pu, window_length=hw2, polyorder=3)
                 else:
                     hip_sm2 = hip_after_pu
                 hip_sm2 = cast(np.ndarray, hip_sm2)
@@ -872,9 +849,7 @@ class LiveLiftRecognizer:
         return phases
 
     @staticmethod
-    def _detect_phases_velocity_only(
-        vel_smooth: np.ndarray, ys: np.ndarray, n: int
-    ) -> List[int]:
+    def _detect_phases_velocity_only(vel_smooth: np.ndarray, ys: np.ndarray, n: int) -> list[int]:
         """Fallback: detect phases from velocity and position only."""
         peak_vel_idx = int(np.argmin(vel_smooth))
         peak_height_idx = int(np.argmin(ys))
@@ -917,9 +892,7 @@ class LiveLiftRecognizer:
             return
 
         barbell_ys = [
-            f.barbell_center[1]
-            for f in self._lift_frames
-            if f.barbell_center is not None
+            f.barbell_center[1] for f in self._lift_frames if f.barbell_center is not None
         ]
         if not barbell_ys:
             self._predicted_class = "Unknown"
@@ -930,11 +903,7 @@ class LiveLiftRecognizer:
             return
 
         # Get final stabilized position (average of last 10 frames)
-        final_y = (
-            float(np.mean(barbell_ys[-10:]))
-            if len(barbell_ys) >= 10
-            else barbell_ys[-1]
-        )
+        final_y = float(np.mean(barbell_ys[-10:])) if len(barbell_ys) >= 10 else barbell_ys[-1]
         final_y_norm = final_y / frame_height
         start_y_norm = barbell_ys[0] / frame_height
 
@@ -1034,10 +1003,7 @@ class LiveLiftRecognizer:
             fps=self.fps,
         )
 
-        if self._model_data is not None:
-            result = predict_lift_type(df, self._model_data)
-        else:
-            result = None
+        result = predict_lift_type(df, self._model_data) if self._model_data is not None else None
 
         if result:
             raw_class = result["predicted_class"]
@@ -1078,28 +1044,20 @@ class LiveLiftRecognizer:
                     df_jerk = df.iloc[split_idx:]
                     clean_features = extract_technique_features(df_clean, "clean")
                     jerk_features = extract_technique_features(df_jerk, "jerk")
-                    clean_analyzer = CompiledAnalyzer(
-                        "clean", self._gender, self._baselines
-                    )
-                    jerk_analyzer = CompiledAnalyzer(
-                        "jerk", self._gender, self._baselines
-                    )
+                    clean_analyzer = CompiledAnalyzer("clean", self._gender, self._baselines)
+                    jerk_analyzer = CompiledAnalyzer("jerk", self._gender, self._baselines)
                     clean_faults = clean_analyzer.analyze(clean_features, df_clean)
                     jerk_faults = jerk_analyzer.analyze(jerk_features, df_jerk)
                     all_faults = clean_faults + jerk_faults
                     if all_faults:
-                        all_faults.sort(
-                            key=lambda f: f.get("confidence", 0), reverse=True
-                        )
+                        all_faults.sort(key=lambda f: f.get("confidence", 0), reverse=True)
                         self._top_fault = all_faults[0]
                     return
                 else:
                     analysis_lift_type = "clean"
 
             features = extract_technique_features(df, analysis_lift_type)
-            analyzer = CompiledAnalyzer(
-                analysis_lift_type, self._gender, self._baselines
-            )
+            analyzer = CompiledAnalyzer(analysis_lift_type, self._gender, self._baselines)
             faults = analyzer.analyze(features, df)
             if faults:
                 faults.sort(key=lambda f: f.get("confidence", 0), reverse=True)
@@ -1115,9 +1073,10 @@ class LiveLiftRecognizer:
             self._reset()
 
     @property
-    def current_tip(self) -> Optional[str]:
+    def current_tip(self) -> str | None:
         """Return coaching tip if within display duration, else None."""
         from barpath.pipeline.config import COACHING_TIP_DURATION_S
+
         if self.state == LiftState.DISPLAYING:
             elapsed = time.time() - self._tip_display_start
             if elapsed < COACHING_TIP_DURATION_S:
@@ -1243,8 +1202,8 @@ class LiveLiftRecognizer:
     def _draw_path(
         self,
         frame: np.ndarray,
-        points: List[Tuple[int, int]],
-        phases: List[int],
+        points: list[tuple[int, int]],
+        phases: list[int],
     ) -> None:
         """Draw phase-colored bar path on frame."""
         if len(points) < 2:
@@ -1263,7 +1222,7 @@ class LiveLiftRecognizer:
         if self._predicted_class is None:
             return
 
-        h, w = frame.shape[:2]
+        _h, w = frame.shape[:2]
         text = f"{self._predicted_class} ({self._predicted_confidence:.0%})"
 
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -1309,7 +1268,7 @@ class LiveLiftRecognizer:
         if not self._display_stack and self._predicted_class is None:
             return
 
-        h, w = frame.shape[:2]
+        _h, w = frame.shape[:2]
 
         # Use display stack for stacked labels (e.g., "CLEAN + JERK")
         if len(self._display_stack) > 1:

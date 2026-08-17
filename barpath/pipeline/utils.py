@@ -16,13 +16,14 @@ try:
 except ImportError:
     pd = None
 
+from barpath.pipeline.step5_helpers.overlay_metrics import OverlayMetrics
 
 # ============================================================================
 # VIDEO DRAWING UTILITIES
 # ============================================================================
 
 
-def draw_legend(image, colors):
+def draw_legend(image, colors, overlay_metrics=None):
     """
     Draws a color legend on the image.
 
@@ -36,28 +37,55 @@ def draw_legend(image, colors):
     if cv2 is None:
         return 0
 
-    y_offset = 30
+    metrics = overlay_metrics or OverlayMetrics.for_frame(image.shape[1], image.shape[0])
+    swatch_size = metrics.px(20)
+    row_spacing = metrics.px(30)
+    x_margin = metrics.px(15)
+    text_x = x_margin + metrics.px(30)
+    text_font = metrics.font(0.6)
+    text_thickness = metrics.px(2)
+
     for i, (name, color) in enumerate(colors.items()):
+        y = metrics.px(10) + i * row_spacing
         cv2.rectangle(
-            image, (15, 10 + i * y_offset), (35, 30 + i * y_offset), color, -1
+            image,
+            (x_margin, y),
+            (x_margin + swatch_size, y + swatch_size),
+            color,
+            -1,
         )
-        x, y = 45, 25 + i * y_offset
-        for dx, dy in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+        x, baseline = text_x, y + metrics.px(15)
+        for dx, dy in [
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ]:
             cv2.putText(
-                image, name, (x + dx, y + dy), cv2.FONT_HERSHEY_SIMPLEX,
-                0.6, (0, 0, 0), 2, cv2.LINE_AA,
+                image,
+                name,
+                (x + round(dx * metrics.scale), baseline + round(dy * metrics.scale)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                text_font,
+                (0, 0, 0),
+                text_thickness,
+                cv2.LINE_AA,
             )
         cv2.putText(
             image,
             name,
-            (x, y),
+            (x, baseline),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
+            text_font,
             (255, 255, 255),
-            2,
+            text_thickness,
             cv2.LINE_AA,
         )
-    return 15 + len(colors) * y_offset
+    return x_margin + len(colors) * row_spacing
 
 
 def get_connection_color(lm1_name, lm2_name, color_scheme):

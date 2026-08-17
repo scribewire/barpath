@@ -3,7 +3,7 @@
 
 This GUI is organized with a left sidebar that acts as navigation for 3 sections:
 - Files: manage input videos and choose an output directory (via system picker)
-- Settings: configure model + lift type using single-select horizontal button groups
+- Settings: configure model + lift type using single-select button groups
 - Analyze: run/cancel analysis, show progress, and display richer logs as HTML (WebView)
 
 Implementation notes:
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import os
 import queue
 import subprocess
@@ -28,9 +29,10 @@ from pathlib import Path
 from typing import Any
 
 import toga
-from gui_helpers.log_renderer import LogRenderer
-from gui_helpers.markdown_renderer import MarkdownRenderer
 from toga.style import Pack
+
+from barpath.gui_helpers.log_renderer import LogRenderer
+from barpath.gui_helpers.markdown_renderer import MarkdownRenderer
 
 # Prepare for lazy import of the pipeline runner
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -43,7 +45,7 @@ def _get_run_pipeline():
     """Lazy-load barpath_core.run_pipeline so the GUI starts faster."""
     global _run_pipeline
     if _run_pipeline is None:
-        from barpath_core import run_pipeline  # Local import keeps startup lightweight
+        from barpath.barpath_core import run_pipeline  # Local import keeps startup lightweight
 
         _run_pipeline = run_pipeline
     return _run_pipeline
@@ -53,7 +55,7 @@ def _get_run_batch_postprocess():
     """Lazy-load barpath_core.run_batch_postprocess so the GUI starts faster."""
     global _run_batch_postprocess
     if _run_batch_postprocess is None:
-        from barpath_core import run_batch_postprocess
+        from barpath.barpath_core import run_batch_postprocess
 
         _run_batch_postprocess = run_batch_postprocess
     return _run_batch_postprocess
@@ -63,7 +65,7 @@ def _get_run_pipeline_from_folder():
     """Lazy-load barpath_core.run_pipeline_from_folder so the GUI starts faster."""
     global _run_pipeline_from_folder
     if _run_pipeline_from_folder is None:
-        from barpath_core import run_pipeline_from_folder
+        from barpath.barpath_core import run_pipeline_from_folder
 
         _run_pipeline_from_folder = run_pipeline_from_folder
     return _run_pipeline_from_folder
@@ -135,28 +137,27 @@ class BarpathTogaApp(toga.App):
             "WEBM",
         ]
 
+        self._theme = self._get_theme()
+
         # --- Main window ---
         self.main_window = toga.MainWindow(
             title="Barpath - Weightlifting Analysis Tool",
             size=(840, 600),
+            on_resize=self._on_window_resize,
         )
 
         # Root: sidebar + content area
         root = toga.Box(style=Pack(direction="row", margin=10))
 
         # --- Sidebar (left): tab buttons + short tips ---
-        self.sidebar = toga.Box(
-            style=Pack(direction="column", width=220, margin_right=12)
-        )
+        self.sidebar = toga.Box(style=Pack(direction="column", width=220, margin_right=12))
 
         # Wrap "BARPATH" label in a centered container with flexible spacers
         barpath_label = toga.Label(
             "BARPATH",
             style=Pack(font_weight="bold", font_size=24),
         )
-        barpath_container = toga.Box(
-            style=Pack(direction="row", margin_bottom=10, margin_top=10)
-        )
+        barpath_container = toga.Box(style=Pack(direction="row", margin_bottom=10, margin_top=10))
         barpath_container.add(toga.Box(style=Pack(flex=1)))
         barpath_container.add(barpath_label)
         barpath_container.add(toga.Box(style=Pack(flex=1)))
@@ -176,7 +177,7 @@ class BarpathTogaApp(toga.App):
                 style=Pack(
                     margin_top=4,
                     font_size=9,
-                    color="#5B6472",
+                    color=self._theme["muted_text"],
                 ),
             )
             row = toga.Box(
@@ -184,7 +185,7 @@ class BarpathTogaApp(toga.App):
                     direction="column",
                     margin_bottom=8,
                     margin=8,
-                    background_color="#F2F3F7",
+                    background_color=self._theme["sidebar_surface"],
                 )
             )
             row.add(btn)
@@ -222,7 +223,10 @@ class BarpathTogaApp(toga.App):
         # Keep all pages mounted and toggle visibility to reduce repaints/flashing.
         self.page_host = toga.Box(
             style=Pack(
-                direction="column", flex=1, margin=10, background_color="#FFFFFF"
+                direction="column",
+                flex=1,
+                margin=10,
+                background_color=self._theme["page_background"],
             )
         )
 
@@ -265,6 +269,101 @@ class BarpathTogaApp(toga.App):
     # Page builders
     # ----------------------------
 
+    def _get_theme(self) -> dict[str, str]:
+        """Return semantic colors that follow the operating-system appearance."""
+        if self.dark_mode:
+            return {
+                "page_background": "#1E1E1E",
+                "sidebar_surface": "#2A2A2D",
+                "input_background": "#303033",
+                "primary_text": "#F2F2F2",
+                "muted_text": "#B8BEC9",
+                "disabled_surface": "#38383B",
+                "disabled_text": "#858A94",
+            }
+        return {
+            "page_background": "#FFFFFF",
+            "sidebar_surface": "#F2F3F7",
+            "input_background": "#F2F3F7",
+            "primary_text": "#222222",
+            "muted_text": "#5B6472",
+            "disabled_surface": "#E8E8E8",
+            "disabled_text": "#AAAAAA",
+        }
+
+    def _on_window_resize(self, window: toga.Window, **kwargs: Any) -> None:
+        """Reflow settings controls when the available content width changes."""
+        if not hasattr(self, "lift_button_row"):
+            return
+
+        width = getattr(getattr(window, "size", None), "width", 0)
+        content_width = max(0, int(width) - 280)
+        self._apply_settings_layout(content_width)
+
+    def _apply_settings_layout(self, content_width: int) -> None:
+        """Adapt settings copy and lift buttons to the content width."""
+        if not hasattr(self, "_lift_buttons"):
+            return
+
+        compact = content_width < 760
+        if compact:
+            self.model_hint_label.text = (
+                "Models are loaded from barpath/models. Supports .pt, .onnx,\n"
+                ".engine, and OpenVINO directories."
+            )
+            self.lift_type_hint_label.text = (
+                "Lift Type controls whether critique is generated.\n"
+                "(`none` disables technique critique.)"
+            )
+            self.lifter_hint_label.text = (
+                "Lifter determines the pro baseline used for Technique Analysis.\n"
+                "Falls back to pooled data when a specific baseline is unavailable."
+            )
+            self.technique_hint_label.text = (
+                "Technique Analysis detects faults using biomechanical rules\nand pro baselines."
+            )
+            self.use_filenames_switch.text = "Use filenames in\nsuperimposed path legend"
+            self.filenames_hint_label.text = (
+                "Default labels are 'Lift 1', 'Lift 2', etc. When checked,\n"
+                "the filename stem is used for the superimposed bar-path graph."
+            )
+            self.hud_hint_label.text = (
+                "Toggle individual HUD elements on/off for the\noutput video overlay."
+            )
+        else:
+            self.model_hint_label.text = "Models are loaded from barpath/models. Supports .pt, .onnx, .engine, and OpenVINO directories."
+            self.lift_type_hint_label.text = "Lift Type controls whether critique is generated (`none` disables technique critique)."
+            self.lifter_hint_label.text = "Lifter determines the pro baseline used for Technique Analysis. Falls back to pooled data when a specific baseline is unavailable."
+            self.technique_hint_label.text = (
+                "Technique Analysis detects faults using biomechanical rules and pro baselines."
+            )
+            self.use_filenames_switch.text = "Use filenames in superimposed path legend"
+            self.filenames_hint_label.text = "Default labels are 'Lift 1', 'Lift 2', etc. When checked, the filename stem is used for the superimposed bar-path graph."
+            self.hud_hint_label.text = (
+                "Toggle individual HUD elements on/off for the output video overlay."
+            )
+
+        columns = 3 if content_width >= 900 else 2 if content_width >= 640 else 1
+        buttons = [
+            self._lift_buttons[lift]
+            for lift in ("auto", "none", "clean", "snatch", "jerk", "clean_jerk")
+        ]
+        self.lift_button_row.clear()
+        self.lift_button_row.style.update(direction="column")
+
+        if columns == 1:
+            for button in buttons:
+                button.style.update(flex=0)
+                self.lift_button_row.add(button)
+            return
+
+        for start in range(0, len(buttons), columns):
+            row = toga.Box(style=Pack(direction="row"))
+            for button in buttons[start : start + columns]:
+                button.style.update(flex=1)
+                row.add(button)
+            self.lift_button_row.add(row)
+
     def _build_files_page(self) -> toga.Box:
         page = toga.Box(style=Pack(direction="column", flex=1))
 
@@ -282,22 +381,22 @@ class BarpathTogaApp(toga.App):
         )
         content.add(self.files_section_title)
 
-        button_row = toga.Box(style=Pack(direction="row", margin_bottom=6))
+        button_row = toga.Box(style=Pack(direction="column", margin_bottom=6))
         self.btn_add_videos = toga.Button(
             "Add Videos",
             on_press=self.on_browse_video,
-            style=Pack(margin_right=6, flex=1),
+            style=Pack(margin_bottom=4),
         )
         self.btn_add_folders = toga.Button(
             "Add Folders (Reanalyze)",
             on_press=self.on_browse_folders,
-            style=Pack(margin_right=6, flex=1),
+            style=Pack(margin_bottom=4),
         )
         self.btn_clear_videos = toga.Button(
             "Clear",
             on_press=self.on_clear_videos,
             enabled=False,
-            style=Pack(flex=1),
+            style=Pack(),
         )
         button_row.add(self.btn_add_videos)
         button_row.add(self.btn_add_folders)
@@ -307,12 +406,12 @@ class BarpathTogaApp(toga.App):
         # Mode hint label shown when a mode is locked in
         self.files_mode_hint = toga.Label(
             "",
-            style=Pack(font_size=9, color="#5B6472", margin_bottom=4),
+            style=Pack(font_size=9, color=self._theme["muted_text"], margin_bottom=4),
         )
         content.add(self.files_mode_hint)
 
         self.video_list_container = toga.ScrollContainer(
-            horizontal=True,
+            horizontal=False,
             vertical=True,
             style=Pack(flex=1, height=220, margin=6),
         )
@@ -327,14 +426,16 @@ class BarpathTogaApp(toga.App):
         )
         content.add(out_title)
 
-        out_row = toga.Box(
-            style=Pack(direction="row", align_items="center", margin_bottom=6)
-        )
+        out_row = toga.Box(style=Pack(direction="column", margin_bottom=6))
 
         # Show selected directory as read-only label (instead of text input).
         self.output_dir_label = toga.Label(
             "",
-            style=Pack(flex=1, margin=(6, 8), background_color="#F2F3F7"),
+            style=Pack(
+                margin=(6, 8),
+                background_color=self._theme["input_background"],
+                color=self._theme["primary_text"],
+            ),
         )
 
         self.btn_open_output_dir = toga.Button(
@@ -348,20 +449,22 @@ class BarpathTogaApp(toga.App):
             style=Pack(width=90, margin_left=6),
         )
 
+        output_actions = toga.Box(style=Pack(direction="row", align_items="center", margin_top=4))
+        output_actions.add(self.btn_select_output_dir)
+        output_actions.add(self.btn_open_output_dir)
         out_row.add(self.output_dir_label)
-        out_row.add(self.btn_select_output_dir)
-        out_row.add(self.btn_open_output_dir)
+        out_row.add(output_actions)
         content.add(out_row)
 
         content.add(
             toga.Label(
                 "Your analysis files (graphs, CSV, report, and optional video) will be saved here.",
-                style=Pack(font_size=9, color="#5B6472", margin_top=6),
+                style=Pack(font_size=9, color=self._theme["muted_text"], margin_top=6),
             )
         )
 
-        scroll = toga.ScrollContainer(content=content, style=Pack(flex=1))
-        page.add(scroll)
+        content.style.update(flex=1)
+        page.add(content)
 
         return page
 
@@ -383,9 +486,7 @@ class BarpathTogaApp(toga.App):
 
         # Model selector (dropdown)
         content.add(
-            toga.Label(
-                "Select Model", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))
-            )
+            toga.Label("Select Model", style=Pack(font_weight="bold", margin=(10, 0, 6, 0)))
         )
 
         self.model_dropdown = toga.Selection(
@@ -396,27 +497,25 @@ class BarpathTogaApp(toga.App):
         content.add(self.model_dropdown)
 
         self.model_hint_label = toga.Label(
-            "Models are loaded from barpath/models. Supports .pt, .onnx, .engine and OpenVINO directories.",
-            style=Pack(font_size=9, color="#5B6472", margin_bottom=10),
+            "Models are loaded from barpath/models. Supports .pt, .onnx,\n"
+            ".engine, and OpenVINO directories.",
+            style=Pack(font_size=9, color=self._theme["muted_text"], margin_bottom=10),
         )
         content.add(self.model_hint_label)
 
-        # Lift type selector (horizontal buttons)
-        content.add(
-            toga.Label(
-                "Lift Type", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))
-            )
-        )
-        self.lift_button_row = toga.Box(style=Pack(direction="row", margin_bottom=6))
+        # Lift type selector; stacking prevents intrinsic button widths from
+        # forcing a horizontal scrollbar in compact windows.
+        content.add(toga.Label("Lift Type", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))))
+        self.lift_button_row = toga.Box(style=Pack(direction="column", margin_bottom=6))
         content.add(self.lift_button_row)
 
         # Additional toggles could be added here later; kept minimal per request
-        content.add(
-            toga.Label(
-                "Lift Type controls whether critique is generated (`none` disables technique critique).",
-                style=Pack(font_size=9, color="#5B6472", margin_top=6),
-            )
+        self.lift_type_hint_label = toga.Label(
+            "Lift Type controls whether critique is generated.\n"
+            "(`none` disables technique critique.)",
+            style=Pack(font_size=9, color=self._theme["muted_text"], margin_top=6),
         )
+        content.add(self.lift_type_hint_label)
 
         content.add(
             toga.Label(
@@ -440,9 +539,9 @@ class BarpathTogaApp(toga.App):
         content.add(self.lifter_dropdown)
 
         self.lifter_hint_label = toga.Label(
-            "Lifter determines which pro baseline to compare against for Technique Analysis. "
-            "Falls back to pooled report if lifter-specific baselines are not found.",
-            style=Pack(font_size=9, color="#5B6472", margin_bottom=10),
+            "Lifter determines the pro baseline used for Technique Analysis.\n"
+            "Falls back to pooled data when a specific baseline is unavailable.",
+            style=Pack(font_size=9, color=self._theme["muted_text"], margin_bottom=10),
         )
         content.add(self.lifter_hint_label)
 
@@ -456,12 +555,16 @@ class BarpathTogaApp(toga.App):
         analysis_row.add(self.technique_analysis_switch)
         content.add(analysis_row)
 
-        content.add(
-            toga.Label(
-                "Technique Analysis detects faults using biomechanical rules and pro baselines.",
-                style=Pack(font_size=9, color="#5B6472", margin_top=4, margin_bottom=6),
-            )
+        self.technique_hint_label = toga.Label(
+            "Technique Analysis detects faults using biomechanical rules\nand pro baselines.",
+            style=Pack(
+                font_size=9,
+                color=self._theme["muted_text"],
+                margin_top=4,
+                margin_bottom=6,
+            ),
         )
+        content.add(self.technique_hint_label)
 
         # ------------------------------------------------------------------
         # Multi-video graph options
@@ -473,11 +576,9 @@ class BarpathTogaApp(toga.App):
             )
         )
 
-        filenames_row = toga.Box(
-            style=Pack(direction="row", align_items="center", margin_bottom=4)
-        )
+        filenames_row = toga.Box(style=Pack(direction="row", align_items="center", margin_bottom=4))
         self.use_filenames_switch = toga.Switch(
-            "Use filenames in superimposed path legend",
+            "Use filenames in\nsuperimposed path legend",
             value=False,
             on_change=self._on_use_filenames_change,
             style=Pack(margin_right=8),
@@ -485,14 +586,17 @@ class BarpathTogaApp(toga.App):
         filenames_row.add(self.use_filenames_switch)
         content.add(filenames_row)
 
-        content.add(
-            toga.Label(
-                "When unchecked (default), lifts are labelled 'Lift 1', 'Lift 2', etc. "
-                "When checked, the video filename stem is used instead. "
-                "Only affects the superimposed bar-path graph produced when multiple videos are analysed.",
-                style=Pack(font_size=9, color="#5B6472", margin_top=4, margin_bottom=6),
-            )
+        self.filenames_hint_label = toga.Label(
+            "Default labels are 'Lift 1', 'Lift 2', etc. When checked,\n"
+            "the filename stem is used for the superimposed bar-path graph.",
+            style=Pack(
+                font_size=9,
+                color=self._theme["muted_text"],
+                margin_top=4,
+                margin_bottom=6,
+            ),
         )
+        content.add(self.filenames_hint_label)
 
         # ------------------------------------------------------------------
         # HUD overlay toggles
@@ -518,14 +622,23 @@ class BarpathTogaApp(toga.App):
             self.hud_switches[key] = sw
             content.add(row)
 
-        content.add(
-            toga.Label(
-                "Toggle individual HUD elements on/off for the output video overlay.",
-                style=Pack(font_size=9, color="#5B6472", margin_top=4, margin_bottom=6),
-            )
+        self.hud_hint_label = toga.Label(
+            "Toggle individual HUD elements on/off for the\noutput video overlay.",
+            style=Pack(
+                font_size=9,
+                color=self._theme["muted_text"],
+                margin_top=4,
+                margin_bottom=6,
+            ),
         )
+        content.add(self.hud_hint_label)
 
-        scroll = toga.ScrollContainer(content=content, style=Pack(flex=1))
+        scroll = toga.ScrollContainer(
+            content=content,
+            horizontal=False,
+            vertical=True,
+            style=Pack(flex=1),
+        )
         page.add(scroll)
 
         return page
@@ -542,9 +655,7 @@ class BarpathTogaApp(toga.App):
         content.add(header)
 
         # Run controls
-        controls = toga.Box(
-            style=Pack(direction="row", margin=(6, 0, 6, 0), align_items="center")
-        )
+        controls = toga.Box(style=Pack(direction="row", margin=(6, 0, 6, 0), align_items="center"))
         self.run_button = toga.Button(
             "Run Analysis", on_press=self.on_run_analysis, style=Pack(margin_right=6)
         )
@@ -573,20 +684,14 @@ class BarpathTogaApp(toga.App):
         content.add(controls)
 
         # Progress
-        content.add(
-            toga.Label("Progress", style=Pack(font_weight="bold", margin=(10, 0, 6, 0)))
-        )
+        content.add(toga.Label("Progress", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))))
         self.progress_bar = toga.ProgressBar(max=100, style=Pack(margin_bottom=6))
         self.progress_label = toga.Label("Ready", style=Pack(margin_bottom=10))
         content.add(self.progress_bar)
         content.add(self.progress_label)
 
         # Output log (HTML-rendered)
-        content.add(
-            toga.Label(
-                "Output Log", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))
-            )
-        )
+        content.add(toga.Label("Output Log", style=Pack(font_weight="bold", margin=(10, 0, 6, 0))))
 
         # Render logs as HTML so the output feels like an app panel, not a terminal.
         # We update the full HTML document as new lines arrive.
@@ -597,12 +702,12 @@ class BarpathTogaApp(toga.App):
         content.add(
             toga.Label(
                 "Log is rendered as HTML (Rich-like markup is styled).",
-                style=Pack(font_size=9, color="#5B6472", margin_top=6),
+                style=Pack(font_size=9, color=self._theme["muted_text"], margin_top=6),
             )
         )
 
-        scroll = toga.ScrollContainer(content=content, style=Pack(flex=1))
-        page.add(scroll)
+        content.style.update(flex=1)
+        page.add(content)
 
         # Initialize the log view with an empty document
         self._render_log_html()
@@ -627,8 +732,8 @@ class BarpathTogaApp(toga.App):
         # Load initial empty state
         self._render_analysis()
 
-        scroll = toga.ScrollContainer(content=content, style=Pack(flex=1))
-        page.add(scroll)
+        content.style.update(flex=1)
+        page.add(content)
 
         return page
 
@@ -638,34 +743,32 @@ class BarpathTogaApp(toga.App):
 
     def _apply_tab_styles(self, active: str) -> None:
         """Style the sidebar tab rows + buttons to indicate which section is active."""
-        active_btn = dict(background_color="#2D6CDF", color="white", font_weight="bold")
-        inactive_btn = dict(
-            background_color="#FFFFFF", color="#222", font_weight="normal"
-        )
+        active_btn = {"background_color": "#2D6CDF", "color": "white", "font_weight": "bold"}
+        inactive_btn = {
+            "background_color": self._theme["input_background"],
+            "color": self._theme["primary_text"],
+            "font_weight": "normal",
+        }
 
         # Tip text: keep it muted regardless of selection state
-        tip_style = dict(color="#5B6472")
+        tip_style = {"color": self._theme["muted_text"]}
 
         # Safe-guard: these may not exist if startup hasn't built the sidebar yet
         files_ok = hasattr(self, "tab_btn_files") and hasattr(self, "tab_tip_files")
-        settings_ok = hasattr(self, "tab_btn_settings") and hasattr(
-            self, "tab_tip_settings"
-        )
-        analyze_ok = hasattr(self, "tab_btn_analyze") and hasattr(
-            self, "tab_tip_analyze"
-        )
-        analysis_ok = hasattr(self, "tab_btn_analysis") and hasattr(
-            self, "tab_tip_analysis"
-        )
+        settings_ok = hasattr(self, "tab_btn_settings") and hasattr(self, "tab_tip_settings")
+        analyze_ok = hasattr(self, "tab_btn_analyze") and hasattr(self, "tab_tip_analyze")
+        analysis_ok = hasattr(self, "tab_btn_analysis") and hasattr(self, "tab_tip_analysis")
 
         def _set(btn, tip, is_active: bool, force_disabled: bool = False):
             if force_disabled:
                 # Greyed-out tab: don't apply the normal active/inactive style;
                 # just ensure it looks muted regardless of selection state.
                 btn.style.update(
-                    background_color="#E8E8E8", color="#AAAAAA", font_weight="normal"
+                    background_color=self._theme["disabled_surface"],
+                    color=self._theme["disabled_text"],
+                    font_weight="normal",
                 )
-                tip.style.update(color="#BBBBBB")
+                tip.style.update(color=self._theme["disabled_text"])
             else:
                 btn.style.update(**(active_btn if is_active else inactive_btn))
                 tip.style.update(**tip_style)
@@ -705,9 +808,7 @@ class BarpathTogaApp(toga.App):
             self.btn_add_videos.enabled = True
             self.btn_add_folders.enabled = False
             self.files_section_title.text = "Input Videos"
-            self.files_mode_hint.text = (
-                "Videos mode — clear the list to switch to Reanalyze mode."
-            )
+            self.files_mode_hint.text = "Videos mode — clear the list to switch to Reanalyze mode."
             self._set_settings_tab_enabled(True)
 
         elif mode == "folders":
@@ -774,9 +875,7 @@ class BarpathTogaApp(toga.App):
 
     def _log_banner(self) -> None:
         self._log("[bold green]═══ Barpath Pipeline (GUI) ═══[/bold green]")
-        self._log(
-            "[dim]Choose inputs in Files, configure in Settings, then run in Analyze.[/dim]"
-        )
+        self._log("[dim]Choose inputs in Files, configure in Settings, then run in Analyze.[/dim]")
         self._log("")
 
     def _log_config(self) -> None:
@@ -805,9 +904,7 @@ class BarpathTogaApp(toga.App):
                 for i, item in enumerate(active_list[:5], 1):
                     self._log(f"    {i}. [dim]{item.name}[/dim]")
                 self._log(f"    ... [dim]+{len(active_list) - 5} more[/dim]")
-            self._log(
-                f"  Model:        [cyan]{model if model else '(not selected)'}[/cyan]"
-            )
+            self._log(f"  Model:        [cyan]{model if model else '(not selected)'}[/cyan]")
 
         self._log(f"  Lift Type:    [cyan]{self.lift_type}[/cyan]")
         self._log(f"  Lifter:       [cyan]{self.lifter}[/cyan]")
@@ -837,9 +934,7 @@ class BarpathTogaApp(toga.App):
         onnx_files = list(directory.glob("*.onnx"))
         engine_files = list(directory.glob("*.engine"))
         openvino_dirs = [
-            p
-            for p in directory.iterdir()
-            if p.is_dir() and "openvino" in p.name.lower()
+            p for p in directory.iterdir() if p.is_dir() and "openvino" in p.name.lower()
         ]
         candidates = pt_files + onnx_files + engine_files + openvino_dirs
         self.model_files = sorted(candidates, key=lambda p: p.name.lower())
@@ -852,7 +947,7 @@ class BarpathTogaApp(toga.App):
 
     def _populate_lifter_options(self, analysis_dir: Path) -> None:
         """Populate the lifter dropdown from available analysis models."""
-        lifters = set(["generic"])
+        lifters = {"generic"}
 
         if analysis_dir.exists():
             for item in analysis_dir.iterdir():
@@ -893,10 +988,8 @@ class BarpathTogaApp(toga.App):
             self.model_dropdown.enabled = True
             # Sync dropdown to currently selected model
             if self.selected_model is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self.model_dropdown.value = self.selected_model.name
-                except Exception:
-                    pass
 
         # --- Lift buttons ---
         for lift in ("auto", "none", "clean", "snatch", "jerk", "clean_jerk"):
@@ -913,27 +1006,28 @@ class BarpathTogaApp(toga.App):
         for lift in ("auto", "none", "clean", "snatch", "jerk", "clean_jerk"):
             btn = self._lift_buttons.get(lift)  # type: ignore[attr-defined]
             if btn is not None:
-                btn.style.update(
-                    **self._pill_style_dict(selected=(self.lift_type == lift))
-                )
+                btn.style.update(**self._pill_style_dict(selected=(self.lift_type == lift)))
+
+        width = getattr(getattr(self.main_window, "size", None), "width", 0)
+        self._apply_settings_layout(max(0, int(width) - 280))
 
     def _pill_style_dict(self, selected: bool) -> dict:
         """Return a dict of style keys so we can update styles in-place."""
         if selected:
-            return dict(
-                margin_right=6,
-                margin=(6, 10),
-                background_color="#2D6CDF",
-                color="white",
-                font_weight="bold",
-            )
-        return dict(
-            margin_right=6,
-            margin=(6, 10),
-            background_color="#F2F3F7",
-            color="#222",
-            font_weight="normal",
-        )
+            return {
+                "margin_right": 6,
+                "margin": (6, 10),
+                "background_color": "#2D6CDF",
+                "color": "white",
+                "font_weight": "bold",
+            }
+        return {
+            "margin_right": 6,
+            "margin": (6, 10),
+            "background_color": self._theme["input_background"],
+            "color": self._theme["primary_text"],
+            "font_weight": "normal",
+        }
 
     def _pill_style(self, selected: bool) -> Pack:
         # Keep existing callers working
@@ -946,10 +1040,8 @@ class BarpathTogaApp(toga.App):
         try:
             self.log_webview.set_content(root_url="about:blank", content=doc)
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 self.log_webview.set_content(root_url="", content=doc)
-            except Exception:
-                pass
 
     def _render_analysis(self) -> None:
         """Render the analysis markdown as HTML in the WebView."""
@@ -963,10 +1055,8 @@ class BarpathTogaApp(toga.App):
         try:
             self.analysis_webview.set_content(root_url="about:blank", content=doc)
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 self.analysis_webview.set_content(root_url="", content=doc)
-            except Exception:
-                pass
 
     def _on_model_dropdown_change(self, widget: Any) -> None:
         """Called when the user picks an entry in the model dropdown."""
@@ -1018,7 +1108,11 @@ class BarpathTogaApp(toga.App):
     def _set_output_dir_value(self, directory: Path) -> None:
         self.output_dir = directory
         # Display as a nice absolute path for clarity
-        self.output_dir_label.text = str(directory.expanduser().resolve())
+        display_path = str(directory.expanduser().resolve())
+        if len(display_path) > 64:
+            parts = Path(display_path).parts
+            display_path = ".../" + "/".join(parts[-3:])
+        self.output_dir_label.text = display_path
 
     # ----------------------------
     # Event handlers: Files
@@ -1100,7 +1194,10 @@ class BarpathTogaApp(toga.App):
     def _add_video_row(self, item_path: Path) -> None:
         row = toga.Box(
             style=Pack(
-                direction="row", margin_bottom=4, margin=6, background_color="#F2F3F7"
+                direction="row",
+                margin_bottom=4,
+                margin=6,
+                background_color=self._theme["sidebar_surface"],
             )
         )
 
@@ -1111,7 +1208,17 @@ class BarpathTogaApp(toga.App):
         )
         row.add(remove_btn)
 
-        row.add(toga.Label(str(item_path), style=Pack(flex=1, color="#222")))
+        display_path = str(item_path)
+        if len(display_path) > 64:
+            parts = item_path.parts
+            display_path = ".../" + "/".join(parts[-3:])
+
+        row.add(
+            toga.Label(
+                display_path,
+                style=Pack(flex=1, color=self._theme["primary_text"]),
+            )
+        )
 
         self.video_list_box.add(row)
 
@@ -1122,9 +1229,7 @@ class BarpathTogaApp(toga.App):
             self.input_folders.remove(item_path)
 
         self.video_list_box.clear()
-        active_list = (
-            self.input_folders if self.input_mode == "folders" else self.input_videos
-        )
+        active_list = self.input_folders if self.input_mode == "folders" else self.input_videos
         for vp in active_list:
             self._add_video_row(vp)
 
@@ -1142,9 +1247,7 @@ class BarpathTogaApp(toga.App):
         try:
             target_path.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            self._log(
-                f"[bold red]ERROR[/bold red] Could not create output directory: {e}"
-            )
+            self._log(f"[bold red]ERROR[/bold red] Could not create output directory: {e}")
             return
 
         try:
@@ -1155,13 +1258,9 @@ class BarpathTogaApp(toga.App):
             else:
                 subprocess.run(["xdg-open", str(target_path)], check=False)
         except Exception as e:
-            self._log(
-                f"[bold red]ERROR[/bold red] Could not open output directory: {e}"
-            )
+            self._log(f"[bold red]ERROR[/bold red] Could not open output directory: {e}")
         else:
-            self._log(
-                f"[green]✓[/green] Opened output directory: [cyan]{target_path}[/cyan]"
-            )
+            self._log(f"[green]✓[/green] Opened output directory: [cyan]{target_path}[/cyan]")
 
     async def on_select_output_dir(self, widget: toga.Widget) -> None:
         """Select output directory using system picker."""
@@ -1284,9 +1383,7 @@ class BarpathTogaApp(toga.App):
 
         if using_folders and not self.input_folders:
             self._select_tab("files")
-            self._log(
-                "[bold red]ERROR[/bold red] Please add at least one output folder in Files."
-            )
+            self._log("[bold red]ERROR[/bold red] Please add at least one output folder in Files.")
             return
 
         selected_model: Path | None = None
@@ -1294,14 +1391,11 @@ class BarpathTogaApp(toga.App):
             selected_model = self._resolve_selected_model()
             if not selected_model:
                 self._select_tab("settings")
-                self._log(
-                    "[bold red]ERROR[/bold red] Please select a model in Settings."
-                )
+                self._log("[bold red]ERROR[/bold red] Please select a model in Settings.")
                 return
 
         # Clear log and print configuration
-        self._log_html_lines = []
-        self._log_seq = 0
+        self.log_renderer.clear_logs()
         self._render_log_html()
         self._log_banner()
         self._log_config()
@@ -1358,9 +1452,7 @@ class BarpathTogaApp(toga.App):
                 self.input_folders,
             )
         except Exception as e:
-            self._log(
-                f"[bold red]ERROR[/bold red] Failed to check existing outputs: {e}"
-            )
+            self._log(f"[bold red]ERROR[/bold red] Failed to check existing outputs: {e}")
             self._is_running = False
             self.run_button.enabled = True
             self.cancel_button.enabled = False
@@ -1488,16 +1580,16 @@ class BarpathTogaApp(toga.App):
                     video_output_dir = out_base
                     video_output_dir.mkdir(parents=True, exist_ok=True)
 
-                output_video_path = (
-                    video_output_dir / "output.mp4" if encode_video else None
-                )
+                output_video_path = video_output_dir / "output.mp4" if encode_video else None
 
                 self._progress_queue.put(
                     (
                         "_banner_",
                         None,
-                        f"[bold cyan]Processing video {video_idx}/{total_videos}[/bold cyan]: "
-                        f"[dim]{input_video.name}[/dim]",
+                        (
+                            f"[bold cyan]Processing video {video_idx}/{total_videos}[/bold cyan]: "
+                            f"[dim]{input_video.name}[/dim]"
+                        ),
                     )
                 )
 
@@ -1506,15 +1598,11 @@ class BarpathTogaApp(toga.App):
                     for step_name, progress_value, message in run_pipeline(
                         input_video=str(input_video),
                         model_path=str(selected_model),
-                        output_video=(
-                            str(output_video_path) if output_video_path else None
-                        ),
+                        output_video=(str(output_video_path) if output_video_path else None),
                         lift_type=lift_type,
                         output_dir=str(video_output_dir),
                         encode_video=encode_video,
-                        technique_analysis=(
-                            lift_type != "none" and self.technique_analysis
-                        ),
+                        technique_analysis=(lift_type != "none" and self.technique_analysis),
                         cancel_event=self._cancel_event,
                         lifter=self.lifter,
                         hud_options=hud_options,
@@ -1563,7 +1651,7 @@ class BarpathTogaApp(toga.App):
                         (
                             "_video_error_",
                             None,
-                            f"[red]Error processing {input_video.name}: {str(e)}[/red]",
+                            f"[red]Error processing {input_video.name}: {e!s}[/red]",
                         )
                     )
                     continue
@@ -1586,11 +1674,7 @@ class BarpathTogaApp(toga.App):
                         )
                     )
 
-            if (
-                not self._cancel_event.is_set()
-                and is_batch
-                and len(completed_video_dirs) > 1
-            ):
+            if not self._cancel_event.is_set() and is_batch and len(completed_video_dirs) > 1:
                 self._progress_queue.put(
                     (
                         "_banner_",
@@ -1645,8 +1729,10 @@ class BarpathTogaApp(toga.App):
                     (
                         "_banner_",
                         None,
-                        f"[bold cyan]Reanalyzing folder {folder_idx}/{total_folders}[/bold cyan]: "
-                        f"[dim]{folder.name}[/dim]",
+                        (
+                            f"[bold cyan]Reanalyzing folder {folder_idx}/{total_folders}[/bold cyan]: "
+                            f"[dim]{folder.name}[/dim]"
+                        ),
                     )
                 )
 
@@ -1675,11 +1761,7 @@ class BarpathTogaApp(toga.App):
                     )
                 )
 
-            if (
-                not self._cancel_event.is_set()
-                and is_batch
-                and len(completed_video_dirs) > 1
-            ):
+            if not self._cancel_event.is_set() and is_batch and len(completed_video_dirs) > 1:
                 self._progress_queue.put(
                     (
                         "_banner_",
@@ -1692,9 +1774,7 @@ class BarpathTogaApp(toga.App):
                     video_output_dirs=completed_video_dirs,
                     video_labels=completed_video_labels,
                     batch_output_dir=(
-                        completed_video_dirs[0].parent
-                        if completed_video_dirs
-                        else Path("outputs")
+                        completed_video_dirs[0].parent if completed_video_dirs else Path("outputs")
                     ),
                     use_filenames=use_filenames_in_legend,
                     cancel_event=self._cancel_event,
@@ -1727,9 +1807,7 @@ class BarpathTogaApp(toga.App):
         so that the GUI remains fully responsive (repaints, clicks, etc.)
         while the pipeline runs on a background thread.
         """
-        active_list = (
-            self.input_folders if self.input_mode == "folders" else self.input_videos
-        )
+        active_list = self.input_folders if self.input_mode == "folders" else self.input_videos
         is_batch = len(active_list) > 1
         total_videos = len(active_list)
         # We track the video index here by counting _video_done_ sentinels
@@ -1755,9 +1833,7 @@ class BarpathTogaApp(toga.App):
                             await self._on_pipeline_done(is_batch)
                             return
                         elif item == "_CANCELLED_":
-                            self._log(
-                                "[yellow]![/yellow] Cancellation requested; stopping."
-                            )
+                            self._log("[yellow]![/yellow] Cancellation requested; stopping.")
                             self.progress_label.text = "Cancelled"
                             self.progress_bar.value = 0
                             self._is_running = False
@@ -1768,9 +1844,7 @@ class BarpathTogaApp(toga.App):
                         elif item.startswith("_ERROR_:"):
                             error_body = item[len("_ERROR_:") :]
                             first_line = error_body.split("\n")[0]
-                            self._log(
-                                f"\n[bold red]ERROR[/bold red] Pipeline failed: {first_line}"
-                            )
+                            self._log(f"\n[bold red]ERROR[/bold red] Pipeline failed: {first_line}")
                             self._log(error_body)
                             self.progress_label.text = f"Error: {first_line}"
                             return
@@ -1798,9 +1872,7 @@ class BarpathTogaApp(toga.App):
                         if progress_value is not None:
                             self._log(f"[dim]{step_name}[/dim] {message}")
                         else:
-                            self._log(
-                                f"[green]✓[/green] [dim]{step_name}[/dim] {message}"
-                            )
+                            self._log(f"[green]✓[/green] [dim]{step_name}[/dim] {message}")
 
                     # Update progress bar with overall progress across all videos
                     if progress_value is not None:
@@ -1808,13 +1880,9 @@ class BarpathTogaApp(toga.App):
                         step_progress = float(progress_value) / max(total_videos, 1)
                         overall_progress = video_progress + step_progress
                         self.progress_bar.value = int(overall_progress * 100)
-                        self.progress_label.text = (
-                            f"[{videos_done + 1}/{total_videos}] {message}"
-                        )
+                        self.progress_label.text = f"[{videos_done + 1}/{total_videos}] {message}"
                     else:
-                        self.progress_label.text = (
-                            f"[{videos_done + 1}/{total_videos}] ✓ {message}"
-                        )
+                        self.progress_label.text = f"[{videos_done + 1}/{total_videos}] ✓ {message}"
 
                 # Yield to the Toga event loop so the GUI can repaint / handle
                 # user input.  Use a short sleep when there was work to do, a
@@ -1843,9 +1911,7 @@ class BarpathTogaApp(toga.App):
             analysis_path = self.input_folders[-1] / "analysis.md"
         elif is_batch and self.input_videos:
             last_video = self.input_videos[-1]
-            analysis_path = (
-                self._effective_output_dir() / last_video.stem / "analysis.md"
-            )
+            analysis_path = self._effective_output_dir() / last_video.stem / "analysis.md"
         else:
             analysis_path = self._effective_output_dir() / "analysis.md"
 
@@ -1853,9 +1919,7 @@ class BarpathTogaApp(toga.App):
             self._log(f"[green]✓[/green] Found report: [cyan]{analysis_path}[/cyan]")
             self._render_analysis()
         else:
-            self._log(
-                f"[yellow]![/yellow] No analysis report found at: [dim]{analysis_path}[/dim]"
-            )
+            self._log(f"[yellow]![/yellow] No analysis report found at: [dim]{analysis_path}[/dim]")
 
     def on_cancel_analysis(self, widget: toga.Widget) -> None:
         if self._is_running:
@@ -1884,9 +1948,7 @@ class BarpathTogaApp(toga.App):
         self._preview_stop_event.clear()
         self._preview_running = True
         self.preview_button.text = "Stop Preview"
-        self._log(
-            "[cyan]Starting preview...[/cyan] Press 'q' in the preview window to stop."
-        )
+        self._log("[cyan]Starting preview...[/cyan] Press 'q' in the preview window to stop.")
 
         self._preview_thread = threading.Thread(
             target=self._run_preview,
@@ -1913,15 +1975,18 @@ class BarpathTogaApp(toga.App):
 
         Press 'q' in the preview window to stop.
         """
-        import cv2
         import time
 
+        import cv2
         import mediapipe as mp
-        from ultralytics import YOLO  # type: ignore
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision as mp_vision
-        from pipeline.step1_helpers.landmarks import get_pose_landmarker_model_path
-        from barpath.pipeline.realtime_processing.live_lift_recognition import LiveLiftRecognizer
+        from ultralytics import YOLO  # type: ignore
+
+        from barpath.pipeline.realtime_processing.live_lift_recognition import (
+            LiveLiftRecognizer,
+        )
+        from barpath.pipeline.step1_helpers.landmarks import get_pose_landmarker_model_path
 
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
@@ -1944,10 +2009,7 @@ class BarpathTogaApp(toga.App):
 
         # Initialize live lift recognizer with the lift detection model
         lift_model_path = str(
-            Path(__file__).parent
-            / "models"
-            / "lift_detection"
-            / "lift_detection_model.pkl"
+            Path(__file__).parent / "models" / "lift_detection" / "lift_detection_model.pkl"
         )
         recognizer = LiveLiftRecognizer(
             model_path=lift_model_path,
@@ -2092,7 +2154,13 @@ class BarpathTogaApp(toga.App):
                 tip_x = w - tip_size[0] - tip_pad - 15
                 tip_y = tip_size[1] + tip_pad + 15
                 overlay = frame.copy()
-                cv2.rectangle(overlay, (tip_x - tip_pad, tip_y - tip_size[1] - tip_pad), (tip_x + tip_size[0] + tip_pad, tip_y + tip_pad), (30, 30, 30), -1)
+                cv2.rectangle(
+                    overlay,
+                    (tip_x - tip_pad, tip_y - tip_size[1] - tip_pad),
+                    (tip_x + tip_size[0] + tip_pad, tip_y + tip_pad),
+                    (30, 30, 30),
+                    -1,
+                )
                 cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
                 cv2.putText(
                     frame,
@@ -2138,14 +2206,14 @@ def main() -> None:
     """Main entry point."""
     icon_path = Path(__file__).resolve().parent / "assets" / "barpath_icon.png"
 
-    kwargs: dict[str, Any] = dict(
-        formal_name="Barpath",
-        app_id="org.barpath.app",
-        description="Weightlifting Technique Analysis Tool",
-        version="1.0.0",
-        author="Barpath Team",
-        home_page="https://github.com/scribewire/barpath",
-    )
+    kwargs: dict[str, Any] = {
+        "formal_name": "Barpath",
+        "app_id": "org.barpath.app",
+        "description": "Weightlifting Technique Analysis Tool",
+        "version": "1.0.0",
+        "author": "Barpath Team",
+        "home_page": "https://github.com/scribewire/barpath",
+    }
 
     if icon_path.exists():
         kwargs["icon"] = str(icon_path)

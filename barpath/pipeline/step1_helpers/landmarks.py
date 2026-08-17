@@ -8,7 +8,6 @@ Updated for mediapipe 0.10.x Tasks API.
 """
 
 from pathlib import Path
-from typing import Optional, Tuple
 from urllib.request import urlretrieve
 
 import numpy as np
@@ -93,7 +92,7 @@ def get_landmark_enums(landmark_names):
     return landmark_enums
 
 
-def extract_landmarks(pose_landmarks, landmark_enums: dict) -> Optional[dict]:
+def extract_landmarks(pose_landmarks, landmark_enums: dict) -> dict | None:
     """
     Extract normalized pose landmarks from MediaPipe results.
 
@@ -121,9 +120,7 @@ def extract_landmarks(pose_landmarks, landmark_enums: dict) -> Optional[dict]:
     return landmarks_data
 
 
-def extract_world_landmarks(
-    pose_world_landmarks, landmark_enums: dict
-) -> Optional[dict]:
+def extract_world_landmarks(pose_world_landmarks, landmark_enums: dict) -> dict | None:
     """
     Extract world pose landmarks from MediaPipe results.
 
@@ -153,7 +150,7 @@ def extract_world_landmarks(
 
 def process_pose_results(
     results_pose, landmark_enums: dict
-) -> Tuple[Optional[dict], Optional[dict], Optional[np.ndarray]]:
+) -> tuple[dict | None, dict | None, np.ndarray | None]:
     """
     Process MediaPipe pose results and extract both landmark types.
 
@@ -183,9 +180,7 @@ def process_pose_results(
         world_landmarks_list = results_pose.pose_world_landmarks
         if len(world_landmarks_list) > 0:
             world_landmarks = world_landmarks_list[0]
-            world_landmarks_data = extract_world_landmarks(
-                world_landmarks, landmark_enums
-            )
+            world_landmarks_data = extract_world_landmarks(world_landmarks, landmark_enums)
 
     if results_pose and results_pose.segmentation_masks:
         seg_masks = results_pose.segmentation_masks
@@ -197,9 +192,7 @@ def process_pose_results(
     return landmarks_data, world_landmarks_data, segmentation_mask
 
 
-def get_ankle_positions(
-    pose_landmarks, frame_width: int, frame_height: int
-) -> Optional[np.ndarray]:
+def get_ankle_positions(pose_landmarks, frame_width: int, frame_height: int) -> np.ndarray | None:
     """
     Extract ankle positions from pose landmarks.
 
@@ -222,16 +215,8 @@ def get_ankle_positions(
     l_visible = l_ankle.visibility > 0.3
     r_visible = r_ankle.visibility > 0.3
 
-    l_pos = (
-        np.array([l_ankle.x * frame_width, l_ankle.y * frame_height])
-        if l_visible
-        else None
-    )
-    r_pos = (
-        np.array([r_ankle.x * frame_width, r_ankle.y * frame_height])
-        if r_visible
-        else None
-    )
+    l_pos = np.array([l_ankle.x * frame_width, l_ankle.y * frame_height]) if l_visible else None
+    r_pos = np.array([r_ankle.x * frame_width, r_ankle.y * frame_height]) if r_visible else None
 
     if l_visible and r_visible and l_pos is not None and r_pos is not None:
         return (l_pos + r_pos) / 2

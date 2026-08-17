@@ -6,14 +6,12 @@ for real-time lift classification in the live preview.
 
 from __future__ import annotations
 
-from typing import Dict
-
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
 
-def extract_window_features(df: pd.DataFrame) -> Dict[str, float]:
+def extract_window_features(df: pd.DataFrame) -> dict[str, float]:
     """Extract features from a partial window for live preview classification.
 
     All features are normalized to be scale-invariant and work on ANY
@@ -28,16 +26,14 @@ def extract_window_features(df: pd.DataFrame) -> Dict[str, float]:
     if len(df) < 10 or "barbell_y_smooth" not in df.columns:
         return {}
 
-    frame_h = (
-        float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 720.0
-    )
+    frame_h = float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 720.0
     if frame_h <= 0:
         frame_h = 720.0
 
     bar_y = _to_float_array(df["barbell_y_smooth"].values) / frame_h
     n = len(bar_y)
 
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
 
     # 1. Start position - INSTANT discriminator (jerk vs clean/snatch)
     features["start_y_norm"] = float(bar_y[0])
@@ -53,9 +49,7 @@ def extract_window_features(df: pd.DataFrame) -> Dict[str, float]:
     features["y_range"] = float(bar_y.max() - bar_y.min())
 
     # 5. Peak-to-start ratio (how much of the start height was covered)
-    features["peak_to_start_ratio"] = float(
-        (bar_y[0] - bar_y[peak_idx]) / (bar_y[0] + 1e-6)
-    )
+    features["peak_to_start_ratio"] = float((bar_y[0] - bar_y[peak_idx]) / (bar_y[0] + 1e-6))
 
     # 4-7. Velocity features
     if "vel_y_smooth" in df.columns:
@@ -85,19 +79,13 @@ def extract_window_features(df: pd.DataFrame) -> Dict[str, float]:
 
     # 11. Path efficiency
     if "barbell_x_smooth" in df.columns:
-        frame_w = (
-            float(df["frame_width"].iloc[0]) if "frame_width" in df.columns else 1280.0
-        )
+        frame_w = float(df["frame_width"].iloc[0]) if "frame_width" in df.columns else 1280.0
         bar_x = _to_float_array(df["barbell_x_smooth"].values) / frame_w
         dx = np.diff(bar_x)
         dy = np.diff(bar_y)
         total_dist = float(np.sum(np.sqrt(dx**2 + dy**2)))
-        straight_dist = float(
-            np.sqrt((bar_x[-1] - bar_x[0]) ** 2 + (bar_y[-1] - bar_y[0]) ** 2)
-        )
-        features["path_efficiency"] = (
-            straight_dist / total_dist if total_dist > 0 else 1.0
-        )
+        straight_dist = float(np.sqrt((bar_x[-1] - bar_x[0]) ** 2 + (bar_y[-1] - bar_y[0]) ** 2))
+        features["path_efficiency"] = straight_dist / total_dist if total_dist > 0 else 1.0
     else:
         features["path_efficiency"] = 1.0
 
@@ -123,9 +111,7 @@ def extract_window_features(df: pd.DataFrame) -> Dict[str, float]:
 
     # 16. S-curve score
     if "barbell_x_smooth" in df.columns and n > 20:
-        frame_w = (
-            float(df["frame_width"].iloc[0]) if "frame_width" in df.columns else 1280.0
-        )
+        frame_w = float(df["frame_width"].iloc[0]) if "frame_width" in df.columns else 1280.0
         bar_x = _to_float_array(df["barbell_x_smooth"].values) / frame_w
         x_range = bar_x.max() - bar_x.min()
         if x_range > 0:

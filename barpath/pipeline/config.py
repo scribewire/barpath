@@ -138,8 +138,20 @@ LIFT_PALETTE = [
     "#c5b0d5",  # light purple
 ]
 
-# DTW similarity scaling factor
-DTW_SIMILARITY_K = 5.0
+# ---------------------------------------------------------------------------
+# Lift-type detection (heuristic classifier thresholds)
+# ---------------------------------------------------------------------------
+
+# Confidence clamping for heuristic lift classification
+HEURISTIC_CONFIDENCE_FLOOR = 0.33
+HEURISTIC_CONFIDENCE_CEILING = 0.99
+
+# Heuristic dip-depth boundaries used to separate snatch / clean / jerk
+LIFT_CLASS_DIP_DEPTH_SNATCH = 0.37
+LIFT_CLASS_DIP_DEPTH_CLEAN = 0.12
+
+# Bar start position above which a floor-start lift is impossible (jerk)
+LIFT_CLASS_Y_START_JERK_MAX = 0.85
 
 # ---------------------------------------------------------------------------
 # Step 4: Video Rendering
@@ -185,16 +197,16 @@ SCALE_MAX = 2.5
 # ---------------------------------------------------------------------------
 
 # HUD Sparkline
-SPARKLINE_WIDTH_RATIO = 0.20       # 20% of frame width
-SPARKLINE_HEIGHT_RATIO = 0.15      # 15% of frame height
-SPARKLINE_MARGIN_X = 20            # pixels from right edge
-SPARKLINE_MARGIN_Y = 20            # pixels from top edge
+SPARKLINE_WIDTH_RATIO = 0.20  # 20% of frame width
+SPARKLINE_HEIGHT_RATIO = 0.15  # 15% of frame height
+SPARKLINE_MARGIN_X = 20  # pixels from right edge
+SPARKLINE_MARGIN_Y = 20  # pixels from top edge
 SPARKLINE_LINE_THICKNESS = 2
 SPARKLINE_AXIS_COLOR_BGR = (80, 80, 80)  # gray axis lines
 
 # HUD Power Zone Band
-POWER_BAND_HEIGHT = 15             # pixels tall
-POWER_BAND_GAP = 8                 # pixels below sparkline
+POWER_BAND_HEIGHT = 15  # pixels tall
+POWER_BAND_GAP = 8  # pixels below sparkline
 
 # HUD Joint Angles
 ANGLE_TEXT_POSITION_Y_RATIO = 0.92  # 92% down from top (near bottom)
@@ -203,21 +215,21 @@ ANGLE_FONT_THICKNESS = 2
 ANGLE_GREEN_BGR = (0, 255, 0)
 ANGLE_YELLOW_BGR = (0, 255, 255)
 ANGLE_RED_BGR = (0, 0, 255)
-ANGLE_FALLBACK_MIN = 90.0          # degrees (green lower bound when no baseline)
-ANGLE_FALLBACK_MAX = 135.0         # degrees (green upper bound when no baseline)
-ANGLE_BORDERLINE_MARGIN = 0.10     # 10% boundary margin for yellow
+ANGLE_FALLBACK_MIN = 90.0  # degrees (green lower bound when no baseline)
+ANGLE_FALLBACK_MAX = 135.0  # degrees (green upper bound when no baseline)
+ANGLE_BORDERLINE_MARGIN = 0.10  # 10% boundary margin for yellow
 
 # HUD Error Markers
-ERROR_TRIANGLE_SIZE = 12           # pixels (side length)
-ERROR_TEXT_Y_OFFSET = 25           # pixels below triangle apex for label
+ERROR_TRIANGLE_SIZE = 12  # pixels (side length)
+ERROR_TEXT_Y_OFFSET = 25  # pixels below triangle apex for label
 
 # HUD Fault Type Colors (BGR) - Distinct per fault category
 FAULT_COLORS_BGR = {
-    "arm": (0, 165, 255),          # Orange
-    "extension": (255, 0, 255),    # Magenta
-    "path": (255, 255, 0),         # Cyan
-    "knee_leg": (0, 255, 255),     # Yellow
-    "catch": (0, 0, 255),          # Red
+    "arm": (0, 165, 255),  # Orange
+    "extension": (255, 0, 255),  # Magenta
+    "path": (255, 255, 0),  # Cyan
+    "knee_leg": (0, 255, 255),  # Yellow
+    "catch": (0, 0, 255),  # Red
 }
 
 # Live Coaching Tip

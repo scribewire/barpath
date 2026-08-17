@@ -20,6 +20,12 @@ wheels/
 .installed.cfg
 *.egg
 
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
 # Virtual environments
 venv/
 env/
@@ -37,8 +43,8 @@ opencode.json
 *.mp4
 test_videos/
 outputs/
-datasets/
 build/
+plans/
 
 # OS
 .DS_Store

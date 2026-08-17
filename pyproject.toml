@@ -1,3 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "barpath"
+version = "1.0.0"
+description = "AI-powered Olympic weightlifting technique analysis"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Ethan Christian" }]
+dependencies = [
+    "opencv-python>=4.10.0",
+    "mediapipe>=0.10.25",
+    "ultralytics>=8.3.0",
+    "torch>=2.5.0",
+    "torchvision>=0.20.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "scipy>=1.14.0",
+    "matplotlib>=3.9.0",
+    "scikit-learn>=1.5.0",
+    "rich>=13.9.0",
+    "pycairo>=1.27.0",
+    "toga>=0.4.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.4.0",
+    "basedpyright>=1.15.0",
+]
+hardware = ["onnxruntime", "openvino"]
+
+[project.scripts]
+barpath = "barpath.barpath_cli:main"
+barpath-gui = "barpath.barpath_gui:main"
+
+[tool.briefcase.app.barpath]
+formal_name = "Barpath - Weightlifting Analysis"
+bundle = "org.barpath"
+version = "1.0.0"
+description = "Weightlifting Technique Analysis Tool"
+sources = ["barpath"]
+icon = "barpath/assets/barpath_icon"
+
+[tool.setuptools.packages.find]
+include = ["barpath*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# High-value rules only: pycodestyle errors, pyflakes, import sorting,
+# pyupgrade, and bugbear. The more opinionated style rules (SIM, PERF,
+# RUF, PLW, ISC, C4) are intentionally not enabled. BLE001/S110 are
+# excluded because the pipeline deliberately uses defensive
+# `except Exception` handling in video-processing code.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+ignore = ["BLE001", "S110", "E501", "RUF034", "B008", "B904", "B007", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+# Numbered pipeline steps are loaded by name via importlib in barpath_core.
+"barpath/pipeline/[0-9]*.py" = ["N999"]
+"tests/*" = ["N999"]
+
 [tool.basedpyright]
 typeCheckingMode = "standard"
 reportUninitializedInstanceVariable = "none"

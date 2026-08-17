@@ -7,7 +7,6 @@ Each window represents what the live preview would see at a given moment.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
 
 import numpy as np
 import pandas as pd
@@ -19,7 +18,7 @@ def extract_live_windows_from_csv(
     buffer_seconds: float = 1.0,
     min_frames: int = 15,
     max_window_frames: int = 240,
-) -> List[pd.DataFrame]:
+) -> list[pd.DataFrame]:
     """Extract simulated live-preview windows from a full-lift CSV.
 
     For each trigger point (bar passes knees going up), extracts multiple
@@ -39,11 +38,7 @@ def extract_live_windows_from_csv(
     if "barbell_y_smooth" not in df.columns:
         return []
 
-    frame_h = (
-        float(df["frame_height"].iloc[0])
-        if "frame_height" in df.columns
-        else 720.0
-    )
+    frame_h = float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 720.0
 
     bar_y = np.asarray(df["barbell_y_smooth"].values, dtype=float)
     if len(bar_y) < min_frames:
@@ -54,10 +49,7 @@ def extract_live_windows_from_csv(
         hip_y = np.asarray(df["hip_y_avg"].values, dtype=float)
         # Filter out zeros (missing data)
         valid_hip = hip_y[hip_y > 0]
-        if len(valid_hip) > 0:
-            knee_y = valid_hip.mean() * 0.9
-        else:
-            knee_y = frame_h * 0.75
+        knee_y = valid_hip.mean() * 0.9 if len(valid_hip) > 0 else frame_h * 0.75
     else:
         knee_y = frame_h * 0.75
 
@@ -102,9 +94,9 @@ def extract_live_windows_from_csv(
 
 def generate_live_training_dataset(
     data_dir: Path,
-    categories: List[str] | None = None,
+    categories: list[str] | None = None,
     **kwargs,
-) -> List[tuple[pd.DataFrame, str]]:
+) -> list[tuple[pd.DataFrame, str]]:
     """Generate complete live-preview training dataset.
 
     Args:
@@ -118,7 +110,7 @@ def generate_live_training_dataset(
     if categories is None:
         categories = ["snatch", "clean", "jerk"]
 
-    dataset: List[tuple[pd.DataFrame, str]] = []
+    dataset: list[tuple[pd.DataFrame, str]] = []
 
     for category in categories:
         category_dir = data_dir / category

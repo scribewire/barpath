@@ -15,9 +15,18 @@ from barpath.pipeline.config import (
     SPARKLINE_WIDTH_RATIO,
 )
 
+from .overlay_metrics import OverlayMetrics
 
-def draw_power_zone_band(frame, df, frame_width, frame_height,
-                         sparkline_box=None, current_frame=None):
+
+def draw_power_zone_band(
+    frame,
+    df,
+    frame_width,
+    frame_height,
+    sparkline_box=None,
+    current_frame=None,
+    overlay_metrics=None,
+):
     """Draw power zone intensity band below sparkline.
 
     Uses same time axis as sparkline for aligned visualization.
@@ -36,35 +45,40 @@ def draw_power_zone_band(frame, df, frame_width, frame_height,
         frame (modified in place)
     """
     # Check for required column
-    if 'specific_power_y_smooth' not in df.columns:
+    if "specific_power_y_smooth" not in df.columns:
         return frame
 
-    power_series = df['specific_power_y_smooth'].dropna().values
+    power_series = df["specific_power_y_smooth"].dropna().values
     if len(power_series) == 0:
         return frame
 
     # Calculate position — directly below sparkline, same X and width
-    sparkline_w = max(100, int(frame_width * SPARKLINE_WIDTH_RATIO))
+    metrics = overlay_metrics or OverlayMetrics.for_frame(frame_width, frame_height)
+    sparkline_w = max(metrics.px(100), int(frame_width * SPARKLINE_WIDTH_RATIO))
     if sparkline_box is not None:
         sl_x, sl_y, sl_w, sl_h = sparkline_box
         band_x = sl_x
         band_w = sl_w
         band_y_base = sl_y + sl_h
     else:
-        band_x = frame_width - SPARKLINE_MARGIN_X - sparkline_w
-        band_y_base = SPARKLINE_MARGIN_Y + max(50, int(frame_height * SPARKLINE_HEIGHT_RATIO))
+        band_x = frame_width - metrics.px(SPARKLINE_MARGIN_X) - sparkline_w
+        band_y_base = metrics.px(SPARKLINE_MARGIN_Y) + max(
+            metrics.px(50), int(frame_height * SPARKLINE_HEIGHT_RATIO)
+        )
         band_w = sparkline_w
 
     # "Power" label goes right below sparkline
-    label_gap = 2
-    label_text_size = cv2.getTextSize("Power", cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+    label_text_size = cv2.getTextSize(
+        "Power", cv2.FONT_HERSHEY_SIMPLEX, metrics.font(0.5), metrics.px(1)
+    )[0]
+    label_gap = metrics.px(2)
     label_h = label_text_size[1] + label_gap * 2
 
-    band_y = band_y_base + label_h + POWER_BAND_GAP
+    band_y = band_y_base + label_h + metrics.px(POWER_BAND_GAP)
 
-    label_y = band_y - POWER_BAND_GAP - label_gap
+    label_y = band_y - metrics.px(POWER_BAND_GAP) - label_gap
 
-    band_h = POWER_BAND_HEIGHT
+    band_h = metrics.px(POWER_BAND_HEIGHT)
 
     # Normalize power to intensity
     power_max = power_series.max()
@@ -80,15 +94,26 @@ def draw_power_zone_band(frame, df, frame_width, frame_height,
         G = int(120 + (1 - intensity) * 135)
         R = int(200 + (1 - intensity) * 55)
         x_start = band_x + int(i * px_per_col)
-        cv2.rectangle(frame,
-                      (x_start, band_y),
-                      (x_start + max(1, int(px_per_col)), band_y + band_h),
-                      (B, G, R), -1)
+        cv2.rectangle(
+            frame,
+            (x_start, band_y),
+            (x_start + max(1, int(px_per_col)), band_y + band_h),
+            (B, G, R),
+            -1,
+        )
 
     # Draw "Power" label underneath sparkline with outline
     from .hud_renderer import draw_text_with_outline
-    draw_text_with_outline(frame, "Power", (band_x, label_y), cv2.FONT_HERSHEY_SIMPLEX,
-                           0.5, (255, 255, 255))
+
+    draw_text_with_outline(
+        frame,
+        "Power",
+        (band_x, label_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        metrics.font(0.5),
+        (255, 255, 255),
+        outline_thickness=metrics.px(2),
+    )
 
     # Draw playhead if current_frame is provided
     if current_frame is not None and len(df) > 0:
@@ -99,7 +124,12 @@ def draw_power_zone_band(frame, df, frame_width, frame_height,
             t = (current_frame - first_frame) / (last_frame - first_frame)
             t = max(0.0, min(1.0, t))
             playhead_x = band_x + int(t * band_w)
-            cv2.line(frame, (playhead_x, band_y), (playhead_x, band_y + band_h),
-                     (255, 255, 255), 2)
+            cv2.line(
+                frame,
+                (playhead_x, band_y),
+                (playhead_x, band_y + band_h),
+                (255, 255, 255),
+                metrics.px(2),
+            )
 
     return frame

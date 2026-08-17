@@ -180,9 +180,7 @@ def export_analysis_manifest() -> None:
     (manifests_dir / "analysis_asset_manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
-    print(
-        f"Exported analysis manifest to {manifests_dir / 'analysis_asset_manifest.json'}"
-    )
+    print(f"Exported analysis manifest to {manifests_dir / 'analysis_asset_manifest.json'}")
 
 
 if __name__ == "__main__":

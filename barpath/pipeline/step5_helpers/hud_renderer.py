@@ -20,6 +20,8 @@ from barpath.pipeline.utils import (
     parse_landmarks_from_string,
 )
 
+from .overlay_metrics import OverlayMetrics
+
 # Phase color schemes for different lift types (moved from 5_render_video.py)
 PHASE_COLOR_SCHEMES = {
     "snatch": {
@@ -89,7 +91,9 @@ SKELETON_CONNECTIONS = [
 ]
 
 
-def draw_text_with_outline(frame, text, pos, font, font_scale, color, thickness=1, outline_thickness=2):
+def draw_text_with_outline(
+    frame, text, pos, font, font_scale, color, thickness=1, outline_thickness=2
+):
     """Draw text with black outline for readability on any background.
 
     Args:
@@ -103,12 +107,33 @@ def draw_text_with_outline(frame, text, pos, font, font_scale, color, thickness=
         outline_thickness: Outline stroke thickness (default 2)
     """
     x, y = pos
-    for dx, dy in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
-        cv2.putText(frame, text, (x + dx, y + dy), font, font_scale, (0, 0, 0), outline_thickness, cv2.LINE_AA)
+    outline_offset = max(1, outline_thickness // 2)
+    for dx, dy in [
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+    ]:
+        cv2.putText(
+            frame,
+            text,
+            (x + dx * outline_offset, y + dy * outline_offset),
+            font,
+            font_scale,
+            (0, 0, 0),
+            outline_thickness,
+            cv2.LINE_AA,
+        )
     cv2.putText(frame, text, (x, y), font, font_scale, color, thickness, cv2.LINE_AA)
 
 
-def draw_skeleton_overlay(frame, landmarks_str, frame_width, frame_height, legend_colors):
+def draw_skeleton_overlay(
+    frame, landmarks_str, frame_width, frame_height, legend_colors, overlay_metrics=None
+):
     """Draw pose skeleton overlay on the frame.
 
     Args:
@@ -121,12 +146,13 @@ def draw_skeleton_overlay(frame, landmarks_str, frame_width, frame_height, legen
     Returns:
         last_head_pos: tuple (x, y) of head position or None
     """
+    metrics = overlay_metrics or OverlayMetrics.for_frame(frame_width, frame_height)
     landmarks = parse_landmarks_from_string(landmarks_str)
     if not landmarks:
         return None
 
     landmark_pixels = {}
-    for name, (x, y, z, vis) in landmarks.items():
+    for name, (x, y, _z, vis) in landmarks.items():
         if vis > 0.1:
             px = int(x * frame_width)
             py = int(y * frame_height)
@@ -137,10 +163,10 @@ def draw_skeleton_overlay(frame, landmarks_str, frame_width, frame_height, legen
             p1 = landmark_pixels[lm1_name]
             p2 = landmark_pixels[lm2_name]
             color = get_connection_color(lm1_name, lm2_name, legend_colors)
-            cv2.line(frame, p1, p2, color, SKELETON_LINE_THICKNESS)
+            cv2.line(frame, p1, p2, color, metrics.px(SKELETON_LINE_THICKNESS))
 
     for name, (px, py) in landmark_pixels.items():
-        cv2.circle(frame, (px, py), LANDMARK_RADIUS, (255, 255, 255), -1)
+        cv2.circle(frame, (px, py), metrics.px(LANDMARK_RADIUS), (255, 255, 255), -1)
 
     # Determine head position for velocity text placement
     last_head_pos = None
@@ -154,13 +180,21 @@ def draw_skeleton_overlay(frame, landmarks_str, frame_width, frame_height, legen
                 last_head_pos = landmark_pixels[key]
                 break
     if last_head_pos is None and len(landmark_pixels) > 0:
-        last_head_pos = list(landmark_pixels.values())[0]
+        last_head_pos = next(iter(landmark_pixels.values()))
 
     return last_head_pos
 
 
-def draw_bar_path_trail(frame, path_points, path_phases, max_path_index,
-                        current_shake_x, current_shake_y, lift_type):
+def draw_bar_path_trail(
+    frame,
+    path_points,
+    path_phases,
+    max_path_index,
+    current_shake_x,
+    current_shake_y,
+    lift_type,
+    overlay_metrics=None,
+):
     """Draw phase-colored barbell path trail on the frame.
 
     Args:
@@ -187,18 +221,33 @@ def draw_bar_path_trail(frame, path_points, path_phases, max_path_index,
 
     phase_scheme = PHASE_COLOR_SCHEMES.get(lift_type, PHASE_COLOR_SCHEMES["snatch"])
 
+    metrics = overlay_metrics or OverlayMetrics.for_frame(frame.shape[1], frame.shape[0])
     for i in range(len(points_to_draw) - 1):
         p1 = (int(points_to_draw[i, 0]), int(points_to_draw[i, 1]))
         p2 = (int(points_to_draw[i + 1, 0]), int(points_to_draw[i + 1, 1]))
         phase_index = int(phases_to_draw[i])
         color = phase_scheme.get(phase_index, (255, 255, 255))
-        cv2.line(frame, p1, p2, color, 3)
+        cv2.line(frame, p1, p2, color, metrics.px(3))
 
 
-def draw_hud_overlay(frame, df, frame_width, frame_height, lift_type, hud_config,
-                     path_points, path_phases, max_path_index, shake_x, shake_y,
-                     landmarks_str, legend_colors, analysis_result=None,
-                     current_frame=None):
+def draw_hud_overlay(
+    frame,
+    df,
+    frame_width,
+    frame_height,
+    lift_type,
+    hud_config,
+    path_points,
+    path_phases,
+    max_path_index,
+    shake_x,
+    shake_y,
+    landmarks_str,
+    legend_colors,
+    analysis_result=None,
+    current_frame=None,
+    overlay_metrics=None,
+):
     """Orchestrator function for per-frame HUD compositing.
 
     Calls each HUD element function based on hud_config toggles.
@@ -223,33 +272,76 @@ def draw_hud_overlay(frame, df, frame_width, frame_height, lift_type, hud_config
     Returns:
         last_head_pos: tuple (x, y) or None
     """
+    metrics = overlay_metrics or OverlayMetrics.for_frame(frame_width, frame_height)
+
     # Draw bar path trail (always drawn)
-    draw_bar_path_trail(frame, path_points, path_phases, max_path_index,
-                        shake_x, shake_y, lift_type)
+    draw_bar_path_trail(
+        frame,
+        path_points,
+        path_phases,
+        max_path_index,
+        shake_x,
+        shake_y,
+        lift_type,
+        overlay_metrics=metrics,
+    )
 
     # Draw skeleton overlay
     last_head_pos = None
     if hud_config.show_skeleton:
-        last_head_pos = draw_skeleton_overlay(frame, landmarks_str, frame_width,
-                                               frame_height, legend_colors)
+        last_head_pos = draw_skeleton_overlay(
+            frame,
+            landmarks_str,
+            frame_width,
+            frame_height,
+            legend_colors,
+            overlay_metrics=metrics,
+        )
 
     # Draw velocity sparkline (returns box for power band positioning)
     sparkline_box = None
     if hud_config.show_sparkline:
         from .sparkline import draw_velocity_sparkline
+
         frame, sparkline_box = draw_velocity_sparkline(
-            frame, df, frame_width, frame_height, lift_type, current_frame)
+            frame,
+            df,
+            frame_width,
+            frame_height,
+            lift_type,
+            current_frame,
+            overlay_metrics=metrics,
+        )
 
     # Draw power zone band
     if hud_config.show_power_zones:
         from .power_band import draw_power_zone_band
+
         frame = draw_power_zone_band(
-            frame, df, frame_width, frame_height, sparkline_box, current_frame)
+            frame,
+            df,
+            frame_width,
+            frame_height,
+            sparkline_box,
+            current_frame,
+            overlay_metrics=metrics,
+        )
 
     # Draw error markers
     if hud_config.show_error_markers and analysis_result:
         from .error_markers import draw_error_markers
-        draw_error_markers(frame, analysis_result, df, path_points, path_phases,
-                           max_path_index, shake_x, shake_y, lift_type)
+
+        draw_error_markers(
+            frame,
+            analysis_result,
+            df,
+            path_points,
+            path_phases,
+            max_path_index,
+            shake_x,
+            shake_y,
+            lift_type,
+            overlay_metrics=metrics,
+        )
 
     return frame, last_head_pos

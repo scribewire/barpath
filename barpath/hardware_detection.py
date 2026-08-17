@@ -9,7 +9,7 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
 def detect_os() -> str:
@@ -30,7 +30,7 @@ def detect_os() -> str:
         return "unknown"
 
 
-def detect_cpu_brand() -> Optional[str]:
+def detect_cpu_brand() -> str | None:
     """
     Detect CPU brand (Intel or AMD).
 
@@ -66,7 +66,7 @@ def detect_cpu_brand() -> Optional[str]:
                 return "amd"
         elif sys.platform == "linux":
             # Linux: Check /proc/cpuinfo
-            with open("/proc/cpuinfo", "r") as f:
+            with open("/proc/cpuinfo") as f:
                 content = f.read().lower()
                 if "intel" in content:
                     return "intel"
@@ -110,12 +110,7 @@ def detect_nvidia_gpu() -> bool:
                 timeout=5,
             )
             output = result.stdout.lower()
-            if (
-                "nvidia" in output
-                or "geforce" in output
-                or "rtx" in output
-                or "gtx" in output
-            ):
+            if "nvidia" in output or "geforce" in output or "rtx" in output or "gtx" in output:
                 return True
         elif sys.platform == "linux":
             # Linux: Check lspci for NVIDIA VGA controllers
@@ -194,7 +189,7 @@ def detect_intel_gpu() -> bool:
     return False
 
 
-def get_hardware_profile() -> Dict[str, Any]:
+def get_hardware_profile() -> dict[str, Any]:
     """
     Get complete hardware profile.
 
@@ -210,8 +205,8 @@ def get_hardware_profile() -> Dict[str, Any]:
 
 
 def get_optional_packages(
-    hardware_profile: Dict[str, Any],
-) -> Tuple[List[str], List[str]]:
+    hardware_profile: dict[str, Any],
+) -> tuple[list[str], list[str]]:
     """
     Get list of optional hardware-accelerated packages based on hardware profile.
 
@@ -225,10 +220,7 @@ def get_optional_packages(
     has_nvidia_gpu = hardware_profile.get("nvidia_gpu", False)
 
     # ONNX Runtime - GPU version if NVIDIA GPU detected
-    if has_nvidia_gpu:
-        onnx_packages = ["onnxruntime-gpu"]
-    else:
-        onnx_packages = ["onnxruntime"]
+    onnx_packages = ["onnxruntime-gpu"] if has_nvidia_gpu else ["onnxruntime"]
 
     # OpenVINO options (Intel CPU only)
     openvino_packages = []
@@ -238,7 +230,7 @@ def get_optional_packages(
     return onnx_packages, openvino_packages
 
 
-def get_hardware_description(hardware_profile: Dict[str, Any]) -> str:
+def get_hardware_description(hardware_profile: dict[str, Any]) -> str:
     """
     Get a human-readable description of the detected hardware.
 
@@ -267,7 +259,7 @@ def get_hardware_description(hardware_profile: Dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def detect_installed_runtimes() -> Dict[str, bool]:
+def detect_installed_runtimes() -> dict[str, bool]:
     """
     Detect which hardware acceleration runtimes are currently installed.
 
@@ -307,7 +299,7 @@ def detect_installed_runtimes() -> Dict[str, bool]:
     return runtimes
 
 
-def get_available_runtimes_for_model(model_path: str) -> Dict[str, str]:
+def get_available_runtimes_for_model(model_path: str) -> dict[str, str]:
     """
     Get available runtimes for a specific model file.
 
@@ -331,24 +323,20 @@ def get_available_runtimes_for_model(model_path: str) -> Dict[str, str]:
         available["Ultralytics (PyTorch CPU)"] = "ultralytics"
 
     # For ONNX models, offer ONNX Runtime
-    if model_ext == ".onnx":
-        if installed["onnxruntime"]:
-            available["ONNX Runtime (GPU/CPU)"] = "onnxruntime"
+    if model_ext == ".onnx" and installed["onnxruntime"]:
+        available["ONNX Runtime (GPU/CPU)"] = "onnxruntime"
 
     # For TensorRT .engine models, offer TensorRT runtime
-    if model_ext == ".engine":
-        if installed["tensorrt"]:
-            available["TensorRT (NVIDIA GPU)"] = "tensorrt"
+    if model_ext == ".engine" and installed["tensorrt"]:
+        available["TensorRT (NVIDIA GPU)"] = "tensorrt"
 
     # For PT models (non-.engine), offer ONNX Runtime as alternative
-    if model_ext == ".pt" and not is_openvino_dir:
-        if installed["onnxruntime"]:
-            available["ONNX Runtime (GPU/CPU)"] = "onnxruntime"
+    if model_ext == ".pt" and not is_openvino_dir and installed["onnxruntime"]:
+        available["ONNX Runtime (GPU/CPU)"] = "onnxruntime"
 
     # For OpenVINO models/pt files, offer OpenVINO runtime (Intel CPU only)
-    if is_openvino_dir or model_ext == ".pt":
-        if installed["openvino"]:
-            available["OpenVINO (Intel CPU)"] = "openvino"
+    if (is_openvino_dir or model_ext == ".pt") and installed["openvino"]:
+        available["OpenVINO (Intel CPU)"] = "openvino"
 
     return available
 

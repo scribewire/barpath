@@ -5,14 +5,14 @@ Wraps existing lift detection model and provides probability scores.
 
 import pickle
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
 
-def load_lift_detection_model(model_path: str) -> Dict[str, Any]:
+def load_lift_detection_model(model_path: str) -> dict[str, Any]:
     """Load existing lift detection model."""
     path = Path(model_path)
     if not path.exists():
@@ -34,12 +34,12 @@ class LiftClassifier:
     # Confidence threshold for automatic detection
     CONFIDENCE_THRESHOLD = 0.50
 
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: str | None = None):
         """Initialize classifier with optional model path."""
-        self.model: Optional[RandomForestClassifier] = None
-        self.model_data: Optional[Dict[str, Any]] = None
-        self.classes: List[str] = ["clean", "clean_jerk", "jerk", "snatch"]
-        self.feature_names: Optional[List[str]] = None
+        self.model: RandomForestClassifier | None = None
+        self.model_data: dict[str, Any] | None = None
+        self.classes: list[str] = ["clean", "clean_jerk", "jerk", "snatch"]
+        self.feature_names: list[str] | None = None
 
         if model_path:
             self.load(model_path)
@@ -56,7 +56,7 @@ class LiftClassifier:
             print(f"Failed to load model: {e}")
             return False
 
-    def predict(self, features: np.ndarray) -> Dict[str, Any]:
+    def predict(self, features: np.ndarray) -> dict[str, Any]:
         """
         Predict lift class and confidence.
 
@@ -74,10 +74,7 @@ class LiftClassifier:
             return {"class": "none", "confidence": 0.0, "probabilities": {}}
 
         # Handle 1D or 2D input
-        if features.ndim == 1:
-            features_2d = features.reshape(1, -1)
-        else:
-            features_2d = features
+        features_2d = features.reshape(1, -1) if features.ndim == 1 else features
 
         try:
             # Get probabilities
@@ -99,7 +96,7 @@ class LiftClassifier:
             print(f"Prediction error: {e}")
             return {"class": "none", "confidence": 0.0, "probabilities": {}}
 
-    def predict_from_dataframe(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def predict_from_dataframe(self, df: pd.DataFrame) -> dict[str, Any]:
         """Extract features from DataFrame and predict."""
         from lift_detection_features import extract_model_features_as_array
 
@@ -136,14 +133,12 @@ class LiveLiftClassifier(LiftClassifier):
     # Smoothing window for confidence
     CONFIDENCE_SMOOTHING_WINDOW = 5
 
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: str | None = None):
         super().__init__(model_path)
-        self._confidence_history: List[float] = []
-        self._last_prediction: Dict[str, Any] = {"class": "none", "confidence": 0.0}
+        self._confidence_history: list[float] = []
+        self._last_prediction: dict[str, Any] = {"class": "none", "confidence": 0.0}
 
-    def predict_live(
-        self, features: np.ndarray, apply_smoothing: bool = True
-    ) -> Dict[str, Any]:
+    def predict_live(self, features: np.ndarray, apply_smoothing: bool = True) -> dict[str, Any]:
         """Predict with optional confidence smoothing."""
         prediction = self.predict(features)
 
@@ -152,9 +147,7 @@ class LiveLiftClassifier(LiftClassifier):
             smoothed = self._smooth_confidence(prediction["confidence"])
             prediction["confidence"] = smoothed
             prediction["class"] = (
-                prediction["class"]
-                if smoothed >= self.LIVE_CONFIDENCE_THRESHOLD
-                else "none"
+                prediction["class"] if smoothed >= self.LIVE_CONFIDENCE_THRESHOLD else "none"
             )
 
         self._last_prediction = prediction
@@ -182,7 +175,7 @@ class LiveLiftClassifier(LiftClassifier):
         self._confidence_history.clear()
 
     @property
-    def last_prediction(self) -> Dict[str, Any]:
+    def last_prediction(self) -> dict[str, Any]:
         """Get last prediction."""
         return self._last_prediction
 
@@ -205,7 +198,7 @@ def find_model_path() -> str:
     return "barpath/models/lift_detection/lift_detection_model.pkl"
 
 
-def create_classifier(model_path: Optional[str] = None) -> LiveLiftClassifier:
+def create_classifier(model_path: str | None = None) -> LiveLiftClassifier:
     """Create a classifier with default model path."""
     if model_path is None:
         model_path = find_model_path()

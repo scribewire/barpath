@@ -13,9 +13,8 @@ scipy>=1.14.0
 # Visualization
 matplotlib>=3.9.0
 
-# ML Analysis Libraries (for Smart Analysis)
-scikit-learn>=1.5.0  # Random Forest classifier for fault detection
-dtw-python>=1.4.0    # Dynamic Time Warping for bar path similarity
+# ML Analysis Libraries
+scikit-learn>=1.5.0  # Random Forest classifiers (lift-type detection, fault detection)
 
 # Utilities
 rich>=13.9.0  # Progress bars and formatted output in CLI

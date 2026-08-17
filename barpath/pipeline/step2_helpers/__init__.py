@@ -25,17 +25,17 @@ from .landmark_processing import (
 )
 
 __all__ = [
-    "unpack_landmarks",
+    "assign_phases_from_classics",
+    "assign_phases_kinematic",
+    "calculate_hip_y_average",
     "calculate_joint_angles",
     "calculate_lifter_angle",
-    "detect_facing_direction",
-    "calculate_hip_y_average",
-    "drop_intermediate_columns",
     "calculate_stabilized_position",
+    "calculate_time_and_kinematics",
+    "detect_facing_direction",
+    "drop_intermediate_columns",
     "smooth_barbell_position",
     "truncate_at_knee_pass",
     "truncate_at_peak_height",
-    "calculate_time_and_kinematics",
-    "assign_phases_from_classics",
-    "assign_phases_kinematic",
+    "unpack_landmarks",
 ]

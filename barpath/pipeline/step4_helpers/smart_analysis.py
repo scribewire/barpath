@@ -7,7 +7,7 @@ This module provides ML-based fault detection with probability-weighted critique
 import json
 import pickle
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, cast
 
 import numpy as np
 
@@ -25,7 +25,7 @@ except ImportError:
 
 def load_smart_analysis_model(
     model_dir: Path,
-) -> Tuple[Optional[Any], Optional[Dict], Optional[Dict]]:
+) -> tuple[Any | None, dict | None, dict | None]:
     """
     Load trained Random Forest model and metadata for Smart Analysis.
 
@@ -51,12 +51,12 @@ def load_smart_analysis_model(
 
         features_config = None
         if features_path.exists():
-            with open(features_path, "r") as f:
+            with open(features_path) as f:
                 features_config = json.load(f)
 
         faults_config = None
         if faults_path.exists():
-            with open(faults_path, "r") as f:
+            with open(faults_path) as f:
                 faults_config = json.load(f)
 
         return model, features_config, faults_config
@@ -66,12 +66,12 @@ def load_smart_analysis_model(
 
 
 def run_smart_analysis(
-    features: Dict[str, float],
+    features: dict[str, float],
     model: Any,
-    features_config: Optional[Dict] = None,
-    faults_config: Optional[Dict] = None,
+    features_config: dict | None = None,
+    faults_config: dict | None = None,
     threshold: float = 0.5,
-) -> Dict:
+) -> dict:
     """
     Run fault detection using trained Random Forest model.
 
@@ -125,22 +125,16 @@ def run_smart_analysis(
                             float(proba[0]) if hasattr(proba, "__getitem__") else 0.5
                         )
             else:
-                fault_probs = {
-                    "fault_0": float(probas[0, 1]) if probas.shape[1] >= 2 else 0.5
-                }
+                fault_probs = {"fault_0": float(probas[0, 1]) if probas.shape[1] >= 2 else 0.5}
         else:
             predictions = cast(Any, model.predict)(X)
             if isinstance(predictions[0], (list, np.ndarray)):
-                fault_probs = {
-                    f"fault_{i}": float(p) for i, p in enumerate(predictions[0])
-                }
+                fault_probs = {f"fault_{i}": float(p) for i, p in enumerate(predictions[0])}
             else:
                 fault_probs = {"fault_0": float(predictions[0])}
 
         if faults_config and "faults" in faults_config:
-            fault_names = [
-                f.get("id", f"fault_{i}") for i, f in enumerate(faults_config["faults"])
-            ]
+            fault_names = [f.get("id", f"fault_{i}") for i, f in enumerate(faults_config["faults"])]
             named_probs = {}
             for i, (key, val) in enumerate(fault_probs.items()):
                 if i < len(fault_names):

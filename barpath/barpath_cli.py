@@ -25,8 +25,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+# Add repo root to path so `barpath` is importable when run as a script
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import the core pipeline runner
 from barpath.barpath_core import run_pipeline
@@ -97,38 +97,36 @@ def print_rich_help(console, parser):
     console.print("[bold]Examples:[/bold]")
     example_text = """
     [dim]# 1. Auto-detect lift type (default)[/dim]
-    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type auto --no-video
+    python barpath/barpath_cli.py --input_video lift.mp4 --model barpath/models/std_nano.pt --lift_type auto --no-video
 
     [dim]# 2. Full clean analysis with video output (YOLO26)[/dim]
-    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type clean --output_video out.mp4
+    python barpath/barpath_cli.py --input_video lift.mp4 --model barpath/models/std_nano.pt --lift_type clean --output_video out.mp4
 
     [dim]# 3. Snatch analysis — reports Pull / Pull-under / Recovery phases[/dim]
-    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --lift_type snatch --output_video out.mp4
+    python barpath/barpath_cli.py --input_video lift.mp4 --model barpath/models/std_nano.pt --lift_type snatch --output_video out.mp4
 
     [dim]# 4. Jerk analysis — reports Dip / Drive / Recovery phases[/dim]
-    python barpath/barpath_cli.py --input_video jerk.mp4 --model models/yolo26n.pt --lift_type jerk --output_video out.mp4
+    python barpath/barpath_cli.py --input_video jerk.mp4 --model barpath/models/std_nano.pt --lift_type jerk --output_video out.mp4
 
     [dim]# 5. Clean & Jerk analysis — splits into two segments[/dim]
-    python barpath/barpath_cli.py --input_video clean_jerk.mp4 --model models/yolo26n.pt --lift_type clean_jerk --output_video out.mp4
+    python barpath/barpath_cli.py --input_video clean_jerk.mp4 --model barpath/models/std_nano.pt --lift_type clean_jerk --output_video out.mp4
 
     [dim]# 6. OpenVINO model (Intel CPU optimization, YOLO26 export)[/dim]
-    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26_openvino_export --lift_type none --no-video
+    python barpath/barpath_cli.py --input_video lift.mp4 --model barpath/models/std_nano_openvino_model --lift_type none --no-video
 
     [dim]# 7. Batch processing multiple videos[/dim]
-    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 vid3.mp4 --model models/yolo26n.pt --lift_type auto --no-video
+    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 vid3.mp4 --model barpath/models/std_nano.pt --lift_type auto --no-video
 
     [dim]# 8. Custom output directory[/dim]
-    python barpath/barpath_cli.py --input_video lift.mp4 --model models/yolo26n.pt --output_dir my_results/
+    python barpath/barpath_cli.py --input_video lift.mp4 --model barpath/models/std_nano.pt --output_dir my_results/
 
     [dim]# 9. Skip already processed videos[/dim]
-    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 --model models/yolo26n.pt --skip-existing
+    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 --model barpath/models/std_nano.pt --skip-existing
 
     [dim]# 10. Force reprocess all videos (overwrite existing)[/dim]
-    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 --model models/yolo26n.pt --force
+    python barpath/barpath_cli.py --input_video vid1.mp4 vid2.mp4 --model barpath/models/std_nano.pt --force
     """
-    console.print(
-        Panel(example_text.strip(), title="Sample Commands", border_style="green")
-    )
+    console.print(Panel(example_text.strip(), title="Sample Commands", border_style="green"))
     console.print()
 
 
@@ -139,9 +137,7 @@ def main():
     console = Console()
 
     # Set up argument parser
-    class CustomFormatter(
-        argparse.RawTextHelpFormatter, argparse.ArgumentDefaultsHelpFormatter
-    ):
+    class CustomFormatter(argparse.RawTextHelpFormatter, argparse.ArgumentDefaultsHelpFormatter):
         pass
 
     parser = argparse.ArgumentParser(
@@ -160,7 +156,7 @@ def main():
     _ = parser.add_argument(
         "--model",
         required=True,
-        help="Path to the trained YOLO model (e.g., 'models/yolo26n.pt', 'models/best.onnx', 'models/best.engine', or an OpenVINO export directory). YOLO26 NMS-free models are fully supported.",
+        help="Path to the trained YOLO model (e.g., 'barpath/models/std_nano.pt', 'models/best.onnx', 'models/best.engine', or an OpenVINO export directory like 'barpath/models/std_nano_openvino_model'). YOLO26 NMS-free models are fully supported.",
     )
     _ = parser.add_argument(
         "--output_video",
@@ -240,7 +236,7 @@ def main():
     try:
         args = parser.parse_args()
     except argparse.ArgumentError as e:
-        console.print(f"[bold red]Error:[/bold red] {str(e)}")
+        console.print(f"[bold red]Error:[/bold red] {e!s}")
         print_rich_help(console, parser)
         sys.exit(1)
     except SystemExit:
@@ -258,9 +254,7 @@ def main():
             if video_path.exists():
                 input_videos.append(video_path)
             else:
-                print(
-                    f"Error: Input video file not found: {video_arg}", file=sys.stderr
-                )
+                print(f"Error: Input video file not found: {video_arg}", file=sys.stderr)
                 sys.exit(1)
         else:
             print(f"Warning: Skipping non-video file: {video_arg}", file=sys.stderr)
@@ -320,9 +314,7 @@ def main():
 
     console.print("\n[bold]Configuration:[/bold]")
     if is_batch:
-        console.print(
-            f"  Input Videos: [cyan]{len(input_videos)} videos to process[/cyan]"
-        )
+        console.print(f"  Input Videos: [cyan]{len(input_videos)} videos to process[/cyan]")
         for i, vid in enumerate(input_videos, 1):
             console.print(f"    {i}. {vid.name}")
     else:
@@ -379,16 +371,12 @@ def main():
                         console.print(
                             f"[yellow]Skipping {len(videos_to_skip)} existing video(s)[/yellow]"
                         )
-                        console.print(
-                            f"[cyan]Processing {len(videos_to_process)} video(s)[/cyan]"
-                        )
+                        console.print(f"[cyan]Processing {len(videos_to_process)} video(s)[/cyan]")
                         break
                     elif choice == "2":
                         videos_to_process = input_videos  # Process all
                         videos_to_skip = []
-                        console.print(
-                            f"[cyan]Reprocessing all {len(input_videos)} video(s)[/cyan]"
-                        )
+                        console.print(f"[cyan]Reprocessing all {len(input_videos)} video(s)[/cyan]")
                         break
                     elif choice == "3":
                         console.print("[yellow]Cancelled.[/yellow]")
@@ -399,9 +387,7 @@ def main():
                     console.print("\n[yellow]Cancelled.[/yellow]")
                     sys.exit(0)
         elif videos_to_skip and args.skip_existing:
-            console.print(
-                f"[yellow]Skipping {len(videos_to_skip)} existing video(s)[/yellow]"
-            )
+            console.print(f"[yellow]Skipping {len(videos_to_skip)} existing video(s)[/yellow]")
             console.print(f"[cyan]Processing {len(videos_to_process)} video(s)[/cyan]")
         else:
             videos_to_process = input_videos
@@ -460,10 +446,10 @@ def main():
                 # Run the pipeline and consume progress updates
                 try:
                     hud_options = {
-                        'show_skeleton': not args.no_skeleton,
-                        'show_sparkline': not args.no_sparkline,
-                        'show_power_zones': not args.no_power_zones,
-                        'show_error_markers': not args.no_error_markers,
+                        "show_skeleton": not args.no_skeleton,
+                        "show_sparkline": not args.no_sparkline,
+                        "show_power_zones": not args.no_power_zones,
+                        "show_error_markers": not args.no_error_markers,
                     }
 
                     for step_name, prog_value, message in run_pipeline(
@@ -548,15 +534,11 @@ def main():
 
                 except Exception as e:
                     # Catch any other exceptions during pipeline execution
-                    console.print(
-                        f"[red]Error processing {input_video.name}: {str(e)}[/red]"
-                    )
+                    console.print(f"[red]Error processing {input_video.name}: {e!s}[/red]")
                     continue
 
             # Final summary
-            console.print(
-                "\n[bold green]:heavy_check_mark: All Videos Processed![/bold green]"
-            )
+            console.print("\n[bold green]:heavy_check_mark: All Videos Processed![/bold green]")
 
             # Report skipped videos due to insufficient data
             if skipped_insufficient:
@@ -569,9 +551,7 @@ def main():
             console.print("\n[bold]Generated files:[/bold]")
             if is_batch:
                 console.print(f"  - Output Dir:      [cyan]{args.output_dir}/[/cyan]")
-                console.print(
-                    "  - [cyan]Results saved in subfolders for each video[/cyan]"
-                )
+                console.print("  - [cyan]Results saved in subfolders for each video[/cyan]")
                 for vid in videos_to_process:
                     subfolder = os.path.join(args.output_dir, vid.stem)
                     console.print(f"    - {vid.name} -> {subfolder}/")
@@ -589,30 +569,24 @@ def main():
                 elif args.lift_type in ("clean", "snatch"):
                     phase_text = "Pull -> Pull-under -> Recovery"
                 elif args.lift_type == "clean_jerk":
-                    phase_text = (
-                        "Clean: Pull->Pull-under->Recovery | Jerk: Dip->Drive->Recovery"
-                    )
+                    phase_text = "Clean: Pull->Pull-under->Recovery | Jerk: Dip->Drive->Recovery"
                 else:
                     phase_text = "N/A"
                 console.print(f"  - Phases:          [cyan]{phase_text}[/cyan]")
                 if not args.no_video:
-                    console.print(
-                        f"  - Output video:    [cyan]{args.output_video}[/cyan]"
-                    )
+                    console.print(f"  - Output video:    [cyan]{args.output_video}[/cyan]")
 
             # Display Analysis Report if available (for last video in batch mode)
             if is_batch and input_videos:
                 last_video = input_videos[-1]
-                analysis_path = os.path.join(
-                    args.output_dir, last_video.stem, "analysis.md"
-                )
+                analysis_path = os.path.join(args.output_dir, last_video.stem, "analysis.md")
             else:
                 analysis_path = os.path.join(args.output_dir, "analysis.md")
 
             if os.path.exists(analysis_path) and args.lift_type != "none":
                 console.print()
                 try:
-                    with open(analysis_path, "r") as f:
+                    with open(analysis_path) as f:
                         md_content = f.read()
 
                     # Render markdown inside a styled panel
@@ -633,7 +607,7 @@ def main():
             console.print("\n[yellow]Pipeline interrupted by user.[/yellow]")
             sys.exit(130)
         except Exception as e:
-            console.print(f"\n[bold red]Error:[/bold red] {str(e)}")
+            console.print(f"\n[bold red]Error:[/bold red] {e!s}")
             import traceback
 
             traceback.print_exc()

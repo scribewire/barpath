@@ -13,7 +13,7 @@ Classes: ["clean", "clean_jerk", "jerk", "snatch"]
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -48,7 +48,7 @@ def _safe_savgol(
     y: NDArray[np.float64], max_win: int = 21, polyorder: int = 3
 ) -> NDArray[np.float64]:
     """Savitzky-Golay smoothing with safe window handling."""
-    n = int(len(y))
+    n = len(y)
     if n < 5:
         return y.copy()
     win = min(max_win, n if n % 2 == 1 else n - 1)
@@ -85,10 +85,7 @@ def extract_trajectory(df: pd.DataFrame) -> NDArray[np.float64]:
 
     y = _safe_interp_numeric(cast(pd.Series, df["barbell_y_smooth"]))
     y_range = float(np.nanmax(y) - np.nanmin(y))
-    if y_range > 0:
-        y = (y - np.nanmin(y)) / y_range
-    else:
-        y = np.zeros_like(y)
+    y = (y - np.nanmin(y)) / y_range if y_range > 0 else np.zeros_like(y)
 
     vel = np.zeros_like(y)
     if "vel_y_smooth" in df.columns:
@@ -108,13 +105,11 @@ def extract_trajectory(df: pd.DataFrame) -> NDArray[np.float64]:
     if not bool(np.any(mask)):
         return np.empty((0, 3), dtype=np.float64)
 
-    traj = np.column_stack((y[mask], vel[mask], accel[mask])).astype(
-        np.float64, copy=False
-    )
+    traj = np.column_stack((y[mask], vel[mask], accel[mask])).astype(np.float64, copy=False)
     return cast(NDArray[np.float64], traj)
 
 
-def extract_joint_data(df: pd.DataFrame) -> Dict[str, NDArray[np.float64]]:
+def extract_joint_data(df: pd.DataFrame) -> dict[str, NDArray[np.float64]]:
     """Extract joint position data for biomechanical analysis.
 
     Returns dict of joint_name -> Nx2 array (x_norm, y_norm) where
@@ -124,7 +119,7 @@ def extract_joint_data(df: pd.DataFrame) -> Dict[str, NDArray[np.float64]]:
     if fh == 0.0:
         fh = 1.0
 
-    joints: Dict[str, NDArray[np.float64]] = {}
+    joints: dict[str, NDArray[np.float64]] = {}
     joint_cols = {
         "left_ankle": ["left_ankle_x", "left_ankle_y"],
         "right_ankle": ["right_ankle_x", "right_ankle_y"],
@@ -156,11 +151,11 @@ def extract_joint_data(df: pd.DataFrame) -> Dict[str, NDArray[np.float64]]:
 
 def compute_trajectory_shape_features(
     trajectory: NDArray[np.float64],
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Compute basic trajectory shape features from kinematic channels."""
     from scipy.stats import kurtosis, skew
 
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
     if len(trajectory) < 10:
         return {f"shape_{k}": 0.0 for k in range(20)}
 
@@ -173,9 +168,7 @@ def compute_trajectory_shape_features(
     features["shape_y_min"] = float(np.min(y))
     features["shape_y_max"] = float(np.max(y))
 
-    features["shape_y_start_to_min"] = (
-        features["shape_y_min"] - features["shape_y_start"]
-    )
+    features["shape_y_start_to_min"] = features["shape_y_min"] - features["shape_y_start"]
     features["shape_y_min_to_end"] = features["shape_y_end"] - features["shape_y_min"]
 
     features["shape_y_skewness"] = float(skew(y)) if len(y) > 3 else 0.0
@@ -199,9 +192,7 @@ def compute_trajectory_shape_features(
     first_half = _to_float_array_1d(y[: n // 2])
     second_half = _to_float_array_1d(y[n // 2 :])
 
-    features["shape_y_mean_first_half"] = (
-        float(np.mean(first_half)) if len(first_half) > 0 else 0.0
-    )
+    features["shape_y_mean_first_half"] = float(np.mean(first_half)) if len(first_half) > 0 else 0.0
     features["shape_y_mean_second_half"] = (
         float(np.mean(second_half)) if len(second_half) > 0 else 0.0
     )
@@ -220,9 +211,9 @@ def compute_trajectory_shape_features(
 # ============================================================================
 
 
-def compute_velocity_features(trajectory: NDArray[np.float64]) -> Dict[str, float]:
+def compute_velocity_features(trajectory: NDArray[np.float64]) -> dict[str, float]:
     """Compute velocity and acceleration features from kinematic channels."""
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
     if len(trajectory) < 10:
         return {f"vel_{k}": 0.0 for k in range(10)}
 
@@ -258,9 +249,9 @@ def compute_velocity_features(trajectory: NDArray[np.float64]) -> Dict[str, floa
 # ============================================================================
 
 
-def compute_phase_features(trajectory: NDArray[np.float64]) -> Dict[str, float]:
+def compute_phase_features(trajectory: NDArray[np.float64]) -> dict[str, float]:
     """Compute phase-based features from trajectory peaks and valleys."""
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
     if len(trajectory) < 20:
         return {f"phase_{k}": 0.0 for k in range(15)}
 
@@ -281,9 +272,7 @@ def compute_phase_features(trajectory: NDArray[np.float64]) -> Dict[str, float]:
         )
         if len(peaks) > 1:
             features["phase_peak_gap"] = float(peaks[1] - peaks[0]) / float(len(y))
-            features["phase_two_distinct_peaks"] = (
-                1.0 if features["phase_peak_gap"] > 0.2 else 0.0
-            )
+            features["phase_two_distinct_peaks"] = 1.0 if features["phase_peak_gap"] > 0.2 else 0.0
         else:
             features["phase_peak_gap"] = 0.0
             features["phase_two_distinct_peaks"] = 0.0
@@ -296,9 +285,7 @@ def compute_phase_features(trajectory: NDArray[np.float64]) -> Dict[str, float]:
 
     if len(valleys) > 0:
         features["phase_first_valley_pos"] = float(valleys[0]) / float(len(y))
-        features["phase_valley_depth"] = float(y_smooth[valleys[0]]) - float(
-            np.min(y_smooth)
-        )
+        features["phase_valley_depth"] = float(y_smooth[valleys[0]]) - float(np.min(y_smooth))
     else:
         features["phase_first_valley_pos"] = 0.0
         features["phase_valley_depth"] = 0.0
@@ -310,15 +297,9 @@ def compute_phase_features(trajectory: NDArray[np.float64]) -> Dict[str, float]:
     features["phase_early_peak"] = 1.0 if y_min_idx < (len(y_smooth) // 2) else 0.0
 
     mid = len(y_smooth) // 2
-    first_half = (
-        _to_float_array_1d(y_smooth[:mid])
-        if mid > 0
-        else np.empty((0,), dtype=np.float64)
-    )
+    first_half = _to_float_array_1d(y_smooth[:mid]) if mid > 0 else np.empty((0,), dtype=np.float64)
     second_half = (
-        _to_float_array_1d(y_smooth[mid:])
-        if mid > 0
-        else np.empty((0,), dtype=np.float64)
+        _to_float_array_1d(y_smooth[mid:]) if mid > 0 else np.empty((0,), dtype=np.float64)
     )
 
     first_half_var = float(np.var(first_half)) if len(first_half) > 0 else 0.0
@@ -338,7 +319,7 @@ def compute_phase_features(trajectory: NDArray[np.float64]) -> Dict[str, float]:
 # ============================================================================
 
 
-def detect_s_curve_pattern(trajectory: NDArray[np.float64]) -> Dict[str, float]:
+def detect_s_curve_pattern(trajectory: NDArray[np.float64]) -> dict[str, float]:
     """Detect S-curve trajectory pattern from vertical position channel."""
     if len(trajectory) < 10:
         return {
@@ -360,16 +341,11 @@ def detect_s_curve_pattern(trajectory: NDArray[np.float64]) -> Dict[str, float]:
     downward_motion = float(abs(np.sum(dy[dy > 0])))
 
     total_motion = upward_motion + downward_motion
-    if total_motion > 0:
-        s_curve_score = min(upward_motion, downward_motion) / total_motion
-    else:
-        s_curve_score = 0.0
+    s_curve_score = min(upward_motion, downward_motion) / total_motion if total_motion > 0 else 0.0
 
     return {
         "s_curve_score": s_curve_score,
-        "s_curve_detected": 1.0
-        if s_curve_score > VERTICAL_MOTION_BALANCE_RATIO
-        else 0.0,
+        "s_curve_detected": 1.0 if s_curve_score > VERTICAL_MOTION_BALANCE_RATIO else 0.0,
         "upward_motion": upward_motion,
         "downward_motion": downward_motion,
         "n_upward_peaks": float(len(upward_peaks)),
@@ -382,9 +358,9 @@ def detect_s_curve_pattern(trajectory: NDArray[np.float64]) -> Dict[str, float]:
 # ============================================================================
 
 
-def detect_clean_jerk_pattern(trajectory: NDArray[np.float64]) -> Dict[str, float]:
+def detect_clean_jerk_pattern(trajectory: NDArray[np.float64]) -> dict[str, float]:
     """Detect clean & jerk specific two-phase pattern from kinematic trajectory."""
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
     if len(trajectory) < 30:
         return {f"cj_{k}": 0.0 for k in range(10)}
 
@@ -414,9 +390,7 @@ def detect_clean_jerk_pattern(trajectory: NDArray[np.float64]) -> Dict[str, floa
             dy[first_peak:second_peak] if second_peak <= len(dy) else dy[first_peak:]
         )
         if len(between_dy) > 0:
-            near_zero = float(np.sum(np.abs(between_dy) < 0.001)) / float(
-                len(between_dy)
-            )
+            near_zero = float(np.sum(np.abs(between_dy) < 0.001)) / float(len(between_dy))
             features["cj_pause_ratio"] = near_zero
         else:
             features["cj_pause_ratio"] = 0.0
@@ -429,11 +403,7 @@ def detect_clean_jerk_pattern(trajectory: NDArray[np.float64]) -> Dict[str, floa
 
     n = len(y_smooth)
     third = n // 3
-    a = (
-        _to_float_array_1d(y_smooth[:third])
-        if third > 0
-        else np.empty((0,), dtype=np.float64)
-    )
+    a = _to_float_array_1d(y_smooth[:third]) if third > 0 else np.empty((0,), dtype=np.float64)
     b = (
         _to_float_array_1d(y_smooth[third : 2 * third])
         if (2 * third) > third
@@ -452,7 +422,7 @@ def detect_clean_jerk_pattern(trajectory: NDArray[np.float64]) -> Dict[str, floa
     return features
 
 
-def detect_clean_jerk_split_point(df: pd.DataFrame) -> Optional[int]:
+def detect_clean_jerk_split_point(df: pd.DataFrame) -> int | None:
     """Detect the frame index where the jerk begins in a clean+jerk lift.
 
     Uses a global-maximum + backward-valley search heuristic on the smoothed
@@ -514,12 +484,12 @@ def detect_clean_jerk_split_point(df: pd.DataFrame) -> Optional[int]:
     #    the jerk dip.  We find it as the point of minimum |velocity|
     #    between the clean peak (deepest physical high point before dip)
     #    and the dip bottom.
-    split_frame: Optional[int] = None
+    split_frame: int | None = None
 
     # Find the clean peak: deepest local minimum before the dip
     valleys, _ = signal.find_peaks(-y_smooth_pre, prominence=prom * 0.3, distance=5)
     valid_valleys = valleys[valleys < dip_bottom_idx]
-    clean_peak_idx: Optional[int] = None
+    clean_peak_idx: int | None = None
     if len(valid_valleys) > 0:
         # Select the deepest valley (smallest y) before the dip
         clean_peak_idx = int(valid_valleys[np.argmin(y_smooth_pre[valid_valleys])])
@@ -594,9 +564,7 @@ def _extract_dip_depth_norm(df: pd.DataFrame) -> float:
         dip_lowest = float(np.min(dip_y))
         dip_highest = float(np.max(dip_y))
         dip_depth = dip_highest - dip_lowest
-        frame_h = (
-            float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 1.0
-        )
+        frame_h = float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 1.0
         return float(dip_depth / frame_h) if frame_h > 0 else 0.0
     return 0.0
 
@@ -696,9 +664,7 @@ def _extract_pull_duration_frac(df: pd.DataFrame) -> float:
 
     phase_0_mask = phases_arr == 0
     phase_0_times = times_arr[phase_0_mask]
-    phase_0_time = (
-        float(np.sum(np.diff(phase_0_times))) if len(phase_0_times) > 0 else 0.0
-    )
+    phase_0_time = float(np.sum(np.diff(phase_0_times))) if len(phase_0_times) > 0 else 0.0
     return phase_0_time / total_time
 
 
@@ -721,9 +687,7 @@ def _extract_turnover_duration_frac(df: pd.DataFrame) -> float:
 
     phase_1_mask = phases_arr == 1
     phase_1_times = times_arr[phase_1_mask]
-    phase_1_time = (
-        float(np.sum(np.diff(phase_1_times))) if len(phase_1_times) > 0 else 0.0
-    )
+    phase_1_time = float(np.sum(np.diff(phase_1_times))) if len(phase_1_times) > 0 else 0.0
     return phase_1_time / total_time
 
 
@@ -732,7 +696,7 @@ def _extract_turnover_duration_frac(df: pd.DataFrame) -> float:
 # ============================================================================
 
 # Feature names in the exact order the model expects (sorted alphabetically).
-_MODEL_FEATURE_NAMES: List[str] = [
+_MODEL_FEATURE_NAMES: list[str] = [
     "cj_n_major_peaks",
     "cj_phase_gap",
     "cj_two_phase_detected",
@@ -773,12 +737,12 @@ _MODEL_FEATURE_NAMES: List[str] = [
 ]
 
 
-def get_model_feature_names() -> List[str]:
+def get_model_feature_names() -> list[str]:
     """Return the list of feature names the model expects, in order."""
     return list(_MODEL_FEATURE_NAMES)
 
 
-def extract_model_features(df: pd.DataFrame) -> Dict[str, float]:
+def extract_model_features(df: pd.DataFrame) -> dict[str, float]:
     """Extract exactly the 37 features the lift detection model expects.
 
     Combines trajectory-based features (from training script) with
@@ -798,13 +762,13 @@ def extract_model_features(df: pd.DataFrame) -> Dict[str, float]:
     Returns:
         Dict of 37 feature name -> value pairs.
     """
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
 
     # Extract trajectory (Nx3: [y_norm, vel_norm, accel_norm])
     trajectory = extract_trajectory(df)
     if len(trajectory) < 10:
         # Return all zeros if trajectory too short
-        return {name: 0.0 for name in _MODEL_FEATURE_NAMES}
+        return dict.fromkeys(_MODEL_FEATURE_NAMES, 0.0)
 
     # --- Trajectory shape features (model needs 6 of them) ---
     shape_feats = compute_trajectory_shape_features(trajectory)
@@ -869,7 +833,7 @@ def extract_model_features(df: pd.DataFrame) -> Dict[str, float]:
 
 
 def extract_model_features_as_array(
-    df: pd.DataFrame, feature_names: Optional[List[str]] = None
+    df: pd.DataFrame, feature_names: list[str] | None = None
 ) -> NDArray[np.float64]:
     """Extract features as a 1D numpy array in model-expected order.
 
@@ -924,10 +888,10 @@ def compute_joint_angle(
 
 
 def compute_joint_angles_from_landmarks(
-    landmarks: Dict[int, tuple[float, float, float, float]],
+    landmarks: dict[int, tuple[float, float, float, float]],
     frame_width: int,
     frame_height: int,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Compute joint angles from MediaPipe pose landmarks.
 
     Args:
@@ -939,7 +903,7 @@ def compute_joint_angles_from_landmarks(
         Dict with left_elbow_angle, right_elbow_angle,
         left_knee_angle, right_knee_angle in degrees.
     """
-    angles: Dict[str, float] = {}
+    angles: dict[str, float] = {}
 
     # MediaPipe landmark indices:
     # 11=left_shoulder, 12=right_shoulder
@@ -949,7 +913,7 @@ def compute_joint_angles_from_landmarks(
     # 25=left_knee, 26=right_knee
     # 27=left_ankle, 28=right_ankle
 
-    def _get_px(idx: int) -> Optional[tuple[float, float]]:
+    def _get_px(idx: int) -> tuple[float, float] | None:
         """Get pixel coordinates for a landmark index."""
         if idx not in landmarks:
             return None
@@ -998,8 +962,8 @@ def compute_joint_angles_from_landmarks(
 
 
 def compute_joint_positions_from_landmarks(
-    landmarks: Dict[int, tuple[float, float, float, float]],
-) -> Dict[str, float]:
+    landmarks: dict[int, tuple[float, float, float, float]],
+) -> dict[str, float]:
     """Extract normalized joint positions from MediaPipe landmarks.
 
     Returns dict with keys like left_knee_x, left_knee_y, etc.
@@ -1021,7 +985,7 @@ def compute_joint_positions_from_landmarks(
         28: "right_ankle",
     }
 
-    positions: Dict[str, float] = {}
+    positions: dict[str, float] = {}
     for idx, name in joint_map.items():
         if idx in landmarks:
             x_norm, y_norm, _z, _vis = landmarks[idx]
@@ -1041,7 +1005,7 @@ def compute_joint_positions_from_landmarks(
 
 def detect_phases_from_velocity(
     vel_smooth: NDArray[np.float64],
-    y_smooth: Optional[NDArray[np.float64]] = None,
+    y_smooth: NDArray[np.float64] | None = None,
     fps: float = 30.0,
 ) -> NDArray[np.int64]:
     """Detect 3 phases from smoothed velocity signal.
@@ -1068,9 +1032,7 @@ def detect_phases_from_velocity(
         return np.zeros(n, dtype=np.int64)
 
     # Smooth the velocity for stable boundary detection
-    vel_for_phases = _safe_savgol(
-        vel_smooth, max_win=min(21, n if n % 2 == 1 else n - 1)
-    )
+    vel_for_phases = _safe_savgol(vel_smooth, max_win=min(21, n if n % 2 == 1 else n - 1))
 
     # Compute y-position if not provided (integrate velocity)
     if y_smooth is None:
@@ -1172,22 +1134,18 @@ def _detect_three_phases_hip(
     hip_vel = np.gradient(hip_smooth)
 
     hip_std = float(np.std(hip_smooth))
-    hip_drop_threshold = (
-        hip_std * 0.1 if hip_std > 0 else 0.5
-    )  # PHASE_HIP_DROP_STD_FACTOR
+    hip_drop_threshold = hip_std * 0.1 if hip_std > 0 else 0.5  # PHASE_HIP_DROP_STD_FACTOR
     hips_dropping = hip_vel > hip_drop_threshold
 
-    pull_under_start: Optional[int] = None
+    pull_under_start: int | None = None
     if np.any(hips_dropping):
         pull_under_start = pull_start + int(np.argmax(hips_dropping))
 
-    recovery_start: Optional[int] = None
+    recovery_start: int | None = None
     if pull_under_start is not None:
         hip_after_pu = hip_y[pull_under_start:]
         if len(hip_after_pu) >= 5:
-            hip_smooth_pu = _safe_savgol(
-                _to_float_array_1d(hip_after_pu), max_win=9, polyorder=3
-            )
+            hip_smooth_pu = _safe_savgol(_to_float_array_1d(hip_after_pu), max_win=9, polyorder=3)
             hip_vel_pu = np.gradient(hip_smooth_pu)
             hips_stopped = hip_vel_pu <= hip_drop_threshold * 0.5
             if np.any(hips_stopped):
@@ -1204,7 +1162,7 @@ def _detect_three_phases_hip(
 def _detect_jerk_phases_simple(
     bar_y: NDArray[np.float64],
     vel_smooth: NDArray[np.float64],
-    knee_angles: Optional[NDArray[np.float64]],
+    knee_angles: NDArray[np.float64] | None,
     min_dip_depth_px: float,
     fps: float,
 ) -> NDArray[np.int64]:
@@ -1222,7 +1180,7 @@ def _detect_jerk_phases_simple(
         return np.zeros(n, dtype=np.int64)
 
     vel_sm = _safe_savgol(_to_float_array_1d(vel_smooth), max_win=7, polyorder=3)
-    knee_vel_sm: Optional[NDArray[np.float64]] = None
+    knee_vel_sm: NDArray[np.float64] | None = None
 
     if knee_angles is not None and len(knee_angles) == n:
         ka = pd.Series(knee_angles, dtype="float64").interpolate().bfill().ffill()
@@ -1233,8 +1191,8 @@ def _detect_jerk_phases_simple(
             polyorder=3,
         )
 
-    dip_start: Optional[int] = None
-    drive_start: Optional[int] = None
+    dip_start: int | None = None
+    drive_start: int | None = None
 
     if knee_vel_sm is not None:
         # Use knee angle velocity: negative = knees bending
@@ -1244,10 +1202,7 @@ def _detect_jerk_phases_simple(
             for idx in bending_indices:
                 subsequent = knee_vel_sm[idx:]
                 stop = subsequent >= -20.0
-                if np.any(stop):
-                    dip_end = idx + int(np.argmax(stop))
-                else:
-                    dip_end = n - 1
+                dip_end = idx + int(np.argmax(stop)) if np.any(stop) else n - 1
                 if dip_end - idx < 3:
                     continue
                 # Check minimum dip depth
@@ -1269,10 +1224,7 @@ def _detect_jerk_phases_simple(
             for idx in down_indices:
                 subsequent_vel = vel_sm[idx:]
                 stop_down = subsequent_vel <= 20.0
-                if np.any(stop_down):
-                    dip_end = idx + int(np.argmax(stop_down))
-                else:
-                    dip_end = n - 1
+                dip_end = idx + int(np.argmax(stop_down)) if np.any(stop_down) else n - 1
                 if dip_end - idx < 3:
                     continue
                 y_start = float(bar_y[idx])
@@ -1289,7 +1241,7 @@ def _detect_jerk_phases_simple(
         return np.zeros(n, dtype=np.int64)
 
     # Recovery: velocity drops below 25% of peak drive velocity
-    recovery_start: Optional[int] = None
+    recovery_start: int | None = None
     if drive_start is not None:
         drive_vels = vel_sm[drive_start:]
         peak_vel = float(np.min(drive_vels))
@@ -1333,9 +1285,7 @@ def add_phases_to_dataframe(
         df["bar_phase"] = 0
         return df
 
-    y_smooth = _safe_savgol(
-        _to_float_array_1d(y), max_win=min(21, n if n % 2 == 1 else n - 1)
-    )
+    y_smooth = _safe_savgol(_to_float_array_1d(y), max_win=min(21, n if n % 2 == 1 else n - 1))
     vel = np.gradient(y_smooth, 1.0 / fps if fps > 0 else 1.0 / 30.0)
     vel_smooth = _safe_savgol(vel, max_win=min(15, n if n % 2 == 1 else n - 1))
 
@@ -1350,7 +1300,7 @@ def add_phases_to_dataframe(
 
     if is_jerk:
         # Jerk phase detection
-        knee_angles_arr: Optional[NDArray[np.float64]] = None
+        knee_angles_arr: NDArray[np.float64] | None = None
         if "left_knee_angle" in df.columns and "right_knee_angle" in df.columns:
             ka = df[["left_knee_angle", "right_knee_angle"]].mean(axis=1)
             ka = ka.interpolate().bfill().ffill()
@@ -1368,11 +1318,7 @@ def add_phases_to_dataframe(
             ]
         ):
             shoulder_y = (
-                (
-                    df["left_shoulder_y"].astype(float)
-                    + df["right_shoulder_y"].astype(float)
-                )
-                / 2
+                (df["left_shoulder_y"].astype(float) + df["right_shoulder_y"].astype(float)) / 2
             ).dropna()
             hip_data_y = (
                 (df["left_hip_y"].astype(float) + df["right_hip_y"].astype(float)) / 2
@@ -1386,9 +1332,7 @@ def add_phases_to_dataframe(
                 torso_length_px = float(np.median(torso_dist)) * frame_h
         min_dip = torso_length_px * 0.30
 
-        phases = _detect_jerk_phases_simple(
-            y_smooth, vel_smooth, knee_angles_arr, min_dip, fps
-        )
+        phases = _detect_jerk_phases_simple(y_smooth, vel_smooth, knee_angles_arr, min_dip, fps)
     else:
         # Clean / snatch phase detection — use hip_y_avg when available
         hip_y = None
@@ -1396,9 +1340,7 @@ def add_phases_to_dataframe(
             hip_raw = df["hip_y_avg"].values.astype(float)
             # hip_y_avg of 0 means no data; check for valid values
             if np.any(hip_raw > 0):
-                hip_filled = (
-                    pd.Series(hip_raw).replace(0, np.nan).interpolate().bfill().ffill()
-                )
+                hip_filled = pd.Series(hip_raw).replace(0, np.nan).interpolate().bfill().ffill()
                 hip_y = hip_filled.values.astype(np.float64)
 
         if hip_y is not None and len(hip_y) == n and np.any(hip_y > 0):
@@ -1410,9 +1352,7 @@ def add_phases_to_dataframe(
             if peak_height_idx <= peak_vel_idx:
                 search_start = peak_vel_idx + 1
                 if search_start < n:
-                    peak_height_idx = search_start + int(
-                        np.argmin(y_smooth[search_start:])
-                    )
+                    peak_height_idx = search_start + int(np.argmin(y_smooth[search_start:]))
                 else:
                     peak_height_idx = min(peak_vel_idx + 1, n - 1)
             if peak_height_idx - peak_vel_idx < 2:
@@ -1427,10 +1367,10 @@ def add_phases_to_dataframe(
 
 
 def build_lift_dataframe(
-    barbell_y: List[float],
-    barbell_x: List[float],
-    timestamps_ms: List[float],
-    landmarks_list: List[Dict[int, tuple[float, float, float, float]]],
+    barbell_y: list[float],
+    barbell_x: list[float],
+    timestamps_ms: list[float],
+    landmarks_list: list[dict[int, tuple[float, float, float, float]]],
     frame_width: int,
     frame_height: int,
     fps: float = 30.0,
@@ -1476,7 +1416,7 @@ def build_lift_dataframe(
     time_s = [(ts - timestamps_ms[0]) / 1000.0 for ts in timestamps_ms]
 
     # Build DataFrame
-    df_data: Dict[str, Any] = {
+    df_data: dict[str, Any] = {
         "frame": list(range(n)),
         "time_s": time_s,
         "barbell_y_smooth": y_smooth.tolist(),
@@ -1524,7 +1464,7 @@ def build_lift_dataframe(
     for key in joint_angle_keys + joint_pos_keys:
         df_data[key] = []
 
-    hip_y_avgs: List[float] = []
+    hip_y_avgs: list[float] = []
 
     for i in range(n):
         lm = landmarks_list[i] if i < len(landmarks_list) else {}
@@ -1574,7 +1514,7 @@ except ImportError:
 
 def load_lift_detection_model(
     model_path: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Load the lift detection model from a pickle file.
 
     Args:
@@ -1590,15 +1530,15 @@ def load_lift_detection_model(
     try:
         with open(model_path, "rb") as f:
             model_data = pickle.load(f)
-        return cast(Dict[str, Any], model_data)
+        return cast(dict[str, Any], model_data)
     except Exception:
         return None
 
 
 def predict_lift_type(
     df: pd.DataFrame,
-    model_data: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+    model_data: dict[str, Any],
+) -> dict[str, Any] | None:
     """Predict lift type from kinematic DataFrame using loaded model.
 
     Args:
@@ -1616,7 +1556,7 @@ def predict_lift_type(
     try:
         classifier = model_data["classifier"]
         scaler = model_data["scaler"]
-        feature_names = cast(List[str], model_data["feature_names"])
+        feature_names = cast(list[str], model_data["feature_names"])
 
         feat_dict = extract_model_features(df)
         X = np.array(
@@ -1628,7 +1568,7 @@ def predict_lift_type(
         prediction = str(classifier.predict(X_scaled)[0])
         probas = np.asarray(classifier.predict_proba(X_scaled)[0], dtype=np.float64)
         classes = [str(c) for c in classifier.classes_]
-        class_probs = dict(zip(classes, probas.tolist()))
+        class_probs = dict(zip(classes, probas.tolist(), strict=False))
 
         confidence = float(max(probas))
 

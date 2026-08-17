@@ -5,7 +5,7 @@ This module contains functions for estimating camera motion (shake/stabilization
 using optical flow and background feature tracking.
 """
 
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
@@ -57,9 +57,9 @@ def create_background_mask(segmentation_mask: np.ndarray) -> np.ndarray:
 
 def detect_features(
     gray: np.ndarray,
-    background_mask: Optional[np.ndarray] = None,
-    params: Optional[StabilizationParams] = None,
-) -> Optional[np.ndarray]:
+    background_mask: np.ndarray | None = None,
+    params: StabilizationParams | None = None,
+) -> np.ndarray | None:
     """
     Detect good features to track in the image.
 
@@ -97,8 +97,8 @@ def track_features(
     prev_gray: np.ndarray,
     curr_gray: np.ndarray,
     prev_features: np.ndarray,
-    params: Optional[StabilizationParams] = None,
-) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+    params: StabilizationParams | None = None,
+) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     """
     Track features from previous frame to current frame using Lucas-Kanade optical flow.
 
@@ -136,8 +136,8 @@ def estimate_motion(
     prev_features: np.ndarray,
     curr_features: np.ndarray,
     status: np.ndarray,
-    params: Optional[StabilizationParams] = None,
-) -> Tuple[float, float, Optional[np.ndarray]]:
+    params: StabilizationParams | None = None,
+) -> tuple[float, float, np.ndarray | None]:
     """
     Estimate global motion (translation) from tracked features.
 
@@ -176,10 +176,10 @@ def estimate_motion(
 
 
 def update_features(
-    curr_features: Optional[np.ndarray],
-    new_features: Optional[np.ndarray],
+    curr_features: np.ndarray | None,
+    new_features: np.ndarray | None,
     min_features: int = 50,
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """
     Update feature array by merging current features with newly detected ones.
 

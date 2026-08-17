@@ -2,7 +2,7 @@
 Feature extraction for ML-based technique analysis.
 
 Two extraction paths, both reading from final_analysis.csv:
-  - extract_trajectory(): Multi-channel kinematic time-series for DTW comparison
+  - extract_trajectory(): Multi-channel kinematic time-series (used for trajectory-shape lift classification)
   - extract_technique_features(): ~26 scalar features for fault discrimination
 
 ALL features are camera-angle-invariant — derived from kinematic time-series
@@ -28,12 +28,12 @@ catching genuine squat bounces.
 
 from __future__ import annotations
 
-from typing import Dict, Set, cast
+from typing import cast
 
 import numpy as np
 import pandas as pd
 
-PHASE_IDS_COMMON: Set[int] = {0, 1, 2}
+PHASE_IDS_COMMON: set[int] = {0, 1, 2}
 
 
 def validate_phases(df: pd.DataFrame) -> bool:
@@ -49,7 +49,7 @@ def validate_phases(df: pd.DataFrame) -> bool:
 
 
 def extract_trajectory(df: pd.DataFrame) -> np.ndarray:
-    """Extract multi-channel kinematic trajectory for Fast Analysis (DTW).
+    """Extract multi-channel kinematic trajectory (lift-type classifier input).
 
     Input: final_analysis.csv loaded as DataFrame (frame-indexed).
     Returns: np.ndarray of shape (N_frames, 3) with channels:
@@ -89,9 +89,7 @@ def extract_trajectory(df: pd.DataFrame) -> np.ndarray:
     return np.column_stack([y[mask], vel[mask], accel[mask]]).astype(np.float64)
 
 
-def extract_technique_features(
-    df: pd.DataFrame, lift_type: str = "clean"
-) -> Dict[str, float]:
+def extract_technique_features(df: pd.DataFrame, lift_type: str = "clean") -> dict[str, float]:
     """Extract all scalar features for Technique Analysis (Random Forest or rule-based).
 
     Input: final_analysis.csv loaded as DataFrame (frame-indexed).
@@ -101,7 +99,7 @@ def extract_technique_features(
     PHASE VALIDATION: Caller must verify that bar_phase contains all 3 phases
     (0, 1, 2) before calling this function for training data.
     """
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
     features.update(_extract_velocity_power_scalars(df))
     features.update(_extract_joint_angle_scalars(df))
     features.update(_extract_body_position_scalars(df))
@@ -114,9 +112,9 @@ def extract_technique_features(
     return features
 
 
-def _extract_velocity_power_scalars(df: pd.DataFrame) -> Dict[str, float]:
+def _extract_velocity_power_scalars(df: pd.DataFrame) -> dict[str, float]:
     """Extract velocity and power-related features (all camera-angle-invariant)."""
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
 
     if "vel_y_smooth" in df.columns:
         vel = df["vel_y_smooth"].dropna()
@@ -152,9 +150,7 @@ def _extract_velocity_power_scalars(df: pd.DataFrame) -> Dict[str, float]:
             accel_arr = np.asarray(accel, dtype=float)
             features["peak_accel_y"] = float(accel_arr.max())
             features["min_accel_y"] = float(accel_arr.min())
-            features["accel_positive_frac"] = float(
-                np.sum(accel_arr > 0) / len(accel_arr)
-            )
+            features["accel_positive_frac"] = float(np.sum(accel_arr > 0) / len(accel_arr))
         else:
             features["peak_accel_y"] = 0.0
             features["min_accel_y"] = 0.0
@@ -167,9 +163,9 @@ def _extract_velocity_power_scalars(df: pd.DataFrame) -> Dict[str, float]:
     return features
 
 
-def _extract_joint_angle_scalars(df: pd.DataFrame) -> Dict[str, float]:
+def _extract_joint_angle_scalars(df: pd.DataFrame) -> dict[str, float]:
     """Extract joint angle-related features (all camera-angle-invariant)."""
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
     n = len(df)
 
     if "left_elbow_angle" in df.columns and "right_elbow_angle" in df.columns:
@@ -253,14 +249,14 @@ def _extract_joint_angle_scalars(df: pd.DataFrame) -> Dict[str, float]:
     return features
 
 
-def _extract_body_position_scalars(df: pd.DataFrame) -> Dict[str, float]:
+def _extract_body_position_scalars(df: pd.DataFrame) -> dict[str, float]:
     """Extract body position-related features (all camera-angle-invariant).
 
     Direction normalization: All horizontal left/right differences use abs()
     so they are direction-invariant. Vertical features are inherently
     direction-invariant.
     """
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
     n = len(df)
 
     if "hip_y_avg" in df.columns and "barbell_y_smooth" in df.columns:
@@ -281,14 +277,8 @@ def _extract_body_position_scalars(df: pd.DataFrame) -> Dict[str, float]:
                 features["hip_rise_vs_bar_rise_early"] = 0.0
 
             hip_y_arr = np.asarray(hip_y, dtype=float)
-            fh = (
-                float(df["frame_height"].iloc[0])
-                if "frame_height" in df.columns
-                else 1.0
-            )
-            features["hip_height_at_catch_norm"] = (
-                float(hip_y_arr.min()) / fh if fh > 0 else 0.0
-            )
+            fh = float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 1.0
+            features["hip_height_at_catch_norm"] = float(hip_y_arr.min()) / fh if fh > 0 else 0.0
         else:
             features["hip_rise_vs_bar_rise_early"] = 0.0
             features["hip_height_at_catch_norm"] = 0.0
@@ -331,9 +321,7 @@ def _extract_body_position_scalars(df: pd.DataFrame) -> Dict[str, float]:
                 ankle_y_arr = np.asarray(ankle_y, dtype=float)
                 late_ankle = ankle_y_arr[late_phase_0_start:]
                 if len(late_ankle) > 1:
-                    features["ankle_rise_late_pull"] = float(
-                        late_ankle[-1] - late_ankle[0]
-                    )
+                    features["ankle_rise_late_pull"] = float(late_ankle[-1] - late_ankle[0])
                 else:
                     features["ankle_rise_late_pull"] = 0.0
             else:
@@ -346,9 +334,9 @@ def _extract_body_position_scalars(df: pd.DataFrame) -> Dict[str, float]:
     return features
 
 
-def _extract_phase_timing_scalars(df: pd.DataFrame) -> Dict[str, float]:
+def _extract_phase_timing_scalars(df: pd.DataFrame) -> dict[str, float]:
     """Extract phase timing-related features."""
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
 
     if "bar_phase" in df.columns and "time_s" in df.columns:
         phases = df["bar_phase"].dropna()
@@ -366,21 +354,15 @@ def _extract_phase_timing_scalars(df: pd.DataFrame) -> Dict[str, float]:
 
                 phase_0_times = times_arr[phase_0_mask]
                 phase_0_time = (
-                    float(np.sum(np.diff(phase_0_times)))
-                    if len(phase_0_times) > 0
-                    else 0.0
+                    float(np.sum(np.diff(phase_0_times))) if len(phase_0_times) > 0 else 0.0
                 )
                 phase_1_times = times_arr[phase_1_mask]
                 phase_1_time = (
-                    float(np.sum(np.diff(phase_1_times)))
-                    if len(phase_1_times) > 0
-                    else 0.0
+                    float(np.sum(np.diff(phase_1_times))) if len(phase_1_times) > 0 else 0.0
                 )
                 phase_2_times = times_arr[phase_2_mask]
                 phase_2_time = (
-                    float(np.sum(np.diff(phase_2_times)))
-                    if len(phase_2_times) > 0
-                    else 0.0
+                    float(np.sum(np.diff(phase_2_times))) if len(phase_2_times) > 0 else 0.0
                 )
 
                 features["pull_duration_frac"] = phase_0_time / total_time
@@ -415,22 +397,20 @@ def _extract_phase_timing_scalars(df: pd.DataFrame) -> Dict[str, float]:
     return features
 
 
-def _extract_time_series_profile_features(df: pd.DataFrame) -> Dict[str, float]:
+def _extract_time_series_profile_features(df: pd.DataFrame) -> dict[str, float]:
     """Extract time-series profile features (all camera-angle-invariant).
 
     These features capture the shape of the velocity and acceleration
     distributions rather than absolute spatial measurements.
     """
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
 
     if "vel_y_smooth" in df.columns:
         vel = df["vel_y_smooth"].dropna()
         if len(vel) > 3:
             vel_arr = np.asarray(vel, dtype=float)
             _skew = cast(float, pd.Series(vel_arr).skew())
-            features["vel_profile_skewness"] = float(
-                _skew if np.std(vel_arr) > 1e-6 else 0.0
-            )
+            features["vel_profile_skewness"] = float(_skew if np.std(vel_arr) > 1e-6 else 0.0)
         else:
             features["vel_profile_skewness"] = 0.0
     else:
@@ -461,7 +441,7 @@ def _extract_time_series_profile_features(df: pd.DataFrame) -> Dict[str, float]:
     return features
 
 
-def _extract_recovery_bounce_features(df: pd.DataFrame) -> Dict[str, float]:
+def _extract_recovery_bounce_features(df: pd.DataFrame) -> dict[str, float]:
     """Extract recovery bounce features for clean/snatch.
 
     Counts the number of significant downward velocity reversals during the
@@ -474,7 +454,7 @@ def _extract_recovery_bounce_features(df: pd.DataFrame) -> Dict[str, float]:
     of the peak recovery velocity to filter out oscillation while catching
     real bounces.
     """
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
     features["recovery_bounce_count"] = 0.0
 
     if "vel_y_smooth" not in df.columns or "bar_phase" not in df.columns:
@@ -499,8 +479,7 @@ def _extract_recovery_bounce_features(df: pd.DataFrame) -> Dict[str, float]:
     peak_recovery_vel = float(np.max(np.abs(recovery_vel)))
     min_bounce_velocity = peak_recovery_vel * 0.20
 
-    if min_bounce_velocity < 15.0:
-        min_bounce_velocity = 15.0
+    min_bounce_velocity = max(min_bounce_velocity, 15.0)
 
     direction_changes = 0
     for i in range(1, len(recovery_vel)):
@@ -514,14 +493,14 @@ def _extract_recovery_bounce_features(df: pd.DataFrame) -> Dict[str, float]:
     return features
 
 
-def _extract_jerk_specific_features(df: pd.DataFrame) -> Dict[str, float]:
+def _extract_jerk_specific_features(df: pd.DataFrame) -> dict[str, float]:
     """Extract jerk-specific features from Dip and Drive phases.
 
     Jerk phases: 0=Dip, 1=Drive, 2=Recovery
 
     Only computed when lift_type == "jerk". Camera-angle-invariant.
     """
-    features: Dict[str, float] = {}
+    features: dict[str, float] = {}
 
     if "bar_phase" not in df.columns:
         features["dip_depth_norm"] = 0.0
@@ -544,14 +523,8 @@ def _extract_jerk_specific_features(df: pd.DataFrame) -> Dict[str, float]:
             dip_lowest = float(np.min(dip_y))
             dip_highest = float(np.max(dip_y))
             dip_depth = dip_highest - dip_lowest
-            frame_h = (
-                float(df["frame_height"].iloc[0])
-                if "frame_height" in df.columns
-                else 1.0
-            )
-            features["dip_depth_norm"] = (
-                float(dip_depth / frame_h) if frame_h > 0 else 0.0
-            )
+            frame_h = float(df["frame_height"].iloc[0]) if "frame_height" in df.columns else 1.0
+            features["dip_depth_norm"] = float(dip_depth / frame_h) if frame_h > 0 else 0.0
         else:
             features["dip_depth_norm"] = 0.0
     else:

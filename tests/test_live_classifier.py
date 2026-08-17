@@ -9,7 +9,9 @@ import pandas as pd
 
 sys.path.insert(0, "barpath")
 
-from barpath.pipeline.realtime_processing.live_lift_recognition import LiveLiftRecognizer
+from barpath.pipeline.realtime_processing.live_lift_recognition import (
+    LiveLiftRecognizer,
+)
 
 
 def simulate_live_preview(csv_path: Path, label: str) -> dict:
@@ -99,19 +101,16 @@ def run_multiple_samples(data_dir: Path, category: str, max_samples: int = 5):
     # Summary
     correct = sum(1 for r in results if r.get("final_class") == category.upper())
     print(f"\n{category.upper()} ({len(results)} samples):")
-    print(f"  Correct: {correct}/{len(results)} = {correct/len(results):.0%}")
+    print(f"  Correct: {correct}/{len(results)} = {correct / len(results):.0%}")
     for r in results:
         status = "OK" if r.get("final_class") == category.upper() else "XX"
-        print(
-            f"  {status} {r['label']}: {r['final_class']} "
-            f"({r['final_confidence']:.1%})"
-        )
+        print(f"  {status} {r['label']}: {r['final_class']} ({r['final_confidence']:.1%})")
 
     return results
 
 
 if __name__ == "__main__":
-    data_dir = Path("outputs/male")
+    data_dir = Path("outputs/dataset/male")
 
     print("=" * 60)
     print("LIVE PREVIEW CLASSIFICATION TEST")

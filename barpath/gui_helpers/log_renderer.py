@@ -41,7 +41,7 @@ class LogRenderer:
         template_path = Path(__file__).parent / "templates" / "log_viewer.html"
         try:
             if self._template_cache is None:
-                with open(template_path, "r", encoding="utf-8") as f:
+                with open(template_path, encoding="utf-8") as f:
                     self._template_cache = f.read()
 
             # Insert the log content into the template
@@ -130,6 +130,17 @@ body {{ font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; backgroun
 .red {{ color: #dc2626; }}
 .blue {{ color: #2563eb; }}
 .magenta {{ color: #9333ea; }}
+@media (prefers-color-scheme: dark) {{
+  body {{ background: #1e1e1e; color: #f2f2f2; }}
+  .log-container {{ background: #252526; border-color: #44464d; }}
+  .dim {{ color: #b8bec9; opacity: 0.8; }}
+  .cyan {{ color: #67d5f2; }}
+  .green {{ color: #70e39a; }}
+  .yellow {{ color: #f5d36b; }}
+  .red {{ color: #ff8a8a; }}
+  .blue {{ color: #82aaff; }}
+  .magenta {{ color: #d29bff; }}
+}}
 </style>
 </head>
 <body>

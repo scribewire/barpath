@@ -149,7 +149,7 @@ def run_stabilization_test(video_path, max_frames=300):
 
         if prev_gray is not None and prev_background_features is not None:
             # Track features
-            curr_features, status, err = cv2.calcOpticalFlowPyrLK(
+            curr_features, status, _err = cv2.calcOpticalFlowPyrLK(
                 prev_gray,
                 gray,
                 prev_background_features,
@@ -182,9 +182,9 @@ def run_stabilization_test(video_path, max_frames=300):
                             if num_inliers >= min_inliers:
                                 shake_dx = float(transform_matrix[0, 2])
                                 shake_dy = float(transform_matrix[1, 2])
-                                curr_background_features = good_new[
-                                    inliers.flatten() == 1
-                                ].reshape(-1, 1, 2)
+                                curr_background_features = good_new[inliers.flatten() == 1].reshape(
+                                    -1, 1, 2
+                                )
                     except cv2.error:
                         pass
 
@@ -206,9 +206,7 @@ def run_stabilization_test(video_path, max_frames=300):
             if new_features is not None:
                 num_detected = len(new_features)
                 if curr_background_features is not None:
-                    curr_background_features = np.vstack(
-                        (curr_background_features, new_features)
-                    )
+                    curr_background_features = np.vstack((curr_background_features, new_features))
                 else:
                     curr_background_features = new_features
 
@@ -274,9 +272,7 @@ def generate_report(diagnostics, output_path):
 
     feature_counts = [f["num_features"] for f in frame_data]
     inlier_counts = [f["num_inliers"] for f in frame_data if f["num_inliers"] > 0]
-    shake_magnitudes = [
-        f["shake_magnitude"] for f in frame_data if f["shake_magnitude"] > 0
-    ]
+    shake_magnitudes = [f["shake_magnitude"] for f in frame_data if f["shake_magnitude"] > 0]
 
     avg_features = np.mean(feature_counts) if feature_counts else 0
     avg_inliers = np.mean(inlier_counts) if inlier_counts else 0
@@ -316,13 +312,9 @@ def generate_report(diagnostics, output_path):
 
     # Quality assessment
     if frames_with_transform / num_frames > 0.9:
-        report_lines.append(
-            "  ✓ EXCELLENT: Transform estimation successful in >90% of frames"
-        )
+        report_lines.append("  ✓ EXCELLENT: Transform estimation successful in >90% of frames")
     elif frames_with_transform / num_frames > 0.7:
-        report_lines.append(
-            "  ✓ GOOD: Transform estimation successful in >70% of frames"
-        )
+        report_lines.append("  ✓ GOOD: Transform estimation successful in >70% of frames")
     else:
         report_lines.append("  ⚠ POOR: Transform estimation failed in many frames")
 
@@ -350,25 +342,17 @@ def generate_report(diagnostics, output_path):
     )
 
     if avg_features < 100:
-        report_lines.append(
-            "  • Consider increasing maxCorners parameter for more features"
-        )
+        report_lines.append("  • Consider increasing maxCorners parameter for more features")
 
     if avg_inliers < 20:
-        report_lines.append(
-            "  • Consider reducing ransac_threshold for stricter outlier rejection"
-        )
+        report_lines.append("  • Consider reducing ransac_threshold for stricter outlier rejection")
         report_lines.append("  • Or increase qualityLevel to detect stronger features")
 
     if frames_with_mask / num_frames < 0.5:
-        report_lines.append(
-            "  • Low segmentation success - ensure good lighting and clear subject"
-        )
+        report_lines.append("  • Low segmentation success - ensure good lighting and clear subject")
 
     if max_shake > 30:
-        report_lines.append(
-            "  • High camera shake - consider using tripod or stabilizer"
-        )
+        report_lines.append("  • High camera shake - consider using tripod or stabilizer")
 
     report_lines.extend(
         [
@@ -387,9 +371,7 @@ def generate_report(diagnostics, output_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Test and validate stabilization improvements"
-    )
+    parser = argparse.ArgumentParser(description="Test and validate stabilization improvements")
     parser.add_argument("--video", required=True, help="Path to input video file")
     parser.add_argument(
         "--max-frames",

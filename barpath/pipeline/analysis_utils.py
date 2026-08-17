@@ -6,16 +6,13 @@ consolidated here to avoid code duplication.
 """
 
 import typing
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
 
 
-def calculate_sg_window(
-    data_length: int, default_window: int, poly_order: int = 3
-) -> int:
+def calculate_sg_window(data_length: int, default_window: int, poly_order: int = 3) -> int:
     """
     Calculate an appropriate Savitzky-Golay window size.
 
@@ -86,15 +83,13 @@ def safe_savgol_smooth(series: pd.Series, window: int = 11, poly: int = 3) -> pd
         smoothed = savgol_filter(filled.values, w, poly)
         return pd.Series(smoothed, index=series.index)
     except ValueError as e:
-        print(
-            f"Warning: Savitzky-Golay smoothing failed: {e}. Returning unsmoothed data."
-        )
+        print(f"Warning: Savitzky-Golay smoothing failed: {e}. Returning unsmoothed data.")
         return filled
 
 
 def calculate_max_specific_power(
     df: pd.DataFrame, phases: typing.Any, t1_key: str = "t1", t3_key: str = "t3"
-) -> Optional[dict]:
+) -> dict | None:
     """
     Calculate maximum specific power between two phase boundaries.
 
@@ -130,7 +125,7 @@ def calculate_max_specific_power(
         if np.isnan(max_power_px):
             return None
 
-        result: dict[str, Optional[float]] = {"max_power_px": max_power_px}
+        result: dict[str, float | None] = {"max_power_px": max_power_px}
 
         if "px_to_m_conversion" in df.columns:
             px_to_m = df["px_to_m_conversion"].dropna()
@@ -148,7 +143,7 @@ def calculate_max_specific_power(
 
 def calculate_pixel_to_meter_conversion(
     df: pd.DataFrame, endcap_width_m: float = 0.05
-) -> Optional[float]:
+) -> float | None:
     """
     Calculate pixel-to-meter conversion factor based on barbell endcap width.
 
@@ -166,7 +161,7 @@ def calculate_pixel_to_meter_conversion(
         widths = []
         for box in df["barbell_box"]:
             if isinstance(box, (list, tuple)) and len(box) >= 4:
-                x1, y1, x2, y2 = box[:4]
+                x1, _y1, x2, _y2 = box[:4]
                 width_px = abs(float(x2) - float(x1))
                 if width_px > 0:
                     widths.append(width_px)

@@ -8,10 +8,9 @@ athlete data combined with biomechanical principles.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import pandas as pd
-
 
 # Statistical baselines loaded from pro analysis
 BASELINES = {
@@ -30,9 +29,9 @@ class CompiledAnalyzer:
 
     def analyze(
         self,
-        features: Dict[str, float],
+        features: dict[str, float],
         df: pd.DataFrame,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Analyze a lift and return detected faults."""
         faults = []
         # LLM_POPULATE: Add detection rules here
@@ -40,8 +39,8 @@ class CompiledAnalyzer:
 
     def get_technique_score(
         self,
-        faults: List[Dict[str, Any]],
-    ) -> Tuple[float, str]:
+        faults: list[dict[str, Any]],
+    ) -> tuple[float, str]:
         """Calculate overall technique score."""
         score = 100.0
         for fault in faults:

@@ -3,11 +3,14 @@ Kinematic rules to detect when a lift is biomechanically complete.
 Uses velocity stability + position checks instead of simple thresholds.
 """
 
-from typing import Dict, List, Optional, Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from barpath.pipeline.realtime_processing.live_buffer import FrameData
+if TYPE_CHECKING:
+    from barpath.pipeline.realtime_processing.live_buffer import FrameData
 
 
 class CompletionDetector:
@@ -18,9 +21,7 @@ class CompletionDetector:
     """
 
     # Configuration constants - tuned for real-world performance
-    VELOCITY_STABILITY_THRESHOLD = (
-        15.0  # pixels/frame - reduced from 5 for more detection
-    )
+    VELOCITY_STABILITY_THRESHOLD = 15.0  # pixels/frame - reduced from 5 for more detection
     STABILITY_DURATION_MS = 200.0  # Must be stable for 200ms
     SNATCH_OVERHEAD_RATIO = 0.35  # Bar in top 35% of frame (increased from 30%)
     CLEAN_SHOULDER_TOLERANCE_PX = 80  # ±80px from shoulder height (increased from 50)
@@ -30,7 +31,7 @@ class CompletionDetector:
         self.frame_height = frame_height
         self.frame_width = frame_width
 
-    def is_complete(self, frames: List[FrameData], predicted_class: str) -> bool:
+    def is_complete(self, frames: list[FrameData], predicted_class: str) -> bool:
         """
         Check if lift is complete based on class-specific kinematic rules.
 
@@ -71,7 +72,7 @@ class CompletionDetector:
 
         return False
 
-    def is_complete_any(self, frames: List[FrameData]) -> Tuple[bool, str]:
+    def is_complete_any(self, frames: list[FrameData]) -> tuple[bool, str]:
         """
         Check if any lift type appears complete.
 
@@ -91,12 +92,12 @@ class CompletionDetector:
         median_vel = np.median(np.abs(velocities))
         return median_vel < self.VELOCITY_STABILITY_THRESHOLD
 
-    def _check_snatch_complete(self, bar_y: float, frames: List[FrameData]) -> bool:
+    def _check_snatch_complete(self, bar_y: float, frames: list[FrameData]) -> bool:
         """Bar should be overhead (top 35% of frame) and stable."""
         overhead_threshold = self.frame_height * self.SNATCH_OVERHEAD_RATIO
         return bar_y < overhead_threshold
 
-    def _check_clean_complete(self, bar_y: float, frames: List[FrameData]) -> bool:
+    def _check_clean_complete(self, bar_y: float, frames: list[FrameData]) -> bool:
         """Bar should be at shoulder height ±tolerance."""
         # Get shoulder height from landmarks
         shoulder_y = self._get_shoulder_height(frames)
@@ -108,7 +109,7 @@ class CompletionDetector:
         return abs(bar_y - shoulder_y) < self.CLEAN_SHOULDER_TOLERANCE_PX
 
     def _check_jerk_complete(
-        self, bar_y: float, frames: List[FrameData], velocities: np.ndarray
+        self, bar_y: float, frames: list[FrameData], velocities: np.ndarray
     ) -> bool:
         """Bar overhead after dip+drive motion detected."""
         # First check: bar is overhead
@@ -130,7 +131,7 @@ class CompletionDetector:
 
         return bool(had_down_motion and had_up_motion)
 
-    def _get_barbell_positions(self, frames: List[FrameData]) -> np.ndarray:
+    def _get_barbell_positions(self, frames: list[FrameData]) -> np.ndarray:
         """Extract barbell centers from frames."""
         positions = []
         last_valid = None
@@ -149,7 +150,7 @@ class CompletionDetector:
 
         return np.array(positions, dtype=np.float64)
 
-    def _get_shoulder_height(self, frames: List[FrameData]) -> Optional[float]:
+    def _get_shoulder_height(self, frames: list[FrameData]) -> float | None:
         """Get average shoulder height from landmarks."""
         shoulder_y_values = []
 
@@ -169,7 +170,7 @@ class CompletionDetector:
 
         return sum(shoulder_y_values) / len(shoulder_y_values)
 
-    def _get_hip_height(self, frames: List[FrameData]) -> Optional[float]:
+    def _get_hip_height(self, frames: list[FrameData]) -> float | None:
         """Get average hip height from landmarks."""
         hip_y_values = []
 
@@ -202,7 +203,7 @@ class DipDetector:
     MIN_DIP_DURATION_MS = 150.0  # Minimum dip duration
     MAX_DIP_DURATION_MS = 800.0  # Maximum dip duration
 
-    def detect_dip(self, frames: List[FrameData]) -> bool:
+    def detect_dip(self, frames: list[FrameData]) -> bool:
         """Detect if a dip occurred in recent frames."""
         if len(frames) < 20:  # Need ~600ms at 30fps
             return False
@@ -242,7 +243,7 @@ class DipDetector:
 
         return False
 
-    def detect_dip_start(self, frames: List[FrameData]) -> Optional[int]:
+    def detect_dip_start(self, frames: list[FrameData]) -> int | None:
         """Find the frame index where dip starts, if any."""
         if len(frames) < 15:
             return None
@@ -262,7 +263,7 @@ class DipDetector:
 
         return None
 
-    def _get_y_positions(self, frames: List[FrameData]) -> np.ndarray:
+    def _get_y_positions(self, frames: list[FrameData]) -> np.ndarray:
         """Extract y positions from frames."""
         positions = []
         last_y = None
@@ -283,7 +284,7 @@ class VelocityProfileAnalyzer:
     """Analyzes velocity profiles to detect lift phases and patterns."""
 
     @staticmethod
-    def analyze_velocity_profile(velocities: np.ndarray) -> Dict:
+    def analyze_velocity_profile(velocities: np.ndarray) -> dict:
         """Extract features from velocity profile."""
         features = {
             "mean": 0.0,

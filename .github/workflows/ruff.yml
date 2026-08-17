@@ -1,4 +1,4 @@
-name: "Ruff Lint"
+name: "CI"
 
 on:
   push:
@@ -12,19 +12,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+  test:
+    name: pytest (self-contained subset)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
+          pip install -r requirements.txt pytest
 
-      - name: Run ruff
-        run: |
-          # fail on any error
-          ruff check --fix . && ruff format .
+      - name: Run tests
+        run: python -m pytest tests/test_lift_detection.py tests/test_progress_flow.py tests/test_realtime_processing_init.py tests/test_step5_hud -q

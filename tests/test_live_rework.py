@@ -16,7 +16,9 @@ import pandas as pd
 
 sys.path.insert(0, "barpath")
 
-from barpath.pipeline.realtime_processing.live_lift_recognition import LiveLiftRecognizer
+from barpath.pipeline.realtime_processing.live_lift_recognition import (
+    LiveLiftRecognizer,
+)
 
 
 def simulate_full_sequence(csv_path: Path, label: str) -> dict:
@@ -83,9 +85,9 @@ def simulate_full_sequence(csv_path: Path, label: str) -> dict:
     }
 
 
-def test_category(category: str, max_samples: int = 5):
+def run_category_test(category: str, max_samples: int = 5):
     """Test on multiple samples from a category."""
-    data_dir = Path("outputs/male")
+    data_dir = Path("outputs/dataset/male")
     category_dir = data_dir / category
     csv_files = list(category_dir.rglob("final_analysis.csv"))[:max_samples]
 
@@ -104,9 +106,7 @@ def test_category(category: str, max_samples: int = 5):
             f"state={r['final_state']} conf={r['confidence']:.1%}"
         )
 
-    correct = sum(
-        1 for r in results if category.upper() in " + ".join(r["display_stack"])
-    )
+    correct = sum(1 for r in results if category.upper() in " + ".join(r["display_stack"]))
     print(f"  Correct: {correct}/{len(results)} = {correct / len(results):.0%}")
     return results
 
@@ -117,7 +117,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     for category in ["snatch", "clean", "jerk"]:
-        test_category(category, max_samples=5)
+        run_category_test(category, max_samples=5)
 
     print("\n" + "=" * 60)
     print("TEST COMPLETE")

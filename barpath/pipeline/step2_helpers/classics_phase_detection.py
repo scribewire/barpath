@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, TypedDict, cast
+from typing import TypedDict, cast
 
 import pandas as pd
 
@@ -37,7 +37,7 @@ class PhaseDetectionParams:
     start_threshold_frac: float = 0.02
 
 
-def _require_columns(df: pd.DataFrame, required: List[str]) -> Optional[str]:
+def _require_columns(df: pd.DataFrame, required: list[str]) -> str | None:
     missing = [c for c in required if c not in df.columns]
     if missing:
         return ", ".join(missing)
@@ -46,7 +46,7 @@ def _require_columns(df: pd.DataFrame, required: List[str]) -> Optional[str]:
 
 def identify_classics_phases(
     df: pd.DataFrame, params: PhaseDetectionParams = PhaseDetectionParams()
-) -> Optional[ClassicsPhases]:
+) -> ClassicsPhases | None:
     """
     Identify clean phases using the heuristics that were previously embedded in `5_critique_lift.py`.
 
@@ -127,6 +127,4 @@ def identify_classics_phases(
     t4_raw = df["barbell_y_stable"].idxmin()
     t4_frame = int(cast(int, t4_raw))
 
-    return ClassicsPhases(
-        t0=t0_frame, t1=t1_frame, t2=t2_frame, t3=t3_frame, t4=t4_frame
-    )
+    return ClassicsPhases(t0=t0_frame, t1=t1_frame, t2=t2_frame, t3=t3_frame, t4=t4_frame)

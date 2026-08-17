@@ -4,15 +4,15 @@ State machine integrating buffer, classifier, completion detector.
 """
 
 import time
+from collections.abc import Callable
 from enum import Enum, auto
-from typing import Callable, Dict, Optional
 
 from barpath.pipeline.kinematic_completion import CompletionDetector
 from barpath.pipeline.lift_classifier import LiveLiftClassifier, find_model_path
 
+from .coaching_tip import compute_coaching_tip
 from .live_buffer import CircularFrameBuffer, FrameData
 from .live_feature_extractor import LiveFeatureExtractor
-from .coaching_tip import compute_coaching_tip
 
 
 class DetectionState(Enum):
@@ -51,16 +51,14 @@ class LiftDetectionSystem:
         frame_height: int = 720,
         frame_width: int = 1280,
         fps: float = 30.0,
-        model_path: Optional[str] = None,
+        model_path: str | None = None,
     ):
         self.frame_height = frame_height
         self.frame_width = frame_width
         self.fps = fps
 
         # Components
-        self.buffer = CircularFrameBuffer(
-            max_duration_ms=self.BUFFER_DURATION_MS, fps=fps
-        )
+        self.buffer = CircularFrameBuffer(max_duration_ms=self.BUFFER_DURATION_MS, fps=fps)
         self.extractor = LiveFeatureExtractor(frame_width, frame_height, fps)
         self.classifier = LiveLiftClassifier(model_path or find_model_path())
         self.completion_detector = CompletionDetector(frame_height, frame_width)
@@ -71,20 +69,20 @@ class LiftDetectionSystem:
         self.detection_frame_start = 0
 
         # Results
-        self.current_result: Optional[Dict] = None
-        self.pending_clean_result: Optional[Dict] = None
+        self.current_result: dict | None = None
+        self.pending_clean_result: dict | None = None
         self.display_start_time: float = 0.0
         self.jerk_watch_start_time: float = 0.0
 
         # Coaching tip
-        self.coaching_tip: Optional[str] = None
+        self.coaching_tip: str | None = None
         self.tip_display_start: float = 0.0
 
         # Callbacks (set by GUI)
-        self.on_detection: Optional[Callable] = None
-        self.on_confirmation_needed: Optional[Callable] = None
+        self.on_detection: Callable | None = None
+        self.on_confirmation_needed: Callable | None = None
 
-    def process_frame(self, frame_data: FrameData) -> Optional[Dict]:
+    def process_frame(self, frame_data: FrameData) -> dict | None:
         """
         Process a single frame from the live stream.
 
@@ -111,7 +109,7 @@ class LiftDetectionSystem:
 
         return None
 
-    def _handle_idle(self) -> Optional[Dict]:
+    def _handle_idle(self) -> dict | None:
         """Check for lift start using classifier on sliding window."""
         if not self.buffer.is_ready:
             return None
@@ -153,7 +151,7 @@ class LiftDetectionSystem:
 
         return None
 
-    def _handle_detecting(self) -> Optional[Dict]:
+    def _handle_detecting(self) -> dict | None:
         """Monitor for kinematic completion."""
         # Check if we've been detecting too long (force complete after 10s)
         if self.frame_count - self.detection_frame_start > self.MAX_DETECTION_FRAMES:
@@ -168,7 +166,9 @@ class LiftDetectionSystem:
         if len(recent) < 15:
             return None
 
-        predicted_class = self.current_result.get("class", "none") if self.current_result else "none"
+        predicted_class = (
+            self.current_result.get("class", "none") if self.current_result else "none"
+        )
 
         # Check kinematic completion
         try:
@@ -179,7 +179,7 @@ class LiftDetectionSystem:
 
         return None
 
-    def _handle_complete(self) -> Optional[Dict]:
+    def _handle_complete(self) -> dict | None:
         """Handle completed lift: display or confirm."""
         if self.current_result and self.current_result["confidence"] < self.CONFIDENCE_THRESHOLD:
             # Low confidence - signal for confirmation UI
@@ -196,7 +196,7 @@ class LiftDetectionSystem:
         # High confidence - display directly
         return self._display_current_result()
 
-    def _handle_jerk_watch(self) -> Optional[Dict]:
+    def _handle_jerk_watch(self) -> dict | None:
         """Watch for jerk after clean detection."""
         elapsed = (time.time() - self.jerk_watch_start_time) * 1000
 
@@ -223,7 +223,9 @@ class LiftDetectionSystem:
                     # Found jerk! Merge to clean+jerk
                     merged_class = "clean_jerk"
                     merged_conf = min(
-                        self.pending_clean_result["confidence"] if self.pending_clean_result else 0.0,
+                        self.pending_clean_result["confidence"]
+                        if self.pending_clean_result
+                        else 0.0,
                         prediction["confidence"],
                     )
 
@@ -240,7 +242,7 @@ class LiftDetectionSystem:
 
         return None
 
-    def _handle_displaying(self) -> Optional[Dict]:
+    def _handle_displaying(self) -> dict | None:
         """Wait for display duration to expire."""
         elapsed = (time.time() - self.display_start_time) * 1000
 
@@ -249,13 +251,21 @@ class LiftDetectionSystem:
 
         return None
 
-    def _finalize_detection(self) -> Dict:
+    def _finalize_detection(self) -> dict:
         """Prepare final detection result."""
-        predicted_class = self.current_result.get("class", "none") if self.current_result else "none"
+        predicted_class = (
+            self.current_result.get("class", "none") if self.current_result else "none"
+        )
 
         # If this was a clean, enter jerk watch instead of displaying immediately
         if predicted_class == "clean":
-            self.pending_clean_result = self.current_result.copy() if self.current_result else {} if self.current_result else {}
+            self.pending_clean_result = (
+                self.current_result.copy()
+                if self.current_result
+                else {}
+                if self.current_result
+                else {}
+            )
             self.state = DetectionState.JERK_WATCH
             self.jerk_watch_start_time = time.time()
 
@@ -267,7 +277,7 @@ class LiftDetectionSystem:
         # Otherwise display immediately
         return self._display_current_result()
 
-    def _display_current_result(self) -> Dict:
+    def _display_current_result(self) -> dict:
         """Display current result."""
         self.state = DetectionState.DISPLAYING
         self.display_start_time = time.time()
@@ -283,16 +293,17 @@ class LiftDetectionSystem:
         return result
 
     @property
-    def current_tip(self) -> Optional[str]:
+    def current_tip(self) -> str | None:
         """Return coaching tip if within display duration, else None."""
         from barpath.pipeline.config import COACHING_TIP_DURATION_S
+
         if self.coaching_tip and self.state == DetectionState.DISPLAYING:
             elapsed = time.time() - self.tip_display_start
             if elapsed < COACHING_TIP_DURATION_S:
                 return self.coaching_tip
         return None
 
-    def _force_complete(self) -> Dict:
+    def _force_complete(self) -> dict:
         """Force completion after max duration."""
         return self._display_current_result()
 
@@ -307,10 +318,7 @@ class LiftDetectionSystem:
     def _has_barbell_data(self) -> bool:
         """Check if buffer has valid barbell data."""
         recent = self.buffer.get_recent_frames(10)
-        for frame in recent:
-            if frame.barbell_center is not None:
-                return True
-        return False
+        return any(frame.barbell_center is not None for frame in recent)
 
     def user_confirmed(self, confirmed_class: str) -> None:
         """
@@ -335,7 +343,6 @@ class LiftDetectionSystem:
     def _save_for_retraining(self, confirmed_class: str) -> None:
         """Save current window data for future retraining."""
         # TODO: Save to outputs/uncertain_lifts/ with confirmed label
-        pass
 
     @property
     def is_ready(self) -> bool:
@@ -393,7 +400,7 @@ def create_detection_system(
     frame_height: int = 720,
     frame_width: int = 1280,
     fps: float = 30.0,
-    model_path: Optional[str] = None,
+    model_path: str | None = None,
 ) -> LiftDetectionSystem:
     """Create detection system with defaults."""
     return LiftDetectionSystem(

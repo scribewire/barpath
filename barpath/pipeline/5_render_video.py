@@ -10,7 +10,7 @@ import argparse
 import gc
 import os
 import subprocess
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -26,6 +26,7 @@ from step5_helpers.hud_renderer import (
     PHASE_NAMES,
     draw_hud_overlay,
 )
+from step5_helpers.overlay_metrics import OverlayMetrics
 from utils import (
     COLOR_SCHEME,
     draw_legend,
@@ -60,6 +61,7 @@ def step_5_render_video(
 
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    overlay_metrics = OverlayMetrics.for_frame(frame_width, frame_height)
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
@@ -83,9 +85,7 @@ def step_5_render_video(
             break
     if selected_source is None:
         cap.release()
-        raise ValueError(
-            "Missing barbell position columns in CSV. Please re-run Step 2."
-        )
+        raise ValueError("Missing barbell position columns in CSV. Please re-run Step 2.")
 
     position_x_col, position_y_col, source_label = selected_source
     if "bar_phase" not in df.columns:
@@ -95,16 +95,12 @@ def step_5_render_video(
     print(f"Rendering bar path using {source_label} coordinates.")
 
     path_df = df[[position_x_col, position_y_col, "bar_phase"]].dropna()
-    path_indices = np.asarray(
-        cast(Any, path_df.index).to_numpy(dtype=float), dtype=float
-    )
+    path_indices = np.asarray(cast(Any, path_df.index).to_numpy(dtype=float), dtype=float)
     path_points = np.asarray(
         cast(Any, path_df[[position_x_col, position_y_col]]).to_numpy(dtype=float),
         dtype=float,
     )
-    path_phases = np.asarray(
-        cast(Any, path_df["bar_phase"]).to_numpy(dtype=float), dtype=float
-    )
+    path_phases = np.asarray(cast(Any, path_df["bar_phase"]).to_numpy(dtype=float), dtype=float)
 
     first_idx = np.asarray(cast(Any, df.index).to_numpy(), dtype=float)
     first_analyzed_frame = int(first_idx.min()) if first_idx.size > 0 else 0
@@ -116,15 +112,12 @@ def step_5_render_video(
     end_frame = min(last_analyzed_frame + extra_frames, total_frames)
     frames_to_render = end_frame - start_frame
 
-    print(
-        f"Rendering frames {start_frame} to {end_frame} ({frames_to_render} total frames)..."
-    )
+    print(f"Rendering frames {start_frame} to {end_frame} ({frames_to_render} total frames)...")
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     last_shake_x = 0.0
     last_shake_y = 0.0
-    last_head_pos: Optional[tuple[int, int]] = None
 
     for frame_idx in range(frames_to_render):
         frame_count = start_frame + frame_idx
@@ -144,15 +137,11 @@ def step_5_render_video(
             current_shake_x = last_shake_x
             current_shake_y = last_shake_y
 
-            max_path_index = int(
-                np.searchsorted(path_indices, frame_count, side="right")
-            )
+            max_path_index = int(np.searchsorted(path_indices, frame_count, side="right"))
 
             draw_box = True
 
-            landmarks_str = (
-                str(row.get("landmarks_str", "{}")) if pose_enabled else "{}"
-            )
+            landmarks_str = str(row.get("landmarks_str", "{}")) if pose_enabled else "{}"
             barbell_box_str = str(row.get("barbell_box_str", ""))
 
         else:
@@ -173,14 +162,23 @@ def step_5_render_video(
             points_to_draw[:, 1] += current_shake_y  # type: ignore
 
             # Use HUD overlay orchestrator (bar path + skeleton + sparkline + power band + error markers)
-            frame, last_head_pos = draw_hud_overlay(
-                frame, df,
-                frame_width, frame_height, lift_type, hud_config,
-                path_points, path_phases, max_path_index,
-                current_shake_x, current_shake_y,
-                landmarks_str, LEGEND_COLORS,
+            frame, _last_head_pos = draw_hud_overlay(
+                frame,
+                df,
+                frame_width,
+                frame_height,
+                lift_type,
+                hud_config,
+                path_points,
+                path_phases,
+                max_path_index,
+                current_shake_x,
+                current_shake_y,
+                landmarks_str,
+                LEGEND_COLORS,
                 analysis_result=analysis_result,
                 current_frame=frame_count,
+                overlay_metrics=overlay_metrics,
             )
 
         if draw_box:
@@ -192,7 +190,7 @@ def step_5_render_video(
                     (x1, y1),
                     (x2, y2),
                     LEGEND_COLORS["Barbell Box"],
-                    BARBELL_BOX_THICKNESS,
+                    overlay_metrics.px(BARBELL_BOX_THICKNESS),
                 )
 
         # Build dynamic legend based on lift type
@@ -204,7 +202,7 @@ def step_5_render_video(
         for phase_id, phase_name in phase_names.items():
             dynamic_legend[phase_name] = phase_scheme.get(phase_id, (255, 255, 255))
 
-        draw_legend(frame, dynamic_legend)
+        draw_legend(frame, dynamic_legend, overlay_metrics=overlay_metrics)
 
         out.write(frame)
 
@@ -256,9 +254,7 @@ def step_5_render_video(
             output_video_path,
         ]
 
-        result = subprocess.run(
-            ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
 
         if result.returncode == 0:
             os.remove(temp_video_path)
@@ -314,9 +310,7 @@ def main():
         print(f"Error loading CSV file {args.input_csv}: {e}")
         return
 
-    for _ in step_5_render_video(
-        df, args.input_video, args.output_video, lift_type=args.lift_type
-    ):
+    for _ in step_5_render_video(df, args.input_video, args.output_video, lift_type=args.lift_type):
         pass
 
 

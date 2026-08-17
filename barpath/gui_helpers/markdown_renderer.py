@@ -30,7 +30,7 @@ class MarkdownRenderer:
             Complete HTML document string
         """
         try:
-            with open(markdown_path, "r", encoding="utf-8") as f:
+            with open(markdown_path, encoding="utf-8") as f:
                 markdown_content = f.read()
 
             html_content = self._markdown_to_html(markdown_content)
@@ -79,9 +79,7 @@ class MarkdownRenderer:
             code = code.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
             return f"<pre><code>{code}</code></pre>"
 
-        html = re.sub(
-            r"```(?:\w+)?\n(.*?)```", replace_code_block, html, flags=re.DOTALL
-        )
+        html = re.sub(r"```(?:\w+)?\n(.*?)```", replace_code_block, html, flags=re.DOTALL)
 
         # Inline code
         html = re.sub(r"`([^`]+)`", r"<code>\1</code>", html)
@@ -110,9 +108,7 @@ class MarkdownRenderer:
         # Blockquotes
         def replace_blockquote(match):
             lines = match.group(0).split("\n")
-            content = "\n".join(
-                line.lstrip("> ").strip() for line in lines if line.strip()
-            )
+            content = "\n".join(line.lstrip("> ").strip() for line in lines if line.strip())
             return f"<blockquote>{content}</blockquote>"
 
         html = re.sub(r"^>.*(?:\n^>.*)*", replace_blockquote, html, flags=re.MULTILINE)
@@ -123,16 +119,10 @@ class MarkdownRenderer:
             rows = table_text.strip().split("\n")
             if len(rows) < 3:
                 return table_text
-            header_cells = [
-                c.strip() for c in rows[0].strip().strip("|").split("|") if c.strip()
-            ]
+            header_cells = [c.strip() for c in rows[0].strip().strip("|").split("|") if c.strip()]
             data_rows = []
             for row in rows[2:]:
-                cells = [
-                    c.strip()
-                    for c in row.strip().strip("|").split("|")
-                    if c.strip() or True
-                ]
+                cells = [c.strip() for c in row.strip().strip("|").split("|") if c.strip() or True]
                 cells = [c.strip() for c in row.strip().strip("|").split("|")]
                 cells = [c.strip() for c in row.strip().strip("|").split("|")]
                 data_rows.append(cells)
@@ -161,9 +151,7 @@ class MarkdownRenderer:
                 checked = re.match(r"^[\*\-\+]\s+\[x\]\s*", stripped, re.IGNORECASE)
                 unchecked = re.match(r"^[\*\-\+]\s+\[\s?\]\s*", stripped)
                 if checked:
-                    label = re.sub(
-                        r"^[\*\-\+]\s+\[x\]\s*", "", stripped, flags=re.IGNORECASE
-                    )
+                    label = re.sub(r"^[\*\-\+]\s+\[x\]\s*", "", stripped, flags=re.IGNORECASE)
                     items.append(
                         f'<li class="check-item"><label class="checkbox checked">'
                         f'<input type="checkbox" checked disabled>{label}</label></li>'
@@ -249,7 +237,7 @@ class MarkdownRenderer:
         template_path = Path(__file__).parent / "templates" / "analysis_viewer.html"
         try:
             if self._template_cache is None:
-                with open(template_path, "r", encoding="utf-8") as f:
+                with open(template_path, encoding="utf-8") as f:
                     self._template_cache = f.read()
 
             # Replace the placeholder with actual content
@@ -265,7 +253,7 @@ class MarkdownRenderer:
         """Render the template with no analysis message."""
         template_path = Path(__file__).parent / "templates" / "analysis_viewer.html"
         try:
-            with open(template_path, "r", encoding="utf-8") as f:
+            with open(template_path, encoding="utf-8") as f:
                 return f.read()
         except Exception:
             return self._fallback_template(
@@ -315,6 +303,21 @@ tr:nth-child(even) {{ background: #f9fafb; }}
 .checkbox.checked input[type="checkbox"] {{ accent-color: #16a34a; }}
 .checkbox.unchecked {{ color: #9ca3af; }}
 .no-analysis {{ text-align: center; padding: 48px 24px; color: #6b7280; }}
+@media (prefers-color-scheme: dark) {{
+  body {{ background: #1e1e1e; color: #f2f2f2; }}
+  .analysis-container {{ background: #1e1e1e; }}
+  h1, h2 {{ color: #f2f2f2; }}
+  h3, h4, p, ul, ol, li, .checkbox {{ color: #d3d7df; }}
+  strong {{ color: #ffffff; }}
+  em, blockquote {{ color: #b8bec9; }}
+  code {{ background: #303033; color: #ff8a8a; }}
+  pre {{ background: #252526; border-color: #44464d; }}
+  pre code {{ color: #e5e7eb; }}
+  th {{ background: #303033; }}
+  td, th {{ border-color: #44464d; }}
+  tr:nth-child(even) {{ background: #252526; }}
+  hr, h1 {{ border-color: #44464d; }}
+}}
 </style>
 </head>
 <body>
